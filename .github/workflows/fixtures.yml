@@ -74,6 +74,12 @@ jobs:
       - name: Pre-compile acceptance tests (no run)
         run: cargo test --locked --features brp --no-run
 
+      # Negative controls: prove the oracles DETECT the violations they
+      # claim to (NaN, bounds, frozen world, panic, error log). Fast
+      # (<1s); belongs in the build job, not per-fixture legs.
+      - name: Fault-injection oracle tests
+        run: cargo test --locked --test fault_injection
+
   test:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

@@ -45,11 +45,23 @@ pub fn set_capture_active(active: bool) {
 /// process, with the capture layer first in the stack. If another
 /// subscriber was already set, this is a no-op (emit a loud warning —
 /// log capture silently off under-reports errors).
+///
+/// The subscriber also chains a fmt layer so console output is preserved
+/// when it wins the race against the game's LogPlugin (LogPlugin then
+/// logs a harmless "already set" error). Call this BEFORE the game's
+/// plugins are added for capture to engage.
 pub fn ensure_global_subscriber() {
     static INSTALLED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     INSTALLED.get_or_init(|| {
         use tracing_subscriber::layer::SubscriberExt;
-        let subscriber = tracing_subscriber::registry().with(CaptureLayer);
+        use tracing_subscriber::Layer;
+        // Console passthrough filtered to INFO+ (bevy's LogPlugin default
+        // surface); the capture layer sees everything but keeps only
+        // WARN/ERROR.
+        let fmt = tracing_subscriber::fmt::layer()
+            .with_filter(tracing_subscriber::filter::LevelFilter::INFO);
+        let subscriber = tracing_subscriber::registry().with(fmt);
+        let subscriber = subscriber.with(CaptureLayer);
         if tracing::subscriber::set_global_default(subscriber).is_err() {
             eprintln!(
                 "bevy_playtest: log capture OFF — another tracing subscriber is already \
