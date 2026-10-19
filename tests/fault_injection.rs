@@ -122,6 +122,102 @@ fn error_log_system() {
     tracing::error!("fault injection: deliberate error log");
 }
 
+/// A system that emits a warn-level log every frame.
+fn warn_log_system() {
+    tracing::warn!("fault injection: deliberate warn log");
+}
+
+#[test]
+fn detects_warning_log() {
+    let mut app = App::new();
+    app.add_systems(bevy_app::Update, warn_log_system);
+
+    // log_warn is informational by default; strict_warnings escalates it
+    // to a gating failure. Use a scenario with strict_warnings: true.
+    let scenario: Scenario = serde_json::from_str(
+        r#"{
+            "name": "fault-injection-warn",
+            "bot": { "type": "chaos", "seed": 42 },
+            "duration_s": 1.0,
+            "tps": 60,
+            "invariants": [],
+            "strict_warnings": true,
+            "setup": {}
+        }"#,
+    )
+    .expect("scenario parses");
+
+    let report = run_scenario(&mut app, &scenario).expect("run completes");
+    assert!(
+        violated_with(report.status, &rule_names(&report), "log_warn"),
+        "expected log_warn violation, got {:?}: {:?}",
+        report.status,
+        report.violations
+    );
+}
+
+#[test]
+fn detects_reset_hook_panic() {
+    use bevy_playtest::contract::ResetHooks;
+    let mut app = App::new();
+    let mut hooks = ResetHooks::default();
+    hooks.register("boom", |_world: &mut bevy_ecs::world::World| {
+        panic!("fault injection: reset hook panic")
+    });
+    app.insert_resource(hooks);
+
+    let scenario: Scenario = serde_json::from_str(
+        r#"{
+            "name": "fault-injection-reset",
+            "bot": { "type": "chaos", "seed": 42 },
+            "duration_s": 0.5,
+            "tps": 60,
+            "invariants": [],
+            "setup": { "resets": [ { "kind": "boom" } ] }
+        }"#,
+    )
+    .expect("scenario parses");
+
+    let report = run_scenario(&mut app, &scenario).expect("run completes");
+    assert!(
+        violated_with(report.status, &rule_names(&report), "reset_hook_panicked"),
+        "expected reset_hook_panicked violation, got {:?}: {:?}",
+        report.status,
+        report.violations
+    );
+}
+
+#[test]
+fn detects_cheat_hook_panic() {
+    use bevy_playtest::contract::CheatHooks;
+    let mut app = App::new();
+    let mut hooks = CheatHooks::default();
+    hooks.register("boom", |_world: &mut bevy_ecs::world::World| {
+        panic!("fault injection: cheat hook panic")
+    });
+    app.insert_resource(hooks);
+
+    let scenario: Scenario = serde_json::from_str(
+        r#"{
+            "name": "fault-injection-cheat",
+            "bot": { "type": "chaos", "seed": 42 },
+            "duration_s": 0.5,
+            "tps": 60,
+            "invariants": [],
+            "setup": { "cheats": [ { "frame": 5, "kind": "boom" } ] }
+        }"#,
+    )
+    .expect("scenario parses");
+
+    let report = run_scenario(&mut app, &scenario).expect("run completes");
+    assert!(
+        violated_with(report.status, &rule_names(&report), "cheat_hook_panicked"),
+        "expected cheat_hook_panicked violation, got {:?}: {:?}",
+        report.status,
+        report.violations
+    );
+}
+
 #[test]
 fn detects_panic() {
     let mut app = App::new();
