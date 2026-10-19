@@ -4,6 +4,7 @@
   "labels": ["dependencies"],
   "commitMessagePrefix": "ci",
   "rangeStrategy": "bump",
+  "ignorePaths": [".github/workflows/**", "rust-toolchain.toml"],
   "packageRules": [
     {
       "description": "Group all GitHub Actions bumps into one PR",
