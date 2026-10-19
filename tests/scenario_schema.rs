@@ -1,0 +1,200 @@
+use bevy_playtest::enums::{BotType, CheckOp};
+use bevy_playtest::scenario::{normalize_key_name, validate_scenario, Scenario, ScenarioError};
+
+fn minimal_scenario(bot_type: &str) -> serde_json::Value {
+    serde_json::json!({
+        "bot": { "type": bot_type },
+        "duration_s": 1.0,
+    })
+}
+
+fn parse(json: serde_json::Value) -> Scenario {
+    serde_json::from_value(json).expect("parse scenario")
+}
+
+#[test]
+fn parses_minimal_chaos_scenario() {
+    let s = parse(minimal_scenario("chaos"));
+    assert_eq!(s.bot.bot_type, BotType::Chaos);
+    assert_eq!(s.tps, 60);
+    assert_eq!(s.duration_s, 1.0);
+    assert!(s.simulated_time);
+    assert!(s.single_threaded);
+    validate_scenario(&s).expect("valid");
+}
+
+#[test]
+fn rejects_zero_and_negative_duration() {
+    for dur in [0.0, -1.0] {
+        let mut json = minimal_scenario("chaos");
+        json["duration_s"] = serde_json::json!(dur);
+        let s = parse(json);
+        match validate_scenario(&s) {
+            Err(ScenarioError::Rejected(_)) => {}
+            other => panic!("expected Rejected for duration {dur}, got {other:?}"),
+        }
+    }
+    // NaN/inf are not representable in JSON; test the runtime float path.
+    let mut s = parse(minimal_scenario("chaos"));
+    s.duration_s = f32::NAN;
+    assert!(matches!(
+        validate_scenario(&s),
+        Err(ScenarioError::Rejected(_))
+    ));
+    s.duration_s = f32::INFINITY;
+    assert!(matches!(
+        validate_scenario(&s),
+        Err(ScenarioError::Rejected(_))
+    ));
+}
+
+#[test]
+fn rejects_dos_oversize_scenarios() {
+    let mut json = minimal_scenario("chaos");
+    json["tps"] = serde_json::json!(100_000);
+    let s = parse(json);
+    assert!(matches!(
+        validate_scenario(&s),
+        Err(ScenarioError::Rejected(_))
+    ));
+
+    let mut json = minimal_scenario("chaos");
+    json["duration_s"] = serde_json::json!(10_000.0);
+    let s = parse(json);
+    assert!(matches!(
+        validate_scenario(&s),
+        Err(ScenarioError::Rejected(_))
+    ));
+}
+
+#[test]
+fn rejects_low_tps_distorting_dt() {
+    let mut json = minimal_scenario("chaos");
+    json["tps"] = serde_json::json!(2);
+    let s = parse(json);
+    let err = validate_scenario(&s).unwrap_err().to_string();
+    assert!(err.contains("max_delta"), "{err}");
+}
+
+#[test]
+fn rejects_path_traversal_in_name() {
+    let mut json = minimal_scenario("chaos");
+    json["name"] = serde_json::json!("../../etc/passwd");
+    let s = parse(json);
+    let err = validate_scenario(&s).unwrap_err().to_string();
+    assert!(err.contains("invalid"), "{err}");
+}
+
+#[test]
+fn rejects_unimplemented_bot_loudly() {
+    for bot in ["pursuit", "planner", "custom", "synthetic_pointer"] {
+        let s = parse(minimal_scenario(bot));
+        match validate_scenario(&s) {
+            Err(ScenarioError::NotImplemented(msg)) => {
+                assert!(msg.contains(bot), "{msg}")
+            }
+            other => panic!("expected NotImplemented for {bot}, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn rejects_unknown_fields() {
+    let mut json = minimal_scenario("chaos");
+    json["compare_golden"] = serde_json::json!("goldens/");
+    let err = serde_json::from_value::<Scenario>(json).unwrap_err();
+    assert!(err.to_string().contains("compare_golden"));
+}
+
+#[test]
+fn rejects_duplicate_invariant_names() {
+    let mut json = minimal_scenario("chaos");
+    json["invariants"] = serde_json::json!([
+        { "name": "hp", "rule": "custom", "path": "TestApi.score", "value": 10 },
+        { "name": "hp", "rule": "custom", "path": "TestApi.score", "value": 20 }
+    ]);
+    let s = parse(json);
+    let err = validate_scenario(&s).unwrap_err().to_string();
+    assert!(err.contains("duplicate invariant name"), "{err}");
+}
+
+#[test]
+fn rejects_custom_invariants_as_not_implemented() {
+    let mut json = minimal_scenario("chaos");
+    json["invariants"] = serde_json::json!([
+        { "name": "phase", "rule": "custom", "path": "TestApi.game_phase",
+          "value": "playing", "check": "lt" }
+    ]);
+    let s = parse(json);
+    let err = validate_scenario(&s).unwrap_err().to_string();
+    assert!(err.contains("not implemented"), "{err}");
+}
+
+#[test]
+fn key_normalization_common_forms() {
+    assert_eq!(normalize_key_name("space"), Some("Space"));
+    assert_eq!(normalize_key_name("SPACE"), Some("Space"));
+    assert_eq!(normalize_key_name("w"), Some("KeyW"));
+    assert_eq!(normalize_key_name("KeyW"), Some("KeyW"));
+    assert_eq!(normalize_key_name("keyw"), Some("KeyW"));
+    assert_eq!(normalize_key_name("5"), Some("Digit5"));
+    assert_eq!(normalize_key_name("Digit5"), Some("Digit5"));
+    assert_eq!(normalize_key_name("up"), Some("ArrowUp"));
+    assert_eq!(normalize_key_name("arrowdown"), Some("ArrowDown"));
+    assert_eq!(normalize_key_name("shift"), Some("ShiftLeft"));
+    assert_eq!(normalize_key_name("ctrl"), Some("ControlLeft"));
+    assert_eq!(normalize_key_name("qwerty"), None);
+    assert_eq!(normalize_key_name("f13"), None);
+    assert_eq!(normalize_key_name(""), None);
+}
+
+#[test]
+fn synthetic_keyboard_requires_valid_keys() {
+    let mut json = minimal_scenario("synthetic_keyboard");
+    json["bot"]["key_presses"] = serde_json::json!([
+        { "frame": 0, "key": "space", "hold_frames": 2 },
+        { "frame": 10, "key": "spce" }
+    ]);
+    let s = parse(json);
+    let err = validate_scenario(&s).unwrap_err().to_string();
+    assert!(err.contains("spce"), "{err}");
+    assert!(err.contains("did you mean"), "{err}");
+}
+
+#[test]
+fn synthetic_keyboard_requires_nonempty() {
+    let s = parse(minimal_scenario("synthetic_keyboard"));
+    let err = validate_scenario(&s).unwrap_err().to_string();
+    assert!(err.contains("non-empty"), "{err}");
+}
+
+#[test]
+fn check_op_boundary_semantics() {
+    // le3.34 / RF44: "overall<0 iff fail" must hold at exact boundaries.
+    assert!(CheckOp::Le.holds(10.0, 10.0));
+    assert!(!CheckOp::Lt.holds(10.0, 10.0));
+    assert!(CheckOp::Ge.holds(10.0, 10.0));
+    assert!(!CheckOp::Gt.holds(10.0, 10.0));
+    assert!(CheckOp::Equals.holds(10.0, 10.0));
+    // Approx equality: large floats.
+    assert!(CheckOp::Equals.holds(1e15, 1e15 + 1.0));
+}
+
+#[test]
+fn roundtrips_through_serde() {
+    let json = serde_json::json!({
+        "name": "basic-suite",
+        "bot": { "type": "chaos", "seed": 7, "input_rate_hz": 20 },
+        "tps": 30,
+        "duration_s": 5.0,
+        "invariants": [
+            { "name": "bounds", "rule": "nodes_in_bounds", "min_x": -100.0, "max_x": 100.0 }
+        ],
+        "setup": { "resets": [ { "kind": "scene" } ] }
+    });
+    let s: Scenario = serde_json::from_value(json).unwrap();
+    let out = serde_json::to_value(&s).unwrap();
+    let s2: Scenario = serde_json::from_value(out).unwrap();
+    assert_eq!(s.bot.seed, s2.bot.seed);
+    assert_eq!(s.invariants.len(), s2.invariants.len());
+}

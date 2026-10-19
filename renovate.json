@@ -1,0 +1,19 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "labels": ["dependencies"],
+  "commitMessagePrefix": "ci",
+  "rangeStrategy": "bump",
+  "packageRules": [
+    {
+      "description": "Group all GitHub Actions bumps into one PR",
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions"
+    },
+    {
+      "description": "Cargo updates: keep both workspaces' lockfiles in sync",
+      "matchManagers": ["cargo"],
+      "groupName": "rust dependencies"
+    }
+  ]
+}

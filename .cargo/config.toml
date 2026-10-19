@@ -1,0 +1,7 @@
+# Shared target dir: harness + all fixtures share one Bevy build,
+# instead of each fixture compiling its own multi-GB copy of Bevy.
+# Applies to any cargo invocation from anywhere under this repo,
+# including fixtures built with --manifest-path.
+
+[build]
+target-dir = "target"
