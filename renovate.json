@@ -4,12 +4,18 @@
   "labels": ["dependencies"],
   "commitMessagePrefix": "ci",
   "rangeStrategy": "bump",
-  "ignorePaths": [".github/workflows/**", "rust-toolchain.toml"],
+  "automerge": false,
   "packageRules": [
     {
-      "description": "Group all GitHub Actions bumps into one PR",
+      "description": "Group all GitHub Actions bumps into one PR; pin to commit digests for supply-chain safety.",
       "matchManagers": ["github-actions"],
-      "groupName": "github actions"
+      "groupName": "github actions",
+      "pinDigests": true
+    },
+    {
+      "description": "Never bump the pinned runner image: the bfd linker workaround and Lavapipe setup are validated against ubuntu-24.04 only.",
+      "matchDatasources": ["github-runners"],
+      "enabled": false
     },
     {
       "description": "Cargo updates: keep both workspaces' lockfiles in sync",
