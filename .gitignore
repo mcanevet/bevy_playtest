@@ -1,0 +1,9 @@
+/target/
+**/target/
+
+# Fixtures: generated from the pinned Bevy revision by the fetch script —
+# never committed (except the lockfile). Source of truth is
+# scripts/fetch_bevy_examples.sh and the patches/ audit trail.
+/fixtures/*
+!/fixtures/Cargo.lock
+bevy_playtest-smoke.report.json

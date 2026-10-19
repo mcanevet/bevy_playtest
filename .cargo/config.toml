@@ -1,0 +1,13 @@
+# Shared target dir: harness + all fixtures share one Bevy build,
+# instead of each fixture compiling its own multi-GB copy of Bevy.
+# Applies to any cargo invocation from anywhere under this repo,
+# including fixtures built with --manifest-path.
+
+[build]
+target-dir = "target"
+
+# Disable incremental compilation locally to prevent unbounded growth of
+# target/ (incremental caches accumulate across feature combinations).
+# CI sets CARGO_INCREMENTAL=0 explicitly; local dev inherits this.
+[env]
+CARGO_INCREMENTAL = { value = "0", force = true }

@@ -1,0 +1,99 @@
+[package]
+name = "bevy_playtest"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+description = "Playtesting harness for Bevy games: in-process driver, oracles, external BRP validation"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/mcanevet/bevy_playtest"
+readme = "README.md"
+keywords = ["bevy", "gamedev", "testing", "playtest", "ci"]
+categories = ["game-development", "development-tools::testing"]
+
+[dependencies]
+# Deliberately narrow: the residual-taint table promises the in-process tier
+# only unifies bevy_ecs/app/transform/input into the consumer's graph.
+bevy_app = { version = "0.20.0", default-features = false, features = ["std"] }
+bevy_reflect = { version = "0.20.0", default-features = false, features = ["std"] }
+bevy_ecs = { version = "0.20.0", default-features = false, features = ["std"] }
+bevy_transform = { version = "0.20.0", default-features = false, features = ["std", "bevy-support"] }
+bevy_tasks = { version = "0.20.0", default-features = false }
+bevy_time = { version = "0.20.0", default-features = false, features = ["std"] }
+tracing = "0.1.44"
+bevy_input = { version = "0.20.0", default-features = false, features = ["std", "keyboard"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["std", "registry", "fmt"] }
+# PlaytestPlugin takeover: winit detection + headless plugin-group swap
+bevy_winit = { version = "0.20.0", optional = true, default-features = false }
+bevy = { version = "0.20.0", optional = true }
+
+# BRP client (brp feature)
+async-io = { version = "2.6.0", optional = true }
+http-body-util = { version = "0.1.5", optional = true }
+hyper = { version = "1.12.0", optional = true, features = ["client", "http1"] }
+smol-hyper = { version = "0.1.1", optional = true }
+bevy_remote = { version = "0.20.0", optional = true, default-features = false, features = ["http"] }
+futures-lite = { version = "2.6.1", optional = true }
+
+[[bin]]
+name = "takeover_demo"
+path = "src/bin/takeover_demo.rs"
+required-features = ["takeover"]
+
+[[bin]]
+name = "takeover_demo_winit"
+path = "src/bin/takeover_demo_winit.rs"
+required-features = ["takeover"]
+
+[[bin]]
+name = "takeover_demo_stock"
+path = "src/bin/takeover_demo_stock.rs"
+required-features = ["takeover"]
+
+[[bin]]
+name = "takeover_demo_nondet"
+path = "src/bin/takeover_demo_nondet.rs"
+required-features = ["takeover"]
+
+[[bin]]
+name = "takeover_demo_default"
+path = "src/bin/takeover_demo_default.rs"
+required-features = ["takeover"]
+
+[features]
+default = ["in-process", "takeover"]
+in-process = []
+takeover = ["in-process", "takeover-winit"]
+takeover-winit = ["takeover", "dep:bevy_winit", "dep:bevy"]
+brp = [
+    "dep:hyper",
+    "dep:smol-hyper",
+    "dep:async-io",
+    "dep:http-body-util",
+    "dep:futures-lite",
+]
+brp-plugin = ["dep:bevy_remote"]
+
+# Local dev speedup: line-tables-only debuginfo (fast link, much
+# smaller target/ — full debuginfo made each Bevy rlib 190-370 MB).
+# CI already sets the same flag via RUSTFLAGS.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
+
+[[bin]]
+name = "takeover_demo_raw_winit"
+path = "src/bin/takeover_demo_raw_winit.rs"
+required-features = ["takeover"]
+
+[[bin]]
+name = "takeover_demo_transient"
+path = "src/bin/takeover_demo_transient.rs"
+required-features = ["takeover"]
+[[bin]]
+name = "takeover_demo_empty"
+path = "src/bin/takeover_demo_empty.rs"
+required-features = ["takeover"]

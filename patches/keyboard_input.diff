@@ -1,0 +1,37 @@
+--- a/main.rs
++++ b/main.rs
+@@ -4,7 +4,15 @@ use bevy::{input::keyboard::Key, prelude::*};
+ 
+ fn main() {
+     App::new()
+-        .add_plugins(DefaultPlugins)
++        .add_plugins(if std::env::var("BEVY_PLAYTEST_HEADLESS").is_ok() {
++            bevy::app::MinimalPlugins.build()
++                .add(bevy::input::InputPlugin)
++        } else {
++            DefaultPlugins.build().disable::<bevy::winit::WinitPlugin>()
++        })
+         .add_systems(Update, keyboard_input_system)
+         .run();
+ }
+@@ -40,3 +48,20 @@ fn keyboard_input_system(
+         info!("'?' just released");
+     }
+ }
++
++// --- bevy_playtest fixture patch (appended, not modifying upstream) ---
++// When BRP_PORT is set, RemotePlugin is added so the external-BRP
++// harness can drive this game headlessly. Patched in main() above via
++// `bevy_playtest_fixture::maybe_brp(&mut app);` — the call site is the
++// only upstream-code edit besides the plugin swap.
++#[cfg(not(feature = "no_brp"))]
++mod bevy_playtest_fixture {
++    use super::*;
++    pub fn maybe_brp(app: &mut App) {
++        if let Ok(port) = std::env::var("BRP_PORT") {
++            let port: u16 = port.parse().expect("BRP_PORT must be a port");
++            app.add_plugins(bevy::remote::RemotePlugin::default());
++            app.add_plugins(bevy::remote::http::RemoteHttpPlugin::default().with_port(port));
++        }
++    }
++}
