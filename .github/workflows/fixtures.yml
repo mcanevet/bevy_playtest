@@ -16,8 +16,6 @@ permissions:
 
 env:
   CARGO_INCREMENTAL: "0"
-  # rust-lld crashes with SIGBUS ("ld terminated with signal 7") on
-  # ubuntu-24.04 runners; fall back to the GNU bfd linker.
   # Line tables only (no full DWARF types/variables): llvm-cov needs
   # line tables for accurate coverage, full debuginfo costs gigabytes
   # the runners don't have (debug build of Bevy alone is ~19 GB).
@@ -29,10 +27,10 @@ jobs:
   # Single build job: generates fixtures, builds everything (including
   # test binaries), saves one shared cache entry. Matrix legs restore it.
   build:
-    # Pinned image (NOT ubuntu-latest): the bfd-linker and Lavapipe
-    # setup is empirically validated against this exact image, and
-    # ubuntu-latest began migrating to 26.04 in October 2026
-    # (actions/runner-images#14748).
+    # ubuntu-26.04: validated in PR #10 (stock rust-lld works; the old
+    # bfd fallback was a 24.04 SIGBUS workaround, now dropped). Keeping
+    # the explicit version (not ubuntu-latest) for reproducibility;
+    # Renovate manages bumps via the github-runners datasource.
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
@@ -44,9 +42,10 @@ jobs:
 
       # Reclaim disk before building: the stock image ships ~9 GB of
       # Android SDK and ~3 GB of .NET we never touch, and a debug build
-      # of Bevy exceeds the ~14 GB free by itself. Validation run: also
-      # report per-path removal so we can verify the 26.04 image layout
-      # matches expectations.
+      # of Bevy exceeds the ~14 GB free by itself. Inlined (rather than
+      # jlumbroso/free-disk-space) to avoid another unpinned third-party
+      # action; reports per-path sizes so a silent layout change (a
+      # MISSING line) is visible in logs.
       - name: Free disk space
         run: |
           df -h / | tee /tmp/df-before.txt
@@ -93,7 +92,7 @@ jobs:
           # degrades to a full rebuild (which, on an exact-key hit,
           # would also never re-save).
           path: target/
-          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}-bfd
+          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}-lld
           restore-keys: |
             ${{ runner.os }}-target-
 
@@ -221,7 +220,7 @@ jobs:
           # Both workspaces share ONE physical target dir
           # (.cargo/config.toml), so one path covers everything.
           path: target/
-          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}-bfd
+          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}-lld
           restore-keys: |
             ${{ runner.os }}-target-
           # Explicitly declare read-only mode for PR safety; the build

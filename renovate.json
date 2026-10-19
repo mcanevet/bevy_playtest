@@ -13,11 +13,6 @@
       "pinDigests": true
     },
     {
-      "description": "Never bump the pinned runner image: the bfd linker workaround and Lavapipe setup are validated against ubuntu-24.04 only.",
-      "matchDatasources": ["github-runners"],
-      "enabled": false
-    },
-    {
       "description": "Cargo updates: keep both workspaces' lockfiles in sync",
       "matchManagers": ["cargo"],
       "groupName": "rust dependencies"
