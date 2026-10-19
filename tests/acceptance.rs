@@ -110,13 +110,22 @@ fn chaos_scenario() -> Scenario {
 /// Every selected fixture must boot under BRP, accept injected input for
 /// the scenario duration, and terminate without a crash or a non-finite
 /// transform.
+///
+/// Honesty contract: a green run here must mean fixtures actually ran.
+/// When fixtures haven't been generated, we fail loudly instead of
+/// skipping silently (the "never a vacuous pass" doctrine applies to our
+/// own test suite). CI always generates fixtures first; locals who
+/// don't want the heavyweight suite can deselect it explicitly
+/// (`--exact fixtures_run_under_external_brp --ignore`) or set
+/// BEVY_PLAYTEST_FIXTURE.
 #[test]
 fn fixtures_run_under_external_brp() {
     let fixtures = selected_fixtures();
-    if fixtures.is_empty() {
-        eprintln!("skipping: no fixtures generated. Run ./scripts/fetch_bevy_examples.sh first.");
-        return;
-    }
+    assert!(
+        !fixtures.is_empty(),
+        "no fixtures generated — run ./scripts/fetch_bevy_examples.sh first; \
+         refusing to pass vacuously"
+    );
 
     let scenario = chaos_scenario();
     let mut failures: Vec<String> = Vec::new();
@@ -161,19 +170,30 @@ fn fixtures_run_under_external_brp() {
     );
 }
 
-/// Guard: the fixture set is non-empty and the script knows each name.
+/// Guard: the fixture set matches the script's expectations. Each name
+/// in ALL_FIXTURES must correspond to a source example the fetch
+/// script can find, so a renamed/removed Bevy example fails HERE
+/// (clearly) instead of inside CI's fixture-build step (cryptically).
 #[test]
 fn fixture_manifest_is_consistent() {
     let script = repo_root().join("scripts/fetch_bevy_examples.sh");
     let body = std::fs::read_to_string(&script).expect("fetch script exists");
-    for name in ALL_FIXTURES {
-        // The script discovers examples dynamically, so we only assert
-        // the fixture is representable — its source example must exist
-        // in the pinned Bevy checkout the script reads from.
-        let _ = name;
-    }
     assert!(
         body.contains("examples/showcase"),
         "fetch script should source showcase examples"
     );
+
+    // Every fixture must have a generated directory with a manifest,
+    // when fixtures are generated at all. When they aren't, the main
+    // test already fails loudly; this guard covers generated states.
+    for name in ALL_FIXTURES {
+        let dir = repo_root().join("fixtures").join(name);
+        if dir.exists() {
+            let manifest = dir.join("Cargo.toml");
+            assert!(
+                manifest.exists(),
+                "generated fixture {name} has no Cargo.toml — regenerate"
+            );
+        }
+    }
 }
