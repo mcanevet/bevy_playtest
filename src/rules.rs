@@ -54,15 +54,8 @@ impl Rule {
             Self::LogWarn => "Game code logged at warn level; informational by default, escalate with scenario strict_warnings.",
             Self::NodesInBounds => "Gameplay entity positions stay inside declared play-space bounds.",
             Self::FiniteTransforms => "Every entity's Transform holds finite values (no NaN/inf).",
-            Self::StuckAfterIntent => "After an intent fired, no liveness signal followed (soft-lock with input).",
-            Self::HarnessCouldNotDriveGame => "The harness could not drive the game: enough actions were injected but none had any effect.",
             Self::ResetHookPanicked => "The game's ResetHooks handler panicked.",
             Self::CheatHookPanicked => "The game's CheatHooks handler panicked.",
-            Self::ReadinessTimeout => "The game never reached a ready state within the configured startup budget.",
-            Self::ChaosBotConfig => "The chaos bot's scenario configuration is invalid or incomplete.",
-            Self::SyntheticKeyboardConfig => "The synthetic_keyboard bot's configuration is invalid.",
-            Self::RawKeyInvalid => "A raw-input key name did not parse to a KeyCode.",
-            Self::ReplayTargetMissing => "A replay step referenced a target entity that does not exist.",
             Self::OracleError => "An oracle itself errored while evaluating (infrastructure failure, not a game bug).",
             Self::ScenarioError => "The scenario itself failed (rejected config) rather than the game misbehaving.",
         }
@@ -77,21 +70,19 @@ impl Rule {
 }
 
 declare_rules! {
+    // Core oracles (producible, tested)
     FrozenWorld => "frozen_world",
     Panic => "panic",
     LogError => "log_error",
     LogWarn => "log_warn",
     NodesInBounds => "nodes_in_bounds",
     FiniteTransforms => "finite_transforms",
-    StuckAfterIntent => "stuck_after_intent",
-    HarnessCouldNotDriveGame => "harness_could_not_drive_game",
+
+    // Contract hooks (producible, tested)
     ResetHookPanicked => "reset_hook_panicked",
     CheatHookPanicked => "cheat_hook_panicked",
-    ReadinessTimeout => "readiness_timeout",
-    ChaosBotConfig => "chaos_bot_config",
-    SyntheticKeyboardConfig => "synthetic_keyboard_config",
-    RawKeyInvalid => "raw_key_invalid",
-    ReplayTargetMissing => "replay_target_missing",
+
+    // Infrastructure errors (producible; oracle_error only in BRP tier)
     OracleError => "oracle_error",
     ScenarioError => "scenario_error",
 }

@@ -141,8 +141,6 @@ pub enum LivenessMode {
     /// Real-time: violation if no liveness signal for timeout_s.
     #[default]
     RealTime,
-    /// Turn-based: idle is fine, but after an intent some liveness must occur.
-    AfterIntent,
     /// Disable the liveness oracle (loud: recorded in report warnings).
     Off,
 }
