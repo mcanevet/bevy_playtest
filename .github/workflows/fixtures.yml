@@ -74,11 +74,78 @@ jobs:
       - name: Pre-compile acceptance tests (no run)
         run: cargo test --locked --features brp --no-run
 
+      # Quality gates: enforce the same fmt/clippy the maintainers run
+      # locally, so drift cannot merge.
+      - name: Format check
+        run: cargo fmt --all --check
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Doc build (deny rustdoc warnings)
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --locked --no-deps --all-features
+
       # Negative controls: prove the oracles DETECT the violations they
       # claim to (NaN, bounds, frozen world, panic, error log). Fast
       # (<1s); belongs in the build job, not per-fixture legs.
       - name: Fault-injection oracle tests
         run: cargo test --locked --test fault_injection
+
+      # Full unit + integration battery (fast, no fixtures needed).
+      - name: Workspace unit tests
+        run: cargo test --locked --workspace --all-features --lib --tests
+
+      # Coverage: measure line coverage and upload to Codecov (public repo
+      # needs no token). Threshold: 80% lines covered.
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Generate coverage report
+        run: |
+          cargo llvm-cov --locked --workspace --all-features --lcov --output-path lcov.info
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          fail_ci_if_error: true
+
+  # MSRV: the harness crate declares rust-version = "1.87"; verify the
+  # declared floor still compiles so users on older toolchains are not
+  # broken silently. Uses cargo check (fast) — the full battery runs on
+  # the current toolchain.
+  msrv:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Install MSRV toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master: adds toolchain input
+        with:
+          toolchain: 1.87.0
+
+      - name: Install Linux dependencies (bevy backends + software Vulkan)
+        run: |
+          sudo apt-get update -yq
+          sudo apt-get install -yq --no-install-recommends \
+            libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev \
+            mesa-vulkan-drivers
+
+      # Check without --locked: the committed lockfile is resolved for
+      # the newest toolchain; MSRV compatibility of locked dep versions
+      # is a semver question best caught at publish time. MSRV check
+      # verifies the crate's own code parses/compiles on 1.87.
+      # `cargo +1.87.0` bypasses the repo's rust-toolchain.toml (which
+      # rustup would otherwise honor in this directory).
+      - name: cargo check on MSRV
+        run: cargo +1.87.0 check -p bevy_playtest --all-features
 
   test:
     runs-on: ubuntu-24.04
@@ -123,6 +190,9 @@ jobs:
           key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}-bfd
           restore-keys: |
             ${{ runner.os }}-target-
+          # Explicitly declare read-only mode for PR safety; the build
+          # job owns the write path.
+          cache-mode: read-only
 
       # The cache restores all dependency artifacts (incl. Bevy);
       # only the small fixture crates themselves rebuild here.

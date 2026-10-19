@@ -578,7 +578,7 @@ fn suggestion_suffix(input: &str, candidates: &[String]) -> String {
 /// Validate a scenario. Rejects (never silently degrades) on:
 /// - bad tps/duration/liveness values
 /// - compute-DoS caps
-/// - Time<Virtual> max_delta clamp violations
+/// - Time\<Virtual\> max_delta clamp violations
 /// - path-traversal in scenario names
 /// - unimplemented bot types
 /// - duplicate invariant names
