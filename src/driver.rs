@@ -699,8 +699,7 @@ fn is_informational(rule: &str, strict_warnings: bool) -> bool {
     if strict_warnings && rule == "log_warn" {
         return false;
     }
-    matches!(
-        rule,
-        "frame_time_anomaly" | "frame_time_p99_below" | "fps_floor" | "log_warn"
-    )
+    // Delegate to the registry-derived classification so the two cannot
+    // drift (currently only log_warn is informational).
+    Rule::from_name(rule).is_some_and(rules::Rule::is_informational)
 }

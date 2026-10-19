@@ -138,6 +138,14 @@ fn fixtures_run_under_external_brp() {
                         "{name}: status {:?}, violations: {viol}",
                         report.status
                     ));
+                } else if !report.violations.is_empty() {
+                    // Status is Pass, but informational violations surfaced.
+                    // Healthy showcases must be CLEAN — an informational hit
+                    // (e.g. log_warn, unarmed frozen_world) is a false
+                    // positive we want to know about, not swallow.
+                    failures.push(format!(
+                        "{name}: PASS with non-empty violations (false positives): {viol}"
+                    ));
                 } else {
                     eprintln!("{name}: ok");
                 }
