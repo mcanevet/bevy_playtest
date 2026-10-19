@@ -110,10 +110,14 @@ jobs:
         run: |
           cargo llvm-cov --locked --workspace --all-features --lcov --output-path lcov.info
 
+      # Tokenless uploads only work for unprotected branches; main
+      # requires a token even on public repos. Set CODECOV_TOKEN as a
+      # repo secret (Codecov repo Settings -> Configuration).
       - name: Upload to Codecov
         uses: codecov/codecov-action@v5
         with:
           files: lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: true
 
   # MSRV: the harness crate's floor is set by its highest bevy_* dep
