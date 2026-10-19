@@ -9,7 +9,7 @@ report (JSON + JUnit XML).
 
 ## Integrating a game
 
-### Tier-2 Observable (v0.1 default)
+### Tier-2 Observable (default integration)
 
 Tag gameplay-relevant entities with `bevy_playtest::contract::Gameplay`. That's it.
 
@@ -36,18 +36,20 @@ fn tag_gameplay(mut commands: Commands, ball: Query<Entity, With<Ball>>) {
    ```
    Render/audio/assets still initialize; the game runs headless.
 
-### Zero-contract external-BRP (v0.1, experimental)
+### Zero-contract external-BRP (experimental)
 
 Run the game as a subprocess and drive it over Bevy's Remote Protocol — no
 harness imports in the game at all. Requires the game binary to:
 
-1. Add `RemotePlugin::default()` + `RemoteHttpPlugin::default().with_port(port)`
+1. Add Bevy's remote plugins (`RemotePlugin::default()` +
+   `bevy::remote::http::RemoteHttpPlugin::default()`, with the
+   `bevy_remote` cargo feature)
 2. Register the types the harness inspects:
-   ```rust
-   .register_type::<Transform>()
-   .register_type::<YourGameplayMarker>() // or bevy_playtest::contract::Gameplay
-   ```
-3. Read the port from `BRP_PORT` (the runner sets it)
+    ```rust
+    .register_type::<Transform>()
+    .register_type::<YourGameplayMarker>() // or bevy_playtest::contract::Gameplay
+    ```
+3. Read the listen port from the `BRP_PORT` env var (the harness sets it)
 
 Then from the test side:
 ```rust
