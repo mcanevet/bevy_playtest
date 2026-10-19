@@ -32,12 +32,12 @@ jobs:
     # setup is empirically validated against this exact image, and
     # ubuntu-latest began migrating to 26.04 in October 2026
     # (actions/runner-images#14748).
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       # Actions pinned to full commit SHAs (mutable major tags are a
       # supply-chain risk).
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
@@ -71,7 +71,7 @@ jobs:
         run: ./scripts/fetch_bevy_examples.sh
 
       - name: Cache target directory
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           # Both workspaces share ONE physical target dir
           # (.cargo/config.toml), so one path covers everything.
@@ -129,7 +129,7 @@ jobs:
       # requires a token even on public repos. Set CODECOV_TOKEN as a
       # repo secret (Codecov repo Settings -> Configuration).
       - name: Upload to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -141,10 +141,10 @@ jobs:
   # silently. Uses cargo check (fast) — the full battery runs on the
   # current toolchain.
   msrv:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
@@ -170,7 +170,7 @@ jobs:
         run: cargo +1.95.0 check -p bevy_playtest --all-features
 
   test:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     needs: build
     strategy:
@@ -186,7 +186,7 @@ jobs:
           - mines
 
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
@@ -204,7 +204,7 @@ jobs:
         run: ./scripts/fetch_bevy_examples.sh
 
       - name: Restore shared build cache
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           # Both workspaces share ONE physical target dir
           # (.cargo/config.toml), so one path covers everything.
