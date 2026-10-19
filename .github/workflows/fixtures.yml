@@ -1,0 +1,133 @@
+name: Fixtures (Matrix)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: fixtures-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: this workflow only needs to read the repo.
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  # rust-lld crashes with SIGBUS ("ld terminated with signal 7") on
+  # ubuntu-24.04 runners; fall back to the GNU bfd linker.
+  # NOTE: must match across build and test jobs so caches are compatible.
+  RUSTFLAGS: "-C link-arg=-fuse-ld=bfd"
+
+jobs:
+  # Single build job: generates fixtures, builds everything (including
+  # test binaries), saves one shared cache entry. Matrix legs restore it.
+  build:
+    # Pinned image (NOT ubuntu-latest): the bfd-linker and Lavapipe
+    # setup is empirically validated against this exact image, and
+    # ubuntu-latest began migrating to 26.04 in October 2026
+    # (actions/runner-images#14748).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # Actions pinned to full commit SHAs (mutable major tags are a
+      # supply-chain risk).
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      # Install the exact toolchain named in rust-toolchain.toml.
+      # Pinned to the 1.99.0 branch for reproducibility.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@ff7f6a3374ce205788da40198ec918bd5d67aea7 # 1.99.0
+
+      - name: Install Linux dependencies (bevy backends + software Vulkan)
+        run: |
+          sudo apt-get update -yq
+          sudo apt-get install -yq --no-install-recommends \
+            libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev \
+            mesa-vulkan-drivers
+
+      - name: Generate fixtures from pinned Bevy revision
+        run: ./scripts/fetch_bevy_examples.sh
+
+      - name: Cache target directory
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            target/
+            fixtures/target/
+          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-target-
+
+      - name: Build fixture workspace (all games + runner)
+        run: cargo build --locked --manifest-path fixtures/Cargo.toml --workspace
+
+      - name: Pre-compile acceptance tests (no run)
+        run: cargo test --locked --features brp --no-run
+
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        fixture:
+          - alien_cake_addict
+          - breakout
+          - contributors
+          - desk_toy
+          - game_menu
+          - loading_screen
+          - mines
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@ff7f6a3374ce205788da40198ec918bd5d67aea7 # 1.99.0
+
+      - name: Install Linux dependencies (bevy backends + software Vulkan)
+        run: |
+          sudo apt-get update -yq
+          sudo apt-get install -yq --no-install-recommends \
+            libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev \
+            mesa-vulkan-drivers
+
+      - name: Generate fixtures from pinned Bevy revision
+        run: ./scripts/fetch_bevy_examples.sh
+
+      - name: Restore shared build cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            target/
+            fixtures/target/
+          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock') }}
+          # Legs restore the build job's entry (exact key hit). Exact-key
+          # hits never re-save, so legs can't clobber it.
+          restore-keys: |
+            ${{ runner.os }}-target-
+
+      # The cache restores all dependency artifacts (incl. Bevy);
+      # only the small fixture crates themselves rebuild here.
+      - name: Build fixture-runner
+        run: >
+          cargo build --locked --manifest-path fixtures/Cargo.toml
+          -p fixture-runner -p fixture_${{ matrix.fixture }} --bins
+
+      # No xvfb: WinitPlugin is disabled headless so nothing opens a
+      # display; Lavapipe renders via Vulkan without X (same as wgpu's
+      # own Linux CI).
+      - name: In-process tier (headless, real game logic)
+        env:
+          WGPU_BACKEND: vulkan
+        run: ./target/debug/fixture-runner "${{ matrix.fixture }}"
+
+      - name: External-BRP tier (bin driven over BRP)
+        env:
+          BEVY_PLAYTEST_FIXTURE: ${{ matrix.fixture }}
+          WGPU_BACKEND: vulkan
+        run: cargo test --locked --features brp --test acceptance -- --nocapture
