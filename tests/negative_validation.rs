@@ -28,9 +28,9 @@ fn parse(json: serde_json::Value) -> Scenario {
 
 /// Bogus key names in a chaos scenario's raw_surface must be rejected —
 /// otherwise the bot silently presses nothing and the run passes
-/// vacuously (adversarial review C1).
+/// vacuously (undocumented contract).
 #[test]
-#[ignore = "current code accepts bogus chaos keys (C1): bot no-ops"]
+#[ignore = "current code accepts bogus chaos keys: bot no-ops"]
 fn rejects_invalid_chaos_keys() {
     let mut json = minimal_scenario("chaos");
     json["raw_surface"] = serde_json::json!({ "keys": ["qwerty", "nope"] });
@@ -44,7 +44,7 @@ fn rejects_invalid_chaos_keys() {
 /// A chaos bot with an empty key surface can do nothing; it must reject
 /// rather than produce a vacuous pass (C1 adjacent).
 #[test]
-#[ignore = "current code accepts an empty chaos key surface (C1)"]
+#[ignore = "current code accepts an empty chaos key surface"]
 fn rejects_empty_chaos_keys() {
     let mut json = minimal_scenario("chaos");
     json["raw_surface"] = serde_json::json!({ "keys": [] });
@@ -59,7 +59,7 @@ fn rejects_empty_chaos_keys() {
 /// by the chaos bot; they must reject as NotImplemented instead of
 /// silently yielding a keyboard-only bot (C2).
 #[test]
-#[ignore = "current code accepts unread surface knobs (C2)"]
+#[ignore = "current code accepts unread surface knobs"]
 fn rejects_unimplemented_surface_kinds() {
     for field in ["mouse_buttons", "mouse_motion", "wheel", "gamepad"] {
         let mut json = minimal_scenario("chaos");
@@ -80,7 +80,7 @@ fn rejects_unimplemented_surface_kinds() {
 
 /// `persona` parses but nothing consumes it (C2).
 #[test]
-#[ignore = "persona parses but is never consumed (C2)"]
+#[ignore = "persona parses but is never consumed"]
 fn rejects_unimplemented_persona() {
     let mut json = minimal_scenario("chaos");
     json["bot"]["persona"] = serde_json::json!("aggressive");
@@ -93,7 +93,7 @@ fn rejects_unimplemented_persona() {
 
 /// `actuator` validates then is completely ignored (C2).
 #[test]
-#[ignore = "actuator validates but is never consumed (C2)"]
+#[ignore = "actuator validates but is never consumed"]
 fn rejects_unimplemented_actuator() {
     let mut json = minimal_scenario("chaos");
     json["bot"]["actuator"] = serde_json::json!("intents");
@@ -106,7 +106,7 @@ fn rejects_unimplemented_actuator() {
 
 /// Populated `inputs` on a chaos bot is silently ignored today (C2).
 #[test]
-#[ignore = "chaos bot silently ignores populated inputs (C2)"]
+#[ignore = "chaos bot silently ignores populated inputs"]
 fn rejects_inputs_on_chaos_bot() {
     let mut json = minimal_scenario("chaos");
     json["bot"]["inputs"] =
@@ -127,7 +127,7 @@ fn rejects_inputs_on_chaos_bot() {
 /// nonzero frame must reject (review finding: how-to.md previously
 /// documented scheduled cheats that never were).
 #[test]
-#[ignore = "cheats[].frame != 0 is accepted but unscheduled (C5-related)"]
+#[ignore = "cheats[].frame != 0 is accepted but unscheduled"]
 fn rejects_nonzero_cheat_frame() {
     let mut json = minimal_scenario("chaos");
     json["setup"] = serde_json::json!({
@@ -137,5 +137,24 @@ fn rejects_nonzero_cheat_frame() {
     match validate_scenario(&s) {
         Err(ScenarioError::NotImplemented(msg)) => assert!(msg.contains("frame"), "{msg}"),
         other => panic!("expected NotImplemented for nonzero cheat frame, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Oracle selection (M14)
+// ---------------------------------------------------------------------------
+
+/// `"oracles": []` currently parses to "run all" — the same meaning as
+/// `None`. A user writing `[]` almost certainly intends "none", which is
+/// not implemented. Until it is, the empty list must reject.
+#[test]
+#[ignore = "oracles: [] silently means 'run all'"]
+fn rejects_empty_oracles_list() {
+    let mut json = minimal_scenario("chaos");
+    json["oracles"] = serde_json::json!([]);
+    let s = parse(json);
+    match validate_scenario(&s) {
+        Err(ScenarioError::Rejected(_)) | Err(ScenarioError::NotImplemented(_)) => {}
+        other => panic!("empty oracles list must not silently mean 'all': {other:?}"),
     }
 }

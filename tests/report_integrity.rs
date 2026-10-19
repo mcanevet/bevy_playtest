@@ -27,9 +27,9 @@ fn scenario_json(bot: &str) -> String {
 
 /// An app where NOTHING ever happens (no entities, no transforms) must
 /// not pass silently. The BRP runner has a zero-row vacuity guard; the
-/// in-process driver must have one too (adversarial review C3).
+/// in-process driver must have one too (undocumented contract).
 #[test]
-#[ignore = "in-process driver has no vacuity guard (C3): zero-entity app passes"]
+#[ignore = "in-process driver has no vacuity guard: zero-entity app passes"]
 fn zero_entity_game_must_not_pass_vacuously() {
     let scenario: Scenario = serde_json::from_str(&scenario_json("chaos")).unwrap();
     let mut app = minimal_app();
@@ -49,10 +49,10 @@ fn zero_entity_game_must_not_pass_vacuously() {
 /// A completely static world must report the frozen-world condition,
 /// and the frozen_world rule must appear AT MOST ONCE in the violation
 /// list — two oracles currently emit it with different semantics and
-/// different grace windows (C4), producing duplicate/conflicting
+/// different grace windows , producing duplicate/conflicting
 /// entries.
 #[test]
-#[ignore = "two frozen_world oracles emit conflicting duplicates (C4)"]
+#[ignore = "two frozen_world oracles emit conflicting duplicates"]
 fn frozen_world_reports_exactly_one_violation() {
     let scenario: Scenario = serde_json::from_str(&scenario_json("chaos")).unwrap();
     let mut app = minimal_app();
@@ -77,10 +77,12 @@ fn frozen_world_reports_exactly_one_violation() {
     );
 }
 
-/// Changing liveness.timeout_s must affect the frozen-world grace
-/// period. The hard-coded 180-frame oracle ignores it entirely (C4).
+/// Changing liveness.timeout_s must affect when a frozen world is
+/// caught. The liveness oracle derives its grace window from the
+/// scenario's liveness config; this test is the regression guard for
+/// that wiring (the parallel frozen_world oracle has a fixed 180-frame
+/// grace, tracked by the duplicate-oracle test above).
 #[test]
-#[ignore = "hard-coded frozen-world oracle ignores liveness.timeout_s (C4)"]
 fn liveness_timeout_config_must_be_honored() {
     let short: Scenario = serde_json::from_str(
         r#"{"bot":{"type":"chaos","seed":7},"duration_s":0.5,"tps":60,"liveness":{"mode":"real_time","timeout_s":0.05}}"#,
@@ -122,7 +124,7 @@ fn liveness_timeout_config_must_be_honored() {
 // ---------------------------------------------------------------------------
 
 /// A run where the bot definitely emitted input must report
-/// input_count > 0 and a populated action log (C5/H9: cheat_count and
+/// input_count > 0 and a populated action log : cheat_count and
 /// action_log are currently hardcoded empty/0).
 #[test]
 #[ignore = "metrics.input_count/action_log are never populated (C5/H9)"]
@@ -142,7 +144,7 @@ fn bot_activity_must_be_visible_in_telemetry() {
 
 /// A scheduled cheat must bump cheat_count (currently always 0 — C5).
 #[test]
-#[ignore = "cheat_count is hardcoded 0 (C5)"]
+#[ignore = "cheat_count is hardcoded 0"]
 fn fired_cheat_must_bump_cheat_count() {
     use bevy_playtest::contract::CheatHooks;
 
@@ -167,9 +169,9 @@ fn fired_cheat_must_bump_cheat_count() {
 // ---------------------------------------------------------------------------
 
 /// If the report status is Crash, metrics.crash_detected must be true
-/// (H1: never set today).
+/// (never set today).
 #[test]
-#[ignore = "metrics.crash_detected is never set (H1)"]
+#[ignore = "metrics.crash_detected is never set"]
 fn crash_status_implies_crash_detected_metric() {
     // A panicking game system aborts the run loop; the harness must
     // classify it as Crash AND set the metric consistently.

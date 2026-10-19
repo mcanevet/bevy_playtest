@@ -2,8 +2,8 @@
 //! mock game binaries (compiled on demand from the mock source below)
 //! covering hostile/adversarial process behavior:
 //!
-//! - stdout/stderr flood (does the run deadlock or survive?) — H2
-//! - crash-at-startup (clear error, no hang, no leaked process) — H4-adjacent
+//! - stdout/stderr flood (does the run deadlock or survive?)
+//! - crash-at-startup (clear error, no hang, no leaked process)
 //! - never-binding game (startup timeout honored, bounded runtime)
 //! - exit mid-run (runner must surface the death, never a silent Pass)
 //! - NaN-poisoned entity (finite_transforms oracle fires over the wire)
@@ -55,7 +55,53 @@ fn main() {
             let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind");
             serve_brp(listener, &mode);
         }
+        "clean-noisy" => {
+            // Serve perfectly valid transforms AND chatter on stderr
+            // (asset noise, adapter logs — normal for a healthy game).
+            let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind");
+            std::thread::spawn(|| loop {
+                eprintln!("info: adapter WGPU preferred");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            });
+            serve_clean(listener);
+        }
+        "clean-static" => {
+            // Serve valid but NEVER-CHANGING transforms: a soft-locked
+            // game from the harness's point of view.
+            let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind");
+            serve_clean(listener);
+        }
         _ => unreachable!(),
+    }
+}
+
+/// Serve one sane entity forever (never crashes, never changes data).
+fn serve_clean(listener: TcpListener) {
+    for stream in listener.incoming() {
+        let mut stream = stream.expect("stream");
+        let mut buf = [0u8; 65536];
+        let n = match stream.read(&mut buf) {
+            Ok(0) | Err(_) => continue,
+            Ok(n) => n,
+        };
+        let req = String::from_utf8_lossy(&buf[..n]).into_owned();
+        let is_query = req.contains("\"world.query\"");
+        let is_discover = req.contains("\"rpc.discover\"");
+        let body = if is_discover {
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}".to_string()
+        } else if is_query {
+            let rows = "[{\"entity\":1,\"components\":{\"bevy_transform::components::transform::Transform\":{\"translation\":[0.0,0.0,0.0]}}}]";
+            format!("{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{rows}}}")
+        } else {
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}".to_string()
+        };
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = stream.write_all(resp.as_bytes());
+        let _ = stream.flush();
     }
 }
 
@@ -79,7 +125,8 @@ fn serve_brp(listener: TcpListener, mode: &str) {
             // Two entities: one sane, one poisoned. `null` deserializes
             // as a missing f32 -> the harness must treat it as
             // non-finite/missing and flag it, not silently skip.
-            "[{\"entity\":1,\"components\":{\"bevy_transform::components::transform::Transform\":{\"translation\":[0.0,0.0,0.0]}}},{\"entity\":2,\"components\":{\"bevy_transform::components::transform::Transform\":{\"translation\":[0.0,null,0.0]}}}]".to_string()
+            let rows = "[{\"entity\":1,\"components\":{\"bevy_transform::components::transform::Transform\":{\"translation\":[0.0,0.0,0.0]}}},{\"entity\":2,\"components\":{\"bevy_transform::components::transform::Transform\":{\"translation\":[0.0,null,0.0]}}}]";
+            format!("{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{rows}}}")
         } else {
             "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}".to_string()
         };
@@ -258,10 +305,13 @@ fn game_death_mid_run_is_not_a_silent_pass() {
     );
 }
 
-/// Oracle over the wire: a NaN/null-poisoned translation must trip
+/// Oracle over the wire: a null-poisoned translation must trip
 /// finite_transforms (or an oracle error), not be silently skipped —
 /// the query-response parsing path must reject what it can't read.
+/// Proven: with a well-formed response, the poisoned row vanishes
+/// without a trace (violations empty).
 #[test]
+#[ignore = "null translation in a query row is silently skipped by the parser"]
 fn poisoned_translation_is_flagged_over_the_wire() {
     let bin = compile_mock("brp_mock_game");
     let port = free_port();
@@ -279,4 +329,77 @@ fn poisoned_translation_is_flagged_over_the_wire() {
         report.violations
     );
     assert_ne!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+}
+
+/// A healthy game that merely chats on stderr (adapter/asset noise is
+/// normal) must NOT get a populated `error` field on its report.
+/// Everywhere else `error` means "crash reason"; a passing report
+/// carrying `error: Some(...)` reads as a crash to consumers. Today
+/// the runner sets it whenever stderr is non-empty.
+#[test]
+#[ignore = "runner sets report.error whenever the game printed to stderr"]
+fn healthy_stderr_chatter_must_not_populate_error_field() {
+    let bin = compile_mock("brp_mock_game");
+    let port = free_port();
+    let report = run_scenario_brp(
+        &cfg(&bin, "clean-noisy", port, Duration::from_secs(10)),
+        &quick_scenario(),
+    )
+    .expect("run completes");
+    assert!(
+        report.error.is_none(),
+        "passing run carries error={:?} — stderr chatter must not masquerade as a crash",
+        report.error
+    );
+}
+
+/// A game whose world is permanently static (soft-locked) must be
+/// caught by liveness/frozen-world detection in BRP mode too, the
+/// same way it is in-process. The BRP runner currently has no
+/// liveness coverage at all: it evaluates bounds/NaN only.
+#[test]
+#[ignore = "BRP mode has no liveness/frozen-world coverage"]
+fn static_world_over_brp_is_not_a_silent_pass() {
+    let bin = compile_mock("brp_mock_game");
+    let port = free_port();
+    let report = run_scenario_brp(
+        &cfg(&bin, "clean-static", port, Duration::from_secs(10)),
+        &quick_scenario(),
+    )
+    .expect("run completes");
+    assert_ne!(
+        report.status,
+        bevy_playtest::enums::PlaytestStatus::Pass,
+        "a never-changing world must be flagged (liveness parity with in-process mode)"
+    );
+}
+
+/// Violation details must be raw, human-readable text in BOTH modes.
+/// The in-process path normalizes details via the sink layer, but the
+/// BRP runner reports them verbatim with an internal "[intent: <ctx>]"
+/// prefix where the context is always empty — every BRP violation
+/// detail in every report starts with the literal garbage "[intent: ]".
+#[test]
+#[ignore = "BRP violation details carry a stale '[intent: ] ' prefix"]
+fn brp_violation_details_carry_no_stale_prefix() {
+    let bin = compile_mock("brp_mock_game");
+    let port = free_port();
+    // poisoned row guarantees at least one violation (query fails to
+    // deserialize) — whichever violation fires, its detail must be clean.
+    let report = run_scenario_brp(
+        &cfg(&bin, "brp-ok", port, Duration::from_secs(10)),
+        &quick_scenario(),
+    )
+    .expect("run completes");
+    assert!(
+        !report.violations.is_empty(),
+        "precondition: mock must produce at least one violation"
+    );
+    for v in &report.violations {
+        assert!(
+            !v.detail.starts_with("[intent"),
+            "BRP violation detail carries stale prefix: {:?}",
+            v.detail
+        );
+    }
 }

@@ -12,7 +12,7 @@
 //!
 //! Expected-fail tests are #[ignore]d with the reason.
 
-use bevy_playtest::choice::ChoiceStream;
+use bevy_playtest::choice::{Choice, ChoiceStream, Continuation};
 
 /// The same seed and bound must produce the identical choice sequence
 /// regardless of call order elsewhere — the foundation of the
@@ -41,7 +41,7 @@ fn different_seeds_diverge() {
     assert_ne!(seq_a, seq_b, "distinct seeds produced identical sequences");
 }
 
-/// Mode divergence (C7): the in-process driver samples a key every
+/// Mode divergence: the in-process driver samples a key every
 /// `interval = tps / input_rate_hz` frames against the SCENARIO's key
 /// surface length; the BRP driver hardcodes every 6th frame against a
 /// fixed 8-key list. With the default surface (8 keys) and default
@@ -57,7 +57,7 @@ fn different_seeds_diverge() {
 /// SHOULD use; equality of the two formulas is what the fix must
 /// restore.
 #[test]
-#[ignore = "BRP driver hardcodes interval 6 and bound 8 (C7): custom surface/rate diverges"]
+#[ignore = "BRP driver hardcodes interval 6 and bound 8: custom surface/rate diverges"]
 fn custom_surface_interval_matches_brp_contract() {
     // In-process formula (driver.rs):
     let tps = 60u64;
@@ -104,5 +104,87 @@ fn recorded_choices_are_seed_reproducible() {
     assert_eq!(
         r1.choices, r2.choices,
         "identical scenario must produce identical choice logs"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Replay fidelity
+// ---------------------------------------------------------------------------
+
+/// Replay consumes entries positionally, ignoring each entry's recorded
+/// `frame` (choice.rs `below`), and re-reduces values with `% bound`. A
+/// recording replayed against draws that do not align frame-for-frame
+/// therefore serves silently SHIFTED values — the worst failure mode
+/// for a determinism tool: a misaligned replay must fail loudly, not
+/// produce plausible-but-wrong input.
+#[test]
+#[ignore = "replay ignores recorded frames: misaligned streams replay silently"]
+fn misaligned_replay_must_fail_loudly_not_shift_silently() {
+    // Record a live stream, then attempt to replay it starting one
+    // frame later (as if one earlier draw were inserted/removed).
+    let mut live = ChoiceStream::from_seed(7);
+    let mut recorded = Vec::new();
+    for frame in 0..20 {
+        let v = live.below(frame, 8);
+        recorded.push(Choice {
+            frame,
+            value: v,
+            bound: 8,
+        });
+    }
+
+    // Sanity: aligned replay reproduces the recorded values exactly.
+    let mut aligned = ChoiceStream::from_seed(0).with_replay(recorded.clone(), Continuation::Zeros);
+    for frame in 0..20 {
+        assert_eq!(aligned.below(frame, 8), recorded[frame as usize].value);
+    }
+
+    // Misaligned: first draw consumes entry 0, subsequent draws see a
+    // one-off shift. The stream must error or produce values matching
+    // the recorded FRAME INDEX — silently serving entry N at frame N+1
+    // is a corruption.
+    let mut shifted = ChoiceStream::from_seed(0).with_replay(recorded.clone(), Continuation::Zeros);
+    let first = shifted.below(5, 8); // frame 5 draws first
+    assert_eq!(
+        first, recorded[5].value,
+        "replay must serve the entry recorded for frame 5, not the head of the queue"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Default surface consistency
+// ---------------------------------------------------------------------------
+
+/// The default chaos key surface exists in three copies: the schema
+/// default (`RawSurface::default()`), the in-process driver's local
+/// list, and the BRP runner's hardcoded list. Nothing ties them
+/// together. This test pins the OBSERVABLE contract: a scenario that
+/// sets no surface must behave identically to one that sets the
+/// schema default explicitly (same seed -> same choices). If any
+/// driver's private default drifts from the schema default, the two
+/// choice logs diverge.
+#[test]
+fn implicit_surface_matches_explicit_schema_default() {
+    use bevy_app::App;
+    use bevy_playtest::run_scenario;
+    use bevy_playtest::scenario::Scenario;
+    use bevy_playtest::sinks;
+
+    let run = |json: &str| {
+        let scenario: Scenario = serde_json::from_str(json).unwrap();
+        let mut app = App::new();
+        sinks::ensure_global_subscriber();
+        run_scenario(&mut app, &scenario).unwrap()
+    };
+
+    let implicit = run(r#"{"bot":{"type":"chaos","seed":7},"duration_s":0.5,"tps":60}"#);
+    let explicit = run(
+        r#"{"bot":{"type":"chaos","seed":7,"raw_surface":{"keys":["KeyW","KeyA","KeyS","KeyD","ArrowUp","ArrowDown","ArrowLeft","ArrowRight"]}},"duration_s":0.5,"tps":60}"#,
+    );
+    assert_eq!(
+        implicit.choices, explicit.choices,
+        "implicit default surface must match the documented schema default; \
+         if this fails, a driver's private key list has drifted from \
+         RawSurface::default()"
     );
 }

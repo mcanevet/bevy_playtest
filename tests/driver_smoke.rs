@@ -299,3 +299,31 @@ fn scenario_bounds_are_enforced_per_axis() {
     );
     assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
 }
+
+/// An entity escaping along the Z axis must be caught like X/Y escapes.
+/// The standalone bounds oracle checks all three axes (oracles.rs:34-36);
+/// this test is a regression guard that the oracle remains wired.
+#[test]
+fn z_axis_escape_is_caught_by_nodes_in_bounds() {
+    use bevy_playtest::contract::Gameplay;
+
+    fn spawn_high_entity(mut commands: bevy_ecs::prelude::Commands) {
+        commands.spawn((Gameplay, Transform::from_xyz(0.0, 0.0, 1e9)));
+    }
+
+    let scenario: Scenario = serde_json::from_str(
+        r#"{"bot":{"type":"chaos","seed":7},"duration_s":0.05,"tps":60,"invariants":[{"name":"arena","rule":"nodes_in_bounds","min_x":-1000,"max_x":1000,"min_y":-1000,"max_y":1000}]}"#,
+    )
+    .unwrap();
+    let mut app = minimal_app();
+    app.add_systems(bevy_app::Update, spawn_high_entity);
+    let report = run_scenario(&mut app, &scenario).unwrap();
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|v| v.rule == "nodes_in_bounds"),
+        "an entity at z=1e9 must not pass a bounds invariant unflagged; got {:?}",
+        report.violations
+    );
+}

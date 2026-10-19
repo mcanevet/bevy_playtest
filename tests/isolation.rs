@@ -31,7 +31,7 @@ fn chaos_scenario(duration_s: f32) -> Scenario {
 /// An aborted first run must not leak captured events into a second
 /// run's report. The SINK is never cleared at run start (only drained
 /// at end), so a run that errors before draining leaves residue for
-/// the next run on the same thread (adversarial review C6).
+/// the next run on the same thread (previously suspected regression).
 #[test]
 fn aborted_run_does_not_leak_into_next_run() {
     // First run: a system panics mid-run. The harness catches it and
