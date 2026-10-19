@@ -128,7 +128,7 @@ jobs:
       # Coverage: measure line coverage and upload to Codecov (public repo
       # needs no token). Threshold: 80% lines covered.
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
         with:
           tool: cargo-llvm-cov
 
@@ -140,7 +140,7 @@ jobs:
       # requires a token even on public repos. Set CODECOV_TOKEN as a
       # repo secret (Codecov repo Settings -> Configuration).
       - name: Upload to Codecov
-        uses: codecov/codecov-action@v7
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7
         with:
           files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -162,7 +162,7 @@ jobs:
       - name: Install MSRV toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master: adds toolchain input
         with:
-          toolchain: 1.95.0
+          toolchain: 1.99.1
 
       - name: Install Linux dependencies (bevy backends + software Vulkan)
         run: |
