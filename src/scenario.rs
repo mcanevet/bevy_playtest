@@ -135,7 +135,7 @@ impl Default for LivenessConfig {
 }
 
 /// Liveness mode.
-#[derive(Deserialize, Serialize, Clone, Copy, Debug, Default)]
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum LivenessMode {
     /// Real-time: violation if no liveness signal for timeout_s.
@@ -636,6 +636,26 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
              (frozen-world detection would be silently disabled)",
             scenario.liveness.timeout_s, scenario.tps
         )));
+    }
+    // The liveness mode knob is not implemented: "off" must reject
+    // loudly instead of silently behaving like real_time.
+    if scenario.liveness.mode == LivenessMode::Off {
+        return Err(ScenarioError::NotImplemented(
+            "liveness.mode 'off' is not implemented — the liveness oracle \
+             always runs; widen timeout_s to accommodate quiet phases"
+                .into(),
+        ));
+    }
+    // Typed-oracle selection is not implemented: a populated list
+    // would silently change nothing (all oracles always run).
+    if let Some(names) = &scenario.oracles {
+        if !names.is_empty() {
+            return Err(ScenarioError::NotImplemented(
+                "oracles selection is not implemented — all registered \
+                 oracles always run; omit the oracles field"
+                    .into(),
+            ));
+        }
     }
     let total_ticks = (scenario.duration_s * scenario.tps as f32).ceil() as u64;
     if total_ticks > MAX_TOTAL_TICKS {

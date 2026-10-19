@@ -35,9 +35,9 @@ Public API surface for integrators.
     "resets": [{ "kind": "string" }],
     "cheats": [{ "frame": number, "kind": "string" }]
   },
-  "oracles": ["string"],          // optional; empty = run all
+  "oracles": ["string"],          // rejected: oracle selection not implemented
   "liveness": {
-    "mode": "real_time" | "off",  // default real_time
+    "mode": "real_time",          // "off" rejected: not implemented
     "timeout_s": number           // default 2.0
   }
 }
@@ -52,7 +52,9 @@ errors.
 
 - `nodes_in_bounds`: per-entity AABB check on `Gameplay`-tagged entities;
   bounds are per-axis (`min_x`/`max_x`/`min_y`/`max_y`), each defaulting
-  to ±1000 when unset.
+  to ±1000 when unset. Additionally, a hard-coded global bounds check
+  (±1000 on x/y/z) runs on all entities regardless of invariants or
+  tagging — stray geometry will trip it even with zero invariants declared.
 
 ## Oracles
 
@@ -65,7 +67,7 @@ errors.
 
 ## Report types
 
-- `PlaytestReport`: `status: PlaytestStatus`, `violations: Violations`
+- `PlaytestReport`: `status: PlaytestStatus`, `violations: Vec<ViolationEntry>`
 - `PlaytestStatus`: `Pass | Fail | Crash`
 - `ViolationEntry`: `rule`, `target`, `first_frame`, `last_frame`, `count`,
   `detail`
@@ -82,9 +84,12 @@ Reset/cheat hooks are registered via the harness's typed registry in
 `bevy_playtest::contract`:
 
 ```rust
-use bevy_playtest::contract::{ResetHooks, CheatHooks};
+use bevy_playtest::contract::ResetHooks;
 
-app.world_mut().resource_mut::<ResetHooks>().register("name", |world| { /* ... */ });
+app.world_mut().insert_resource(ResetHooks::default());
+app.world_mut()
+    .resource_mut::<ResetHooks>()
+    .register("name", |world| { /* ... */ });
 ```
 
 Unknown kinds are rejected at scenario load.

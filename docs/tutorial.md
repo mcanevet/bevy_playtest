@@ -37,7 +37,10 @@ commands.entity(ball).insert(Gameplay);
 
 The bounds invariant checks `Gameplay`-tagged entities. The NaN and
 liveness oracles watch every entity with a `Transform`, so they work
-whether or not you tag anything.
+whether or not you tag anything. There is also a hard-coded global
+bounds check (±1000 on all axes) that runs regardless of tagging or
+invariant declarations — untagged structural entities at the origin
+won't trip it, but stray geometry will.
 
 ## 4. Write the scenario
 

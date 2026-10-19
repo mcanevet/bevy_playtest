@@ -9,7 +9,7 @@ report (JSON + JUnit XML).
 
 ## Integrating a game
 
-### Tier-2 Observable (default integration)
+### Basic integration (tag gameplay entities)
 
 Tag gameplay-relevant entities with `bevy_playtest::contract::Gameplay`. That's it.
 
@@ -47,9 +47,9 @@ harness imports in the game at all. Requires the game binary to:
 2. Register the types the harness inspects:
     ```rust
     .register_type::<Transform>()
-    .register_type::<YourGameplayMarker>() // or bevy_playtest::contract::Gameplay
     ```
-3. Read the listen port from the `BRP_PORT` env var (the harness sets it)
+3. Read the listen port from the `BRP_PORT` env var and pass it to
+   `RemoteHttpPlugin::default().with_port(port)` (the harness sets it)
 
 Then from the test side:
 ```rust
@@ -63,8 +63,9 @@ let cfg = BrpRunConfig {
 let report = run_scenario_brp(&cfg, &scenario)?;
 ```
 
-Reports carry `harness_mode: "external_brp"`. Same invariants/oracles as
-in-process. Limits: chaos bot only, no reset/cheat hooks (those need
-in-process or a game-side BRP method).
+Reports carry `harness_mode: "external_brp"`. Limits versus in-process:
+chaos bot only, no reset/cheat hooks, and a reduced oracle set — bounds
+and NaN transforms are checked, but panic, log, and liveness oracles
+require in-process mode.
 
 See the [docs](docs/index.md) for the full guides.

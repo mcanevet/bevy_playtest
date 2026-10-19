@@ -50,11 +50,13 @@ Then reference them from the scenario:
 ```json
 "setup": {
   "resets": [ { "kind": "my_reset" } ],
-  "cheats": [ { "frame": 300, "kind": "invincible" } ]
+  "cheats": [ { "frame": 0, "kind": "invincible" } ]
 }
 ```
 
-Unknown kinds are rejected at load — not silently ignored.
+All cheats are applied before the run loop starts (the `frame` field
+is validated but not yet used for scheduling). Unknown kinds are
+rejected at load — not silently ignored.
 
 ## Drive a game you can't modify (external-BRP)
 
@@ -82,8 +84,14 @@ let report = run_scenario_brp(&cfg, &scenario)?;
 ```
 
 `game_args` (passed to the subprocess) and `startup_timeout` (default 30s)
-are also configurable. This mode drives the chaos bot only; reset and
-cheat hooks require in-process mode.
+are also configurable. This mode drives the chaos bot only, and checks
+bounds and NaN transforms — panic, log, and liveness oracles require
+in-process mode.
+
+Headless binaries must keep ticking after `app.run()` is called: with
+`WinitPlugin` disabled, the default runner returns after one frame.
+Wrap the plugins in a `ScheduleRunnerPlugin::run_loop(1/tps)` (as the
+fixtures do) or the subprocess exits before BRP can connect.
 
 ## Get JUnit XML for CI
 
@@ -102,7 +110,7 @@ ingest JUnit XML natively.
 
 ## Reproduce a failure
 
-- The report includes the bot seed — reuse it verbatim.
+- The scenario you wrote includes the bot seed — reuse it verbatim.
 - Run locally with the same seed; chaos is deterministic per seed.
 
 ## Know what's intentionally rejected

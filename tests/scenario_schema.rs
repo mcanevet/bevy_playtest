@@ -99,6 +99,53 @@ fn rejects_unimplemented_bot_loudly() {
 }
 
 #[test]
+fn rejects_liveness_off_loudly() {
+    // The mode knob is not implemented; "off" must reject instead of
+    // silently behaving like real_time (never a vacuous pass).
+    let mut json = minimal_scenario("chaos");
+    json["liveness"] = serde_json::json!({ "mode": "off", "timeout_s": 2.0 });
+    let s = parse(json);
+    match validate_scenario(&s) {
+        Err(ScenarioError::NotImplemented(msg)) => {
+            assert!(msg.contains("liveness.mode"), "{msg}")
+        }
+        other => panic!("expected NotImplemented for liveness off, got {other:?}"),
+    }
+}
+
+#[test]
+fn rejects_oracles_selection_loudly() {
+    // Oracle selection is not implemented; a populated list would
+    // silently change nothing.
+    let mut json = minimal_scenario("chaos");
+    json["oracles"] = serde_json::json!(["finite_transforms"]);
+    let s = parse(json);
+    match validate_scenario(&s) {
+        Err(ScenarioError::NotImplemented(msg)) => {
+            assert!(msg.contains("oracles"), "{msg}")
+        }
+        other => panic!("expected NotImplemented for oracles, got {other:?}"),
+    }
+}
+
+#[test]
+fn empty_oracles_list_is_valid() {
+    // Omitting or an empty list = run all; only a populated list rejects.
+    let mut json = minimal_scenario("chaos");
+    json["oracles"] = serde_json::json!([]);
+    let s = parse(json);
+    validate_scenario(&s).expect("empty oracles list is valid");
+}
+
+#[test]
+fn accepts_real_time_liveness_mode() {
+    let mut json = minimal_scenario("chaos");
+    json["liveness"] = serde_json::json!({ "mode": "real_time", "timeout_s": 3.0 });
+    let s = parse(json);
+    validate_scenario(&s).expect("real_time mode is valid");
+}
+
+#[test]
 fn rejects_unknown_fields() {
     let mut json = minimal_scenario("chaos");
     json["compare_golden"] = serde_json::json!("goldens/");
