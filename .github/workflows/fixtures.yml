@@ -14,12 +14,15 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  CARGO_INCREMENTAL: "0"
-  # rust-lld crashes with SIGBUS ("ld terminated with signal 7") on
-  # ubuntu-24.04 runners; fall back to the GNU bfd linker.
-  # NOTE: must match across build and test jobs so caches are compatible.
-  RUSTFLAGS: "-C link-arg=-fuse-ld=bfd"
+  env:
+    CARGO_INCREMENTAL: "0"
+    # rust-lld crashes with SIGBUS ("ld terminated with signal 7") on
+    # ubuntu-24.04 runners; fall back to the GNU bfd linker.
+    # Line tables only (no full DWARF types/variables): llvm-cov needs
+    # line tables for accurate coverage, full debuginfo costs gigabytes
+    # the runners don't have (debug build of Bevy alone is ~19 GB).
+    # NOTE: must match across build and test jobs so caches are compatible.
+    RUSTFLAGS: "-C link-arg=-fuse-ld=bfd -C debug-line-tables-only"
 
 jobs:
   # Single build job: generates fixtures, builds everything (including
@@ -37,6 +40,18 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
+
+      # Reclaim disk before building: the stock image ships ~9 GB of
+      # Android SDK and ~3 GB of .NET we never touch, and a debug build
+      # of Bevy exceeds the ~14 GB free by itself. Inlined (rather than
+      # jlumbroso/free-disk-space) to avoid another unpinned third-party
+      # action; paths are stable on the pinned ubuntu-24.04 image.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          df -h /
 
       # Install the exact toolchain named in rust-toolchain.toml.
       # Pinned to the 1.99.0 branch for reproducibility.
