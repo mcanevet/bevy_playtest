@@ -18,11 +18,12 @@ env:
   CARGO_INCREMENTAL: "0"
   # rust-lld crashes with SIGBUS ("ld terminated with signal 7") on
   # ubuntu-24.04 runners; fall back to the GNU bfd linker.
-  # Line tables only (no full DWARF types/variables): llvm-cov needs
-  # line tables for accurate coverage, full debuginfo costs gigabytes
-  # the runners don't have (debug build of Bevy alone is ~19 GB).
-  # NOTE: must match across build and test jobs so caches are compatible.
-  RUSTFLAGS: "-C link-arg=-fuse-ld=bfd -C debug-line-tables-only"
+    # Line tables only (no full DWARF types/variables): llvm-cov needs
+    # line tables for accurate coverage, full debuginfo costs gigabytes
+    # the runners don't have (debug build of Bevy alone is ~19 GB).
+    # NOTE: must match across build and test jobs so caches are compatible.
+    # Also applies to the MSRV job (1.95.0) — the flag predates it.
+    RUSTFLAGS: "-C link-arg=-fuse-ld=bfd -C debuginfo=line-tables-only"
 
 jobs:
   # Single build job: generates fixtures, builds everything (including
