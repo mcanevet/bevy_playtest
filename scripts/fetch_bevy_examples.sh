@@ -311,6 +311,13 @@ use bevy_playtest::scenario::Scenario;
 
 pub fn run_fixture_in_process(fixture: &str, scenario: &Scenario) -> Result<(), String> {
     unsafe { std::env::set_var("BEVY_PLAYTEST_HEADLESS", "1"); }
+    // Preempt the game's LogPlugin subscriber so we capture ERROR/WARN
+    // during gameplay. We suppress capture during build_app() to avoid
+    // false positives from setup-time asset errors (fixtures ship no
+    // assets). Capture is enabled inside run_scenario. Our subscriber
+    // chains a fmt layer for console output; LogPlugin then logs a
+    // harmless "already set" error.
+    bevy_playtest::sinks::ensure_global_subscriber();
     let mut app = match fixture {
         "alien_cake_addict" => fixture_alien_cake_addict::build_app(),
         "breakout" => fixture_breakout::build_app(),
