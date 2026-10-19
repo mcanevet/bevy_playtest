@@ -9,54 +9,85 @@ Public API surface for integrators.
   "name": "string",
   "bot": {
     "type": "chaos" | "synthetic_keyboard",
-    "seed": number,               // required for chaos
-    "schedule": [                 // required for synthetic_keyboard
-      { "at_s": number, "key": "string", "release_at_s": number? }
+    "seed": number,               // default 42
+    "input_rate_hz": number,      // default 10
+    "key_presses": [              // required for synthetic_keyboard
+      { "frame": number, "key": "string", "hold_frames": number }
     ]
   },
-  "duration_s": number,
+  "tps": number,                  // default 60
+  "simulated_time": boolean,      // default true
+  "single_threaded": boolean,     // default true
+  "strict_warnings": boolean,     // default false
+  "duration_s": number,           // default 15.0
   "invariants": [
-    { "kind": "nodes_in_bounds", "max": [number, number] }
+    {
+      "name": "string",
+      "rule": "nodes_in_bounds" | "custom",
+      "min_x": number,
+      "max_x": number,
+      "min_y": number,
+      "max_y": number,
+      "targets": ["string"]       // empty = all Gameplay entities
+    }
   ],
   "setup": {
-    "reset": { "kind": "string" },
-    "cheat": { "kind": "string" }
+    "resets": [{ "kind": "string" }],
+    "cheats": [{ "frame": number, "kind": "string" }]
+  },
+  "oracles": ["string"],          // optional; empty = run all
+  "liveness": {
+    "mode": "real_time" | "off",  // default real_time
+    "timeout_s": number           // default 2.0
   }
 }
 ```
 
 Rejected at load: `custom` invariants, `eventually` mode, target filters,
-time windows — `NotImplemented` error.
+time windows — `NotImplemented` error. Invalid values (non-finite
+durations, broken bounds, typo'd key names) are rejected with specific
+errors.
 
 ## Invariants
 
 - `nodes_in_bounds`: per-entity AABB check on `Gameplay`-tagged entities;
-  max is `[width, height]` in game-space coordinates.
+  bounds are per-axis (`min_x`/`max_x`/`min_y`/`max_y`), each defaulting
+  to ±1000 when unset.
 
 ## Oracles
 
 - **NaN/finite transforms** — any non-finite `Transform` → Fail
-- **Frozen world** — no movement of tagged entities over the liveness
-  grace window
+- **Frozen world** — no movement of any entity over the liveness grace
+  window (default 2 s at 60 tps) → Fail
 - **Panic capture** — crash → Crash
-- **Log capture** — ERROR → Fail, WARN → informational
+- **Log capture** — ERROR → Fail, WARN → informational (unless
+  `strict_warnings: true`)
 
 ## Report types
 
-- `PlaytestReport`: `status: PlaytestStatus`, `violations: Vec<Violation>`
+- `PlaytestReport`: `status: PlaytestStatus`, `violations: Violations`
 - `PlaytestStatus`: `Pass | Fail | Crash`
-- `Violation`: `kind`, `tick`, `entities: Vec<Entity>`, optional `message`
+- `ViolationEntry`: `rule`, `target`, `first_frame`, `last_frame`, `count`,
+  `detail`
 
 ## Entry points
 
-- `bevy_playtest::run_scenario(&mut App, &Scenario) -> Result<PlaytestReport, Error>`
-- `bevy_playtest::brp_runner::run_scenario_brp(&BrpRunConfig, &Scenario) -> Result<PlaytestReport, Error>`
-- `bevy_playtest::junit::to_junit_xml(&PlaytestReport) -> String`
+- `bevy_playtest::run_scenario(&mut App, &Scenario) -> Result<PlaytestReport, ScenarioError>`
+- `bevy_playtest::brp_runner::run_scenario_brp(&BrpRunConfig, &Scenario) -> Result<PlaytestReport, ScenarioError>`
+- `bevy_playtest::junit::reports_to_junit(&[(String, PlaytestReport)], &str) -> String`
 
 ## Hooks
 
-Reset/cheat hooks are registered via the harness's typed registry; unknown
-kinds are rejected at scenario load.
+Reset/cheat hooks are registered via the harness's typed registry in
+`bevy_playtest::contract`:
+
+```rust
+use bevy_playtest::contract::{ResetHooks, CheatHooks};
+
+app.world_mut().resource_mut::<ResetHooks>().register("name", |world| { /* ... */ });
+```
+
+Unknown kinds are rejected at scenario load.
 
 ## Compatibility
 

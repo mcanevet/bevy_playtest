@@ -4,72 +4,110 @@ Task-focused recipes. Each assumes the [tutorial](tutorial.md) basics.
 
 ## Script keys instead of chaos
 
-For deterministic replays, use `synthetic_keyboard` with a key schedule:
+For deterministic replays, use `synthetic_keyboard` with a frame-indexed
+key schedule:
 
 ```json
 "bot": {
   "type": "synthetic_keyboard",
-  "schedule": [
-    { "at_s": 0.0, "key": "ArrowLeft" },
-    { "at_s": 0.5, "key": "ArrowLeft", "release_at_s": 1.0 }
+  "key_presses": [
+    { "frame": 0, "key": "left", "hold_frames": 60 },
+    { "frame": 120, "key": "space" }
   ]
 }
 ```
 
+Frames are simulation ticks (default 60 tps, so frame 120 ≈ 2 s). Keys
+accept `KeyCode` spellings (`ArrowLeft`, `KeyW`) or shortcuts (`left`,
+`w`); unknown names are rejected at load with a did-you-mean suggestion.
+`hold_frames` defaults to 1.
+
 ## Reset or cheat between runs
 
-Register typed hooks so the harness can restore state or apply cheats:
+Games register typed hooks as resources. A reset runs before the scenario;
+cheats fire at scheduled frames:
 
 ```rust
-use bevy_playtest::sinks; // reset/cheat hook registry lives here
+use bevy_playtest::contract::{CheatHooks, ResetHooks};
 
-// register a reset kind the scenario can name:
-// "setup": { "reset": { "kind": "my_reset" } }
+app.world_mut().insert_resource(ResetHooks::default());
+app.world_mut()
+    .resource_mut::<ResetHooks>()
+    .register("my_reset", |world| {
+        // restore level state...
+    });
+
+app.world_mut().insert_resource(CheatHooks::default());
+app.world_mut()
+    .resource_mut::<CheatHooks>()
+    .register("invincible", |world| {
+        // apply cheat...
+    });
 ```
 
-Unknown kinds are rejected at scenario load — not silently ignored.
+Then reference them from the scenario:
+
+```json
+"setup": {
+  "resets": [ { "kind": "my_reset" } ],
+  "cheats": [ { "frame": 300, "kind": "invincible" } ]
+}
+```
+
+Unknown kinds are rejected at load — not silently ignored.
 
 ## Drive a game you can't modify (external-BRP)
 
-No harness imports needed in the game. It must add (in a thin binary):
+No harness imports in the game. Its binary must:
 
-1. `RemotePlugin::default()` and `RemoteHttpPlugin::default().with_port(port)`
-2. `.register_type::<Transform>()` and your gameplay marker type
-3. Read the port from `BRP_PORT`
+1. Add Bevy's remote plugins (`bevy::remote::RemotePlugin` and
+   `bevy::remote::http::RemoteHttpPlugin` — requires the `bevy_remote`
+   cargo feature)
+2. Register the reflected types the harness inspects:
+   `.register_type::<Transform>()` plus your gameplay marker
+3. Read the listen port from the `BRP_PORT` env var (the harness sets it
+   for the subprocess)
+
+From the test side:
 
 ```rust
 use bevy_playtest::brp_runner::{run_scenario_brp, BrpRunConfig};
 
 let cfg = BrpRunConfig {
     game_binary: env!("CARGO_BIN_EXE_my_game").to_string(),
-    port: Some(4570),
+    port: None, // auto-pick a free port
     ..Default::default()
 };
 let report = run_scenario_brp(&cfg, &scenario)?;
 ```
 
-This mode drives the chaos bot only; reset and cheat hooks require
-in-process mode or a game-side BRP method.
+`game_args` (passed to the subprocess) and `startup_timeout` (default 30s)
+are also configurable. This mode drives the chaos bot only; reset and
+cheat hooks require in-process mode.
 
 ## Get JUnit XML for CI
 
-Convert the report after a run:
+Collect named reports and convert:
 
 ```rust
-let xml = bevy_playtest::junit::to_junit_xml(&report);
+let xml = bevy_playtest::junit::reports_to_junit(
+    &[("smoke".to_string(), report)],
+    "playtest-suite",
+);
 std::fs::write("playtest-junit.xml", xml)?;
 ```
 
-Most CI systems (GitHub Actions via adapters, Jenkins, GitLab) ingest
-JUnit XML natively.
+Most CI systems (Jenkins, GitLab, and GitHub Actions via JUnit adapters)
+ingest JUnit XML natively.
 
 ## Reproduce a failure
 
-- The report's violations include the bot seed — reuse it verbatim.
+- The report includes the bot seed — reuse it verbatim.
 - Run locally with the same seed; chaos is deterministic per seed.
 
 ## Know what's intentionally rejected
 
 Scenario load fails with `NotImplemented` for: `custom` invariants,
 `eventually` mode, target filtering, time windows. Better a loud error
-than a test that passes vacuously.
+than a test that passes vacuously. Invalid values (negative durations,
+broken bound pairs, typo'd key names) are rejected with specific errors.

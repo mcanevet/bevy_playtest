@@ -27,7 +27,7 @@ harness path; render, assets, and audio still initialize.
 
 ## 3. Tag gameplay entities (optional but recommended)
 
-Anything the harness should track gets one marker:
+Entities the harness should treat as gameplay get one marker:
 
 ```rust
 use bevy_playtest::contract::Gameplay;
@@ -35,7 +35,9 @@ use bevy_playtest::contract::Gameplay;
 commands.entity(ball).insert(Gameplay);
 ```
 
-This enables the `nodes_in_bounds` invariant and the frozen-world oracle.
+The bounds invariant checks `Gameplay`-tagged entities. The NaN and
+liveness oracles watch every entity with a `Transform`, so they work
+whether or not you tag anything.
 
 ## 4. Write the scenario
 
@@ -44,14 +46,20 @@ This enables the `nodes_in_bounds` invariant and the frozen-world oracle.
   "name": "smoke",
   "bot": { "type": "chaos", "seed": 42 },
   "duration_s": 10.0,
-  "invariants": [{ "kind": "nodes_in_bounds", "max": [1920.0, 1080.0] }],
-  "setup": {}
+  "invariants": [
+    { "name": "bounds", "rule": "nodes_in_bounds", "max_x": 960.0, "max_y": 540.0 }
+  ]
 }
 ```
+
+Every invariant needs a unique `name` and a `rule`. Bounds are per-axis
+(`min_x`/`max_x`/`min_y`/`max_y`), not a single box.
 
 ## 5. Run it
 
 ```rust
+use bevy_playtest::scenario::Scenario;
+
 #[test]
 fn smoke() {
     let scenario: Scenario = serde_json::from_str(SCENARIO_JSON).unwrap();
