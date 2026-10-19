@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use crate::contract::{CheatHooks, ResetHooks};
 use crate::enums::{BotType, PlaytestStatus};
+use crate::rules::Rule;
 use crate::scenario::{validate_scenario, Scenario, ScenarioError};
 use crate::state::PlaytestReport;
 use crate::{rules, sinks};
@@ -306,13 +307,31 @@ fn frame_timing_oracle_system(mut state: ResMut<RunState>, time: Res<Time>) {
     }
 }
 
-/// Frozen-world oracle: detects when Gameplay-tagged entities stop
-/// changing. v0.1 approximates "Gameplay" as "has a Transform".
-fn frozen_world_oracle_system(mut state: ResMut<RunState>, q: Query<(), Changed<Transform>>) {
+/// Frozen-world oracle: detects when the world stops changing. Counts
+/// consecutive frames with no `Changed<Transform>` anywhere and reports
+/// a `frozen_world` violation once the streak exceeds the grace window.
+/// Needs no marker: "any transform changed" is the liveness evidence.
+fn frozen_world_oracle_system(
+    mut state: ResMut<RunState>,
+    mut violations: ResMut<RunViolations>,
+    q: Query<(), Changed<Transform>>,
+) {
     if q.is_empty() {
         state.frozen_frames += 1;
     } else {
         state.frozen_frames = 0;
+    }
+    // Report once per crossing (guard so we don't spam every frame).
+    if state.frozen_frames == state.frozen_grace_frames + 1 {
+        violations.0.report(
+            Rule::FrozenWorld.name(),
+            "world",
+            format!(
+                "no Transform changed for {} frames — soft-lock?",
+                state.frozen_frames
+            ),
+            state.frame,
+        );
     }
 }
 
@@ -328,6 +347,8 @@ pub struct RunState {
     metrics: crate::state::Metrics,
     frame_timing: FrameTimingStats,
     frozen_frames: u64,
+    /// Grace period (frames) before frozen_world is reported.
+    frozen_grace_frames: u64,
     pre_ready_frames: u64,
 }
 
@@ -339,6 +360,7 @@ impl Default for RunState {
             metrics: Default::default(),
             frame_timing: Default::default(),
             frozen_frames: 0,
+            frozen_grace_frames: 180, // 3s at 60 TPS — short pauses OK, true freezes caught
             pre_ready_frames: 0,
         }
     }
@@ -395,6 +417,9 @@ impl FrameTimingStats {
 pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport, ScenarioError> {
     validate_scenario(scenario)?;
 
+    // Install global tracing subscriber (captures ERROR/WARN logs into the
+    // run's violation buffer). The panic hook is installed separately below.
+    sinks::ensure_global_subscriber();
     install_panic_hook();
 
     // Finish plugin building exactly like App::run would.
@@ -568,6 +593,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             crate::oracles::liveness_oracle_system,
             crate::invariant_eval::evaluate_invariants_system,
             crate::oracles::nan_oracle_system,
+            crate::oracles::bounds_oracle_system,
         ),
     );
 
