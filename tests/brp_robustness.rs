@@ -208,6 +208,15 @@ fn quick_scenario() -> Scenario {
     serde_json::from_str(r#"{"bot":{"type":"chaos","seed":7},"duration_s":0.5,"tps":60}"#).unwrap()
 }
 
+/// Like quick_scenario but with a short liveness timeout so
+/// frozen-world detection trips within a short run.
+fn lively_scenario() -> Scenario {
+    serde_json::from_str(
+        r#"{"bot":{"type":"chaos","seed":7},"duration_s":0.5,"tps":60,"liveness":{"mode":"real_time","timeout_s":0.1}}"#,
+    )
+    .unwrap()
+}
+
 fn cfg(binary: &std::path::Path, mode: &str, port: u16, startup_timeout: Duration) -> BrpRunConfig {
     BrpRunConfig {
         game_binary: binary.to_string_lossy().into_owned(),
@@ -311,7 +320,6 @@ fn game_death_mid_run_is_not_a_silent_pass() {
 /// Proven: with a well-formed response, the poisoned row vanishes
 /// without a trace (violations empty).
 #[test]
-#[ignore = "null translation in a query row is silently skipped by the parser"]
 fn poisoned_translation_is_flagged_over_the_wire() {
     let bin = compile_mock("brp_mock_game");
     let port = free_port();
@@ -337,7 +345,6 @@ fn poisoned_translation_is_flagged_over_the_wire() {
 /// carrying `error: Some(...)` reads as a crash to consumers. Today
 /// the runner sets it whenever stderr is non-empty.
 #[test]
-#[ignore = "runner sets report.error whenever the game printed to stderr"]
 fn healthy_stderr_chatter_must_not_populate_error_field() {
     let bin = compile_mock("brp_mock_game");
     let port = free_port();
@@ -358,13 +365,12 @@ fn healthy_stderr_chatter_must_not_populate_error_field() {
 /// same way it is in-process. The BRP runner currently has no
 /// liveness coverage at all: it evaluates bounds/NaN only.
 #[test]
-#[ignore = "BRP mode has no liveness/frozen-world coverage"]
 fn static_world_over_brp_is_not_a_silent_pass() {
     let bin = compile_mock("brp_mock_game");
     let port = free_port();
     let report = run_scenario_brp(
         &cfg(&bin, "clean-static", port, Duration::from_secs(10)),
-        &quick_scenario(),
+        &lively_scenario(),
     )
     .expect("run completes");
     assert_ne!(
@@ -380,7 +386,6 @@ fn static_world_over_brp_is_not_a_silent_pass() {
 /// prefix where the context is always empty — every BRP violation
 /// detail in every report starts with the literal garbage "[intent: ]".
 #[test]
-#[ignore = "BRP violation details carry a stale '[intent: ] ' prefix"]
 fn brp_violation_details_carry_no_stale_prefix() {
     let bin = compile_mock("brp_mock_game");
     let port = free_port();

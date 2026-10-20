@@ -56,6 +56,7 @@ impl Rule {
             Self::FiniteTransforms => "Every entity's Transform holds finite values (no NaN/inf).",
             Self::ResetHookPanicked => "The game's ResetHooks handler panicked.",
             Self::CheatHookPanicked => "The game's CheatHooks handler panicked.",
+            Self::VacuousRun => "Nothing was ever observable: no entities to check and no inputs emitted — the run proves nothing about the game.",
             Self::OracleError => "An oracle itself errored while evaluating (infrastructure failure, not a game bug).",
             Self::ScenarioError => "The scenario itself failed (rejected config) rather than the game misbehaving.",
         }
@@ -81,6 +82,9 @@ declare_rules! {
     // Contract hooks (producible, tested)
     ResetHookPanicked => "reset_hook_panicked",
     CheatHookPanicked => "cheat_hook_panicked",
+
+    // Vacuity guard: a run where nothing was ever observable.
+    VacuousRun => "vacuous_run",
 
     // Infrastructure errors (producible; oracle_error only in BRP tier)
     OracleError => "oracle_error",

@@ -3,8 +3,6 @@
 //! that what survives into a run is reflected faithfully in the
 //! PlaytestReport. All encode the "never a vacuous pass" doctrine.
 //!
-//! NOTE (temporary): expected-to-fail tests are #[ignore]d with the
-//! reason; run with `cargo test -- --ignored` to see current truth.
 
 use bevy_app::App;
 use bevy_playtest::run_scenario;
@@ -29,7 +27,6 @@ fn scenario_json(bot: &str) -> String {
 /// not pass silently. The BRP runner has a zero-row vacuity guard; the
 /// in-process driver must have one too (undocumented contract).
 #[test]
-#[ignore = "in-process driver has no vacuity guard: zero-entity app passes"]
 fn zero_entity_game_must_not_pass_vacuously() {
     let scenario: Scenario = serde_json::from_str(&scenario_json("chaos")).unwrap();
     let mut app = minimal_app();
@@ -52,9 +49,12 @@ fn zero_entity_game_must_not_pass_vacuously() {
 /// different grace windows , producing duplicate/conflicting
 /// entries.
 #[test]
-#[ignore = "two frozen_world oracles emit conflicting duplicates"]
 fn frozen_world_reports_exactly_one_violation() {
-    let scenario: Scenario = serde_json::from_str(&scenario_json("chaos")).unwrap();
+    // Grace derives from liveness.timeout_s (default 2s = 120 frames
+    // at 60 TPS): the run must outlive the grace window.
+    let scenario: Scenario =
+        serde_json::from_str(r#"{"bot":{"type":"chaos","seed":7},"duration_s":3.0,"tps":60}"#)
+            .unwrap();
     let mut app = minimal_app();
     // Spawn a static entity that never moves: world is frozen after grace.
     app.world_mut().spawn(Transform::from_xyz(0.0, 0.0, 0.0));
@@ -127,7 +127,6 @@ fn liveness_timeout_config_must_be_honored() {
 /// input_count > 0 and a populated action log : cheat_count and
 /// action_log are currently hardcoded empty/0).
 #[test]
-#[ignore = "metrics.input_count/action_log are never populated (C5/H9)"]
 fn bot_activity_must_be_visible_in_telemetry() {
     let scenario: Scenario = serde_json::from_str(&scenario_json("chaos")).unwrap();
     let mut app = minimal_app();
@@ -144,7 +143,6 @@ fn bot_activity_must_be_visible_in_telemetry() {
 
 /// A scheduled cheat must bump cheat_count (currently always 0 — C5).
 #[test]
-#[ignore = "cheat_count is hardcoded 0"]
 fn fired_cheat_must_bump_cheat_count() {
     use bevy_playtest::contract::CheatHooks;
 
@@ -158,6 +156,10 @@ fn fired_cheat_must_bump_cheat_count() {
     let mut app = minimal_app();
     app.insert_resource(hooks);
     let report = run_scenario(&mut app, &scenario).unwrap();
+    eprintln!(
+        "CHEAT-PROBE cheats={} report.cheat_count={} violations={:?}",
+        1, report.cheat_count, report.violations
+    );
     assert_eq!(
         report.cheat_count, 1,
         "a fired cheat must be auditable in cheat_count"
@@ -171,7 +173,6 @@ fn fired_cheat_must_bump_cheat_count() {
 /// If the report status is Crash, metrics.crash_detected must be true
 /// (never set today).
 #[test]
-#[ignore = "metrics.crash_detected is never set"]
 fn crash_status_implies_crash_detected_metric() {
     // A panicking game system aborts the run loop; the harness must
     // classify it as Crash AND set the metric consistently.

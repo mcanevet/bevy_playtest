@@ -10,12 +10,32 @@ fn minimal_app() -> App {
     App::new()
 }
 
+/// A moving Gameplay entity: keeps the run observable for the oracles
+/// (vacuity guard, frozen-world) without asserting anything about it.
+fn spawn_observable_entity(app: &mut App) {
+    use bevy_playtest::contract::Gameplay;
+    app.add_systems(bevy_app::Update, |mut q: bevy_ecs::prelude::Query<
+        &mut bevy_transform::prelude::Transform,
+        bevy_ecs::prelude::With<Gameplay>,
+    >| {
+        for (i, mut t) in q.iter_mut().enumerate() {
+            t.translation.x = (i as f32) + 1.0;
+        }
+    });
+    app.world_mut().spawn((
+        bevy_playtest::contract::Gameplay,
+        bevy_transform::prelude::Transform::from_xyz(0.0, 0.0, 0.0),
+    ));
+}
+
+
 #[test]
 fn chaos_run_passes_on_minimal_app() {
     let scenario: Scenario =
         serde_json::from_str(r#"{"bot":{"type":"chaos","seed":7},"duration_s":0.1,"tps":60}"#)
             .unwrap();
     let mut app = minimal_app();
+    spawn_observable_entity(&mut app);
     let report = run_scenario(&mut app, &scenario).unwrap();
     assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
     assert_eq!(report.frame_count, 6);
@@ -49,6 +69,7 @@ fn key_presses_drive_a_real_system() {
     )
     .unwrap();
     let mut app = minimal_app();
+    spawn_observable_entity(&mut app);
     app.add_message::<bevy_input::keyboard::KeyboardInput>();
     app.insert_resource(ObservedPresses::default());
     app.add_systems(bevy_app::Update, observe_keys);
@@ -151,6 +172,7 @@ fn log_warn_is_informational_by_default() {
         serde_json::from_str(r#"{"bot":{"type":"chaos","seed":7},"duration_s":0.1,"tps":60}"#)
             .unwrap();
     let mut app = minimal_app();
+    spawn_observable_entity(&mut app);
     app.add_systems(bevy_app::Update, nagging_system);
     let report = run_scenario(&mut app, &scenario).unwrap();
     assert!(report.violations.iter().any(|v| v.rule == "log_warn"));
@@ -244,6 +266,7 @@ fn registered_reset_hook_is_invoked_and_counts() {
     )
     .unwrap();
     let mut app = minimal_app();
+    spawn_observable_entity(&mut app);
     app.insert_resource(ResetCount(0));
     let mut hooks = bevy_playtest::contract::ResetHooks::default();
     hooks.register("wipe", |world: &mut bevy_ecs::world::World| {

@@ -275,6 +275,10 @@ pub struct Invariant {
     pub min_y: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_y: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_z: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_z: Option<f32>,
     /// Entity Names. Empty = all Gameplay entities.
     #[serde(default)]
     pub targets: Vec<String>,
@@ -646,16 +650,15 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                 .into(),
         ));
     }
-    // Typed-oracle selection is not implemented: a populated list
-    // would silently change nothing (all oracles always run).
-    if let Some(names) = &scenario.oracles {
-        if !names.is_empty() {
-            return Err(ScenarioError::NotImplemented(
-                "oracles selection is not implemented — all registered \
-                 oracles always run; omit the oracles field"
-                    .into(),
-            ));
-        }
+    // Typed-oracle selection is not implemented. `Some(vec![])` is as
+    // much a selection as a populated list (and reads as "none" to a
+    // human author) — any non-None value must reject loudly.
+    if scenario.oracles.is_some() {
+        return Err(ScenarioError::NotImplemented(
+            "oracles selection is not implemented — all registered \
+             oracles always run; omit the oracles field"
+                .into(),
+        ));
     }
     let total_ticks = (scenario.duration_s * scenario.tps as f32).ceil() as u64;
     if total_ticks > MAX_TOTAL_TICKS {
@@ -722,6 +725,86 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
             }
         }
     }
+    // The actuator knob is validated but never consumed: acting on
+    // game input happens through one fixed mechanism in v0.1. Reject
+    // rather than pretend the choice mattered.
+    if scenario.bot.actuator.is_some() {
+        return Err(ScenarioError::NotImplemented(
+            "bot.actuator is not implemented in v0.1 — the harness always \
+             uses its built-in input mechanism; omit the actuator field"
+                .into(),
+        ));
+    }
+    // Persona parsing has no consumer in v0.1: a persona that changes
+    // nothing is a silent lie about bot behavior.
+    if scenario.bot.persona.is_some() {
+        return Err(ScenarioError::NotImplemented(
+            "bot.persona is not implemented in v0.1 — the chaos bot's \
+             behavior is seed-driven; omit the persona field"
+                .into(),
+        ));
+    }
+    // Bot `inputs` (scripted raw actions) have no consumer on any
+    // implemented bot type; chaos bots would silently ignore them.
+    if !scenario.bot.inputs.is_empty() {
+        return Err(ScenarioError::NotImplemented(
+            "bot.inputs is not implemented in v0.1 — scripted inputs have \
+             no consumer; use synthetic_keyboard key_presses instead"
+                .into(),
+        ));
+    }
+    // Chaos-bot input surface: every declared key must be a real,
+    // recognized key the bot can actually press; an empty or bogus
+    // surface yields a bot that silently does nothing.
+    if scenario.bot.bot_type == BotType::Chaos {
+        if let Some(surface) = &scenario.bot.raw_surface {
+            for (field, set) in [
+                ("mouse_buttons", surface.mouse_buttons),
+                ("mouse_motion", surface.mouse_motion),
+                ("wheel", surface.wheel),
+                ("gamepad", surface.gamepad),
+            ] {
+                if set {
+                    return Err(ScenarioError::NotImplemented(format!(
+                        "raw_surface.{field} is not implemented in v0.1 — the \
+                         chaos bot is keyboard-only; declare keys only"
+                    )));
+                }
+            }
+            for key in &surface.keys {
+                if normalize_key_name(key).is_none() {
+                    return Err(ScenarioError::Rejected(unknown_key_error(key, None)));
+                }
+            }
+            if surface.keys.is_empty() {
+                return Err(ScenarioError::Rejected(
+                    "raw_surface.keys must not be empty — a chaos bot with no \
+                     keys can do nothing (vacuous run)"
+                        .into(),
+                ));
+            }
+        }
+    }
+    // Agent targeting is parsed but never consumed.
+    if scenario.bot.agent_target.is_some() || scenario.bot.target.is_some() {
+        return Err(ScenarioError::NotImplemented(
+            "bot.agent_target / bot.target are not implemented in v0.1 — \
+             the chaos bot addresses the whole game; omit these fields"
+                .into(),
+        ));
+    }
+    // Scheduled cheats: the `frame` field parses but all cheats fire
+    // pre-run in v0.1. A nonzero frame claims scheduling that doesn't
+    // exist.
+    for (idx, cheat) in scenario.setup.cheats.iter().enumerate() {
+        if cheat.frame != 0 {
+            return Err(ScenarioError::NotImplemented(format!(
+                "cheats[{idx}].frame {}: scheduled cheats are not implemented in \
+                 v0.1 — all cheats fire pre-run (frame 0); omit the frame field",
+                cheat.frame
+            )));
+        }
+    }
 
     // Invariant names key the eventual-state and dedup tables —
     // duplicates would silently shadow each other.
@@ -764,7 +847,11 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
         }
     }
     for rule in &scenario.invariants {
-        let bound_pairs = [(rule.min_x, rule.max_x, "x"), (rule.min_y, rule.max_y, "y")];
+        let bound_pairs = [
+            (rule.min_x, rule.max_x, "x"),
+            (rule.min_y, rule.max_y, "y"),
+            (rule.min_z, rule.max_z, "z"),
+        ];
         for (min, max, axis) in bound_pairs {
             if let (Some(lo), Some(hi)) = (min, max) {
                 if lo > hi {

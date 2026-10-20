@@ -3,11 +3,6 @@
 //! doctrine at the schema boundary: any knob that would be silently
 //! ignored must instead reject with NotImplemented/Rejected.
 //!
-//! NOTE (temporary): some of these tests are EXPECTED TO FAIL against
-//! current code — they encode the contract the adversarial review
-//! identified as broken. Once the corresponding fixes land, they turn
-//! green. They are #[ignore]d so the suite stays green meanwhile; run
-//! with `cargo test -- --ignored` to see the current truth.
 
 use bevy_playtest::scenario::{validate_scenario, Scenario, ScenarioError};
 
@@ -30,10 +25,9 @@ fn parse(json: serde_json::Value) -> Scenario {
 /// otherwise the bot silently presses nothing and the run passes
 /// vacuously (undocumented contract).
 #[test]
-#[ignore = "current code accepts bogus chaos keys: bot no-ops"]
 fn rejects_invalid_chaos_keys() {
     let mut json = minimal_scenario("chaos");
-    json["raw_surface"] = serde_json::json!({ "keys": ["qwerty", "nope"] });
+    json["bot"]["raw_surface"] = serde_json::json!({ "keys": ["qwerty", "nope"] });
     let s = parse(json);
     match validate_scenario(&s) {
         Err(ScenarioError::Rejected(msg)) => assert!(msg.contains("key"), "{msg}"),
@@ -44,10 +38,9 @@ fn rejects_invalid_chaos_keys() {
 /// A chaos bot with an empty key surface can do nothing; it must reject
 /// rather than produce a vacuous pass (C1 adjacent).
 #[test]
-#[ignore = "current code accepts an empty chaos key surface"]
 fn rejects_empty_chaos_keys() {
     let mut json = minimal_scenario("chaos");
-    json["raw_surface"] = serde_json::json!({ "keys": [] });
+    json["bot"]["raw_surface"] = serde_json::json!({ "keys": [] });
     let s = parse(json);
     assert!(
         matches!(validate_scenario(&s), Err(ScenarioError::Rejected(_))),
@@ -59,11 +52,10 @@ fn rejects_empty_chaos_keys() {
 /// by the chaos bot; they must reject as NotImplemented instead of
 /// silently yielding a keyboard-only bot (C2).
 #[test]
-#[ignore = "current code accepts unread surface knobs"]
 fn rejects_unimplemented_surface_kinds() {
     for field in ["mouse_buttons", "mouse_motion", "wheel", "gamepad"] {
         let mut json = minimal_scenario("chaos");
-        json["raw_surface"] = serde_json::json!({ field: true });
+        json["bot"]["raw_surface"] = serde_json::json!({ field: true });
         let s = parse(json);
         match validate_scenario(&s) {
             Err(ScenarioError::NotImplemented(msg)) => {
@@ -80,7 +72,6 @@ fn rejects_unimplemented_surface_kinds() {
 
 /// `persona` parses but nothing consumes it (C2).
 #[test]
-#[ignore = "persona parses but is never consumed"]
 fn rejects_unimplemented_persona() {
     let mut json = minimal_scenario("chaos");
     json["bot"]["persona"] = serde_json::json!("aggressive");
@@ -93,7 +84,6 @@ fn rejects_unimplemented_persona() {
 
 /// `actuator` validates then is completely ignored (C2).
 #[test]
-#[ignore = "actuator validates but is never consumed"]
 fn rejects_unimplemented_actuator() {
     let mut json = minimal_scenario("chaos");
     json["bot"]["actuator"] = serde_json::json!("intents");
@@ -106,11 +96,10 @@ fn rejects_unimplemented_actuator() {
 
 /// Populated `inputs` on a chaos bot is silently ignored today (C2).
 #[test]
-#[ignore = "chaos bot silently ignores populated inputs"]
 fn rejects_inputs_on_chaos_bot() {
     let mut json = minimal_scenario("chaos");
     json["bot"]["inputs"] =
-        serde_json::json!([{ "frame": 0, "intent": { "raw": "press", "keys": ["KeyW"] } }]);
+        serde_json::json!([{ "frame": 0, "intent": { "intent": "move", "dir": [0.0, 1.0] } }]);
     let s = parse(json);
     match validate_scenario(&s) {
         Err(ScenarioError::Rejected(_)) | Err(ScenarioError::NotImplemented(_)) => {}
@@ -127,7 +116,6 @@ fn rejects_inputs_on_chaos_bot() {
 /// nonzero frame must reject (review finding: how-to.md previously
 /// documented scheduled cheats that never were).
 #[test]
-#[ignore = "cheats[].frame != 0 is accepted but unscheduled"]
 fn rejects_nonzero_cheat_frame() {
     let mut json = minimal_scenario("chaos");
     json["setup"] = serde_json::json!({
@@ -148,7 +136,6 @@ fn rejects_nonzero_cheat_frame() {
 /// `None`. A user writing `[]` almost certainly intends "none", which is
 /// not implemented. Until it is, the empty list must reject.
 #[test]
-#[ignore = "oracles: [] silently means 'run all'"]
 fn rejects_empty_oracles_list() {
     let mut json = minimal_scenario("chaos");
     json["oracles"] = serde_json::json!([]);

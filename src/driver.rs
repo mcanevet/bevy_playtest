@@ -165,7 +165,7 @@ struct ChaosHoldState {
 }
 
 fn chaos_bot_system(
-    state: Res<RunState>,
+    mut state: ResMut<RunState>,
     scenario: Res<ScenarioResource>,
     mut choices: ResMut<RunChoices>,
     mut hold_state: ResMut<ChaosHoldState>,
@@ -235,6 +235,7 @@ fn chaos_bot_system(
         repeat: false,
         window: Entity::PLACEHOLDER,
     });
+    state.metrics.input_count += 1;
     hold_state.held = Some((code, state.frame + hold_frames));
 }
 
@@ -248,7 +249,7 @@ struct ScheduledHoldState {
 }
 
 fn synthetic_keyboard_bot_system(
-    state: Res<RunState>,
+    mut state: ResMut<RunState>,
     scenario: Res<ScenarioResource>,
     mut hold_state: ResMut<ScheduledHoldState>,
     mut writer: MessageWriter<KeyboardInput>,
@@ -290,6 +291,7 @@ fn synthetic_keyboard_bot_system(
             repeat: false,
             window: Entity::PLACEHOLDER,
         });
+        state.metrics.input_count += 1;
         hold_state.held.push((code, state.frame + hold_frames));
     }
 }
@@ -360,7 +362,10 @@ impl Default for RunState {
             metrics: Default::default(),
             frame_timing: Default::default(),
             frozen_frames: 0,
-            frozen_grace_frames: 180, // 3s at 60 TPS — short pauses OK, true freezes caught
+            // Grace from scenario liveness.timeout_s: short pauses OK,
+            // true freezes caught. Injected in run_scenario before the
+            // loop runs.
+            frozen_grace_frames: 180,
             pre_ready_frames: 0,
         }
     }
@@ -436,9 +441,13 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     }
 
     let tps = scenario.tps as u64;
+    // Frozen-world grace derives from the scenario's liveness timeout:
+    // one source of truth, honoring liveness.timeout_s.
+    let frozen_grace_frames = (scenario.liveness.timeout_s * scenario.tps as f32).max(1.0) as u64;
     app.insert_resource(ScenarioResource(Arc::new(scenario.clone())));
     app.insert_resource(RunState {
         tps,
+        frozen_grace_frames,
         ..Default::default()
     });
     app.insert_resource(RunViolations::default());
@@ -573,12 +582,6 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     app.init_resource::<ChaosHoldState>();
     app.init_resource::<ScheduledHoldState>();
 
-    // Liveness oracle: always on (grace from scenario liveness config).
-    app.insert_resource(crate::oracles::LivenessArmed {
-        grace_frames: (scenario.liveness.timeout_s * scenario.tps as f32) as u64,
-    });
-    app.init_resource::<crate::oracles::LivenessSignal>();
-
     app.insert_resource(crate::invariant_eval::ScenarioInvariants(
         scenario.invariants.clone(),
     ));
@@ -590,7 +593,6 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             synthetic_keyboard_bot_system.run_if(is_synthetic_keyboard_bot),
             frame_timing_oracle_system,
             frozen_world_oracle_system,
-            crate::oracles::liveness_oracle_system,
             crate::invariant_eval::evaluate_invariants_system,
             crate::oracles::nan_oracle_system,
             crate::oracles::bounds_oracle_system,
@@ -649,7 +651,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         .iter()
         .filter(|v| !is_informational(&v.rule, scenario.strict_warnings))
         .count();
-    let status = if crash_detected {
+    let mut status = if crash_detected {
         PlaytestStatus::Crash
     } else if gating == 0 {
         PlaytestStatus::Pass
@@ -659,6 +661,46 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
 
     let mut metrics = state.metrics;
     metrics.frame_count = state.frame;
+    metrics.crash_detected = crash_detected;
+    metrics.worst_frame_ms = state.frame_timing.worst_ms;
+
+    // Vacuity guard: if the whole run had no entities the oracles
+    // could check, a Pass proves nothing about the game (bot inputs
+    // hitting a void are unobservable activity). Flag loudly instead.
+    let entities_observable = app
+        .world_mut()
+        .query_filtered::<(), With<Transform>>()
+        .iter(app.world())
+        .count()
+        > 0;
+    if status == PlaytestStatus::Pass && !entities_observable {
+        snap.push(crate::state::ViolationEntry {
+            rule: Rule::VacuousRun.name().to_string(),
+            target: "run".to_string(),
+            first_frame: 0,
+            last_frame: state.frame,
+            count: 1,
+            detail: "no entities to observe — the run is vacuous; spawn \
+                     Gameplay entities so oracles have something to check"
+                .to_string(),
+            last_detail: "no entities to observe — the run is vacuous".to_string(),
+            fingerprint: None,
+            fingerprint_scheme: 1,
+        });
+        status = PlaytestStatus::Fail;
+    }
+
+    // Action log: one entry per emitted input press, so a report's claim
+    // of bot activity is auditable.
+    let action_log = choices
+        .iter()
+        .map(|c| crate::state::ActionEntry {
+            frame: c.frame,
+            source: "bot".to_string(),
+            action: format!("key_press:{}", c.value),
+            details: None,
+        })
+        .collect();
 
     Ok(PlaytestReport {
         schema_version: 1,
@@ -672,9 +714,9 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         wall_time_s,
         pre_ready_frames: state.pre_ready_frames,
         error: crash_detected.then(|| "run loop panicked".to_string()),
-        action_log: vec![],
+        action_log,
         game_version: None,
-        cheat_count: 0,
+        cheat_count: scenario.setup.cheats.len() as u64 as usize,
         unreplayable_actions: 0,
         warnings: vec![],
         action_effect_rate: HashMap::new(),

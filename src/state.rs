@@ -55,7 +55,9 @@ impl Violations {
 
     pub fn report(&mut self, rule: &str, target: &str, detail: String, frame: u64) {
         let key = (rule.to_string(), target.to_string());
-        let prefixed = format!("[intent: {}] {}", self.context, detail);
+        // Details are reported verbatim: consumers (JUnit renderers,
+        // dashboards) parse them as raw text.
+        let prefixed = detail;
         let entry = self.entries.entry(key).or_insert_with(|| ViolationEntry {
             rule: rule.to_string(),
             target: target.to_string(),

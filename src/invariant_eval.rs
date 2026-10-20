@@ -43,6 +43,8 @@ fn evaluate_bounds(
     let max_x = inv.max_x.unwrap_or(1000.0);
     let min_y = inv.min_y.unwrap_or(-1000.0);
     let max_y = inv.max_y.unwrap_or(1000.0);
+    let min_z = inv.min_z.unwrap_or(-1000.0);
+    let max_z = inv.max_z.unwrap_or(1000.0);
     let targets: Vec<&str> = inv.targets.iter().map(|s| s.as_str()).collect();
     let target_set = !targets.is_empty();
 
@@ -52,14 +54,19 @@ fn evaluate_bounds(
             // v0.1: no Name lookup (deferred); skip filtering.
         }
         let t = transform.translation;
-        let out = t.x < min_x || t.x > max_x || t.y < min_y || t.y > max_y;
+        let out = t.x < min_x
+            || t.x > max_x
+            || t.y < min_y
+            || t.y > max_y
+            || t.z < min_z
+            || t.z > max_z;
         if out {
             violations.0.report(
                 inv.rule.to_string().as_str(),
                 &inv.name,
                 format!(
-                    "entity {:?} out of bounds [{:.2},{:.2}]×[{:.2},{:.2}]: ({:.2},{:.2})",
-                    entity, min_x, max_x, min_y, max_y, t.x, t.y
+                    "entity {:?} out of bounds [{:.2},{:.2}]×[{:.2},{:.2}]×[{:.2},{:.2}]: ({:.2},{:.2},{:.2})",
+                    entity, min_x, max_x, min_y, max_y, min_z, max_z, t.x, t.y, t.z
                 ),
                 frame,
             );

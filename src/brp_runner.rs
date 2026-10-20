@@ -185,6 +185,11 @@ async fn run_brp_inner(
     let mut violations = Violations::default();
     let mut recorded_choices = Vec::new();
     let mut input_count = 0u64;
+    let mut remote_rows_seen: u64 = 0;
+    /// Frame index of the last observed world change (for liveness).
+    let mut last_change_frame: u64 = 0;
+    let mut last_positions: std::collections::HashMap<String, (f64, f64)> =
+        std::collections::HashMap::new();
     let wall_start = Instant::now();
 
     let frame_dt = Duration::from_secs_f64(1.0 / tps as f64);
@@ -193,6 +198,29 @@ async fn run_brp_inner(
     let hold_frames = 2u64;
     // (key name, frame at which to release)
     let mut held: Vec<(&'static str, u64)> = Vec::new();
+
+    // Chaos surface + input rate mirror the in-process driver: same
+    // default key list, interval derived from tps/input_rate_hz —
+    // never hardcoded, so both modes stay behaviorally identical.
+    let keys: Vec<&'static str> = {
+        let declared = scenario.bot.raw_surface.as_ref().map(|s| s.keys.clone());
+        match declared {
+            Some(keys) if !keys.is_empty() => keys
+                .iter()
+                .filter_map(|k| {
+                    // Surface strings are canonical names; CHAOS_KEYS is
+                    // the name->payload table the wire path can send.
+                    CHAOS_KEYS
+                        .iter()
+                        .find(|c| c.eq_ignore_ascii_case(k))
+                        .copied()
+                })
+                .collect(),
+            _ => CHAOS_KEYS.to_vec(),
+        }
+    };
+    let rate = scenario.bot.input_rate_hz.max(1);
+    let interval = (tps as u64 / rate as u64).max(1);
 
     for frame in 0..total_frames {
         // --- Release keys whose hold duration expired.
@@ -210,14 +238,15 @@ async fn run_brp_inner(
 
         // --- Drive input: chaos bot decides a raw key, map to a BRP
         // keyboard message.
-        if frame % 6 == 0 && held.is_empty() {
-            let idx = choices.below(frame, 8);
+        if frame % interval == 0 && held.is_empty() {
+            let bound = keys.len() as u64;
+            let idx = choices.below(frame, bound);
             recorded_choices.push(crate::choice::Choice {
                 frame,
                 value: idx,
-                bound: 8,
+                bound,
             });
-            let key = CHAOS_KEYS[idx as usize];
+            let Some(&key) = keys.get(idx as usize) else { continue };
             input_count += 1;
             send_key(&client, key, "Pressed", frame, &mut violations).await;
             held.push((key, frame + hold_frames));
@@ -260,13 +289,42 @@ async fn run_brp_inner(
                         frame,
                     );
                 }
-                evaluate_remote_transforms(frame, &result, &scenario, &mut violations);
+                let rows = count_rows(&result);
+                if rows > 0 {
+                    remote_rows_seen = remote_rows_seen.max(rows);
+                }
+                evaluate_remote_transforms(
+                    frame,
+                    &result,
+                    &scenario,
+                    &mut violations,
+                    &mut last_positions,
+                    &mut last_change_frame,
+                );
             }
             Err(e) => {
                 violations.report(
                     rules::Rule::OracleError.name(),
                     "brp_query",
                     format!("world.query failed: {e}"),
+                    frame,
+                );
+            }
+        }
+
+        // Liveness parity with in-process mode: a world whose
+        // transforms never change is a soft-lock. Report once when the
+        // silence exceeds the scenario's grace window.
+        if remote_rows_seen > 0 && frame > last_change_frame {
+            let silent_frames = frame - last_change_frame;
+            let grace = (scenario.liveness.timeout_s * tps as f32).max(1.0) as u64;
+            if silent_frames == grace + 1 {
+                violations.report(
+                    rules::Rule::FrozenWorld.name(),
+                    "world",
+                    format!(
+                        "transforms unchanged for {silent_frames} frames over BRP — soft-lock?"
+                    ),
                     frame,
                 );
             }
@@ -307,7 +365,12 @@ async fn run_brp_inner(
         simulated_duration_s: total_frames as f64 / tps as f64,
         wall_time_s: wall_start.elapsed().as_secs_f64(),
         pre_ready_frames: 0,
-        error: (!stderr.is_empty()).then(|| truncate_chars(&stderr, 2000)),
+        // `error` means "why this run failed", not "the game chats on
+        // stderr" — healthy Bevy games print asset/adapter noise. Attach
+        // the stderr tail only when the run actually failed, as a
+        // diagnostic.
+        error: (status != PlaytestStatus::Pass)
+            .then(|| truncate_chars(&stderr, 2000)),
         action_log: vec![],
         game_version: None,
         cheat_count: 0,
@@ -388,6 +451,8 @@ fn evaluate_remote_transforms(
     result: &Value,
     scenario: &Scenario,
     violations: &mut Violations,
+    last_positions: &mut std::collections::HashMap<String, (f64, f64)>,
+    last_change_frame: &mut u64,
 ) {
     // BRP `world.query` returns an array of
     // `{ "entity": <id>, "components": { "<type>": {...} } }`.
@@ -409,21 +474,49 @@ fn evaluate_remote_transforms(
             continue;
         };
         // Transform serializes translation as a Vec3 array [x, y, z].
-        let (Some(x), Some(y)) = (
+        // A missing/non-numeric component is DATA CORRUPTION, not a
+        // skippable row: flag it instead of silently ignoring the entity.
+        let coord = |i: usize| {
             t.get("translation")
-                .and_then(|v| v.get(0))
-                .and_then(|v| v.as_f64()),
-            t.get("translation")
-                .and_then(|v| v.get(1))
-                .and_then(|v| v.as_f64()),
-        ) else {
+                .and_then(|v| v.get(i))
+                .and_then(|v| v.as_f64())
+        };
+        let Some(x) = coord(0) else {
+            violations.report(
+                rules::Rule::FiniteTransforms.name(),
+                &entity_id,
+                format!("entity {entity_id} transform x is not a number"),
+                frame,
+            );
+            continue;
+        };
+        let Some(y) = coord(1) else {
+            violations.report(
+                rules::Rule::FiniteTransforms.name(),
+                &entity_id,
+                format!("entity {entity_id} transform y is not a number"),
+                frame,
+            );
+            continue;
+        };
+        let Some(z) = coord(2) else {
+            violations.report(
+                rules::Rule::FiniteTransforms.name(),
+                &entity_id,
+                format!("entity {entity_id} transform z is not a number"),
+                frame,
+            );
             continue;
         };
 
-        eprintln!("brp_runner: frame {frame} entity {entity_id} pos=({x:.2},{y:.2})");
+        // Movement tracking for the liveness oracle.
+        if last_positions.get(&entity_id) != Some(&(x, y)) {
+            last_positions.insert(entity_id.clone(), (x, y));
+            *last_change_frame = frame;
+        }
 
         // NaN/non-finite check (mirrors finite_transforms oracle).
-        if !x.is_finite() || !y.is_finite() {
+        if !x.is_finite() || !y.is_finite() || !z.is_finite() {
             violations.report(
                 rules::Rule::FiniteTransforms.name(),
                 &entity_id,
@@ -433,7 +526,8 @@ fn evaluate_remote_transforms(
             continue;
         }
 
-        // Bounds (mirrors nodes_in_bounds invariant evaluation).
+        // Bounds (mirrors nodes_in_bounds invariant evaluation,
+        // all three axes — matching the standalone in-process oracle).
         for inv in &scenario.invariants {
             if inv.rule != crate::enums::InvariantRule::NodesInBounds {
                 continue;
@@ -442,12 +536,14 @@ fn evaluate_remote_transforms(
             let max_x = inv.max_x.unwrap_or(1000.0) as f64;
             let min_y = inv.min_y.unwrap_or(-1000.0) as f64;
             let max_y = inv.max_y.unwrap_or(1000.0) as f64;
-            if x < min_x || x > max_x || y < min_y || y > max_y {
+            let min_z = inv.min_z.unwrap_or(-1000.0) as f64;
+            let max_z = inv.max_z.unwrap_or(1000.0) as f64;
+            if x < min_x || x > max_x || y < min_y || y > max_y || z < min_z || z > max_z {
                 violations.report(
                     rules::Rule::NodesInBounds.name(),
                     &inv.name,
                     format!(
-                        "entity {entity_id} out of bounds [{min_x},{max_x}]×[{min_y},{max_y}]: ({x:.2},{y:.2})",
+                        "entity {entity_id} out of bounds [{min_x},{max_x}]×[{min_y},{max_y}]×[{min_z},{max_z}]: ({x:.2},{y:.2},{z:.2})",
                     ),
                     frame,
                 );
@@ -455,3 +551,8 @@ fn evaluate_remote_transforms(
         }
     }
 }
+
+fn count_rows(result: &Value) -> u64 {
+    result.as_array().map(|r| r.len() as u64).unwrap_or(0)
+}
+

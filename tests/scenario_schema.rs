@@ -129,12 +129,17 @@ fn rejects_oracles_selection_loudly() {
 }
 
 #[test]
-fn empty_oracles_list_is_valid() {
-    // Omitting or an empty list = run all; only a populated list rejects.
+fn empty_oracles_list_rejects_like_any_selection() {
+    // Oracle selection is not implemented at all: `[]` is as much a
+    // selection as a populated list (and reads as "none" to a human
+    // author). Any non-None oracles value must reject.
     let mut json = minimal_scenario("chaos");
     json["oracles"] = serde_json::json!([]);
     let s = parse(json);
-    validate_scenario(&s).expect("empty oracles list is valid");
+    match validate_scenario(&s) {
+        Err(ScenarioError::NotImplemented(msg)) => assert!(msg.contains("oracles"), "{msg}"),
+        other => panic!("expected NotImplemented for oracles: [], got {other:?}"),
+    }
 }
 
 #[test]

@@ -76,29 +76,50 @@ impl ChoiceStream {
     }
 
     /// Uniform in [0, bound). Records the REDUCED value.
+    ///
+    /// Replay entries are FRAME-INDEXED: a draw at frame F serves the
+    /// entry recorded for frame F. Entries recorded for frames that
+    /// were skipped (never drawn) are consumed without effect — they
+    /// can no longer shift later draws onto the wrong values.
     pub fn below(&mut self, frame: u64, bound: u64) -> u64 {
-        if bound <= 1 {
+        // Consume replay entries older than the requested frame.
+        while self
+            .replay
+            .front()
+            .is_some_and(|c| c.frame < frame)
+        {
             self.replay.pop_front();
-            self.recorded.push(Choice {
-                frame,
-                value: 0,
-                bound,
-            });
-            return 0;
         }
-        let value = match self.replay.pop_front() {
-            Some(c) => c.value % bound,
-            None => match self.continuation {
-                Continuation::Prng => (((self.next_raw() as u128) * (bound as u128)) >> 64) as u64,
-                Continuation::Zeros => 0,
-                Continuation::Reseed(seed) => {
-                    if !self.reseeded {
-                        self.rng = if seed == 0 { 42 } else { seed };
-                        self.reseeded = true;
+        let replay_value = if self
+            .replay
+            .front()
+            .is_some_and(|c| c.frame == frame)
+        {
+            self.replay.pop_front().map(|c| c.value)
+        } else {
+            None
+        };
+        let value = match replay_value {
+            Some(v) => v % bound.max(1),
+            None => {
+                if bound <= 1 {
+                    0
+                } else {
+                    match self.continuation {
+                        Continuation::Prng => {
+                            (((self.next_raw() as u128) * (bound as u128)) >> 64) as u64
+                        }
+                        Continuation::Zeros => 0,
+                        Continuation::Reseed(seed) => {
+                            if !self.reseeded {
+                                self.rng = if seed == 0 { 42 } else { seed };
+                                self.reseeded = true;
+                            }
+                            (((self.next_raw() as u128) * (bound as u128)) >> 64) as u64
+                        }
                     }
-                    (((self.next_raw() as u128) * (bound as u128)) >> 64) as u64
                 }
-            },
+            }
         };
         self.recorded.push(Choice {
             frame,

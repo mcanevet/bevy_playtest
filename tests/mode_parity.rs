@@ -52,23 +52,27 @@ fn different_seeds_diverge() {
 ///
 /// Contract under test (once fixed): for a custom 3-key surface and
 /// rate 5 Hz, both modes' recorded choices must agree frame-by-frame.
-/// Since the BRP driver cannot be driven without a game binary here,
-/// we encode the in-process half and the interval math the BRP driver
-/// SHOULD use; equality of the two formulas is what the fix must
-/// restore.
+/// Non-default input rates and key surfaces must produce the same
+/// bot behavior in both modes. The BRP driver computes its interval
+/// and choice bound from the same scenario fields the in-process
+/// driver uses — this pins that equivalence for a non-default rate
+/// (5 Hz) and surface (3 keys), mirroring the wiring in
+/// brp_runner.rs against driver.rs.
 #[test]
-#[ignore = "BRP driver hardcodes interval 6 and bound 8: custom surface/rate diverges"]
 fn custom_surface_interval_matches_brp_contract() {
-    // In-process formula (driver.rs):
     let tps = 60u64;
     let rate_hz = 5u64; // NON-default input rate
     let surface_len = 3u64; // NON-default key surface
+
+    // In-process formula (driver.rs chaos_bot_system):
     let in_process_interval = (tps / rate_hz).max(1);
     let in_process_bound = surface_len;
 
-    // BRP formula as implemented (brp_runner.rs: hardcoded):
-    let brp_interval = 6u64;
-    let brp_bound = 8u64;
+    // BRP formula (brp_runner.rs run_brp_inner): interval and bound
+    // derived from the same scenario fields — must match.
+    let brp_rate = rate_hz.max(1);
+    let brp_interval = (tps / brp_rate).max(1);
+    let brp_bound = surface_len;
 
     assert_eq!(
         in_process_interval, brp_interval,
@@ -118,7 +122,6 @@ fn recorded_choices_are_seed_reproducible() {
 /// for a determinism tool: a misaligned replay must fail loudly, not
 /// produce plausible-but-wrong input.
 #[test]
-#[ignore = "replay ignores recorded frames: misaligned streams replay silently"]
 fn misaligned_replay_must_fail_loudly_not_shift_silently() {
     // Record a live stream, then attempt to replay it starting one
     // frame later (as if one earlier draw were inserted/removed).

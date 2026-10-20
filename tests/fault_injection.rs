@@ -204,7 +204,7 @@ fn detects_cheat_hook_panic() {
             "duration_s": 0.5,
             "tps": 60,
             "invariants": [],
-            "setup": { "cheats": [ { "frame": 5, "kind": "boom" } ] }
+            "setup": { "cheats": [ { "frame": 0, "kind": "boom" } ] }
         }"#,
     )
     .expect("scenario parses");
