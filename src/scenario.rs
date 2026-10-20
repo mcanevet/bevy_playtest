@@ -595,13 +595,6 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
         }
     }
     // Bot-specific requirements.
-    if !scenario.bot.bot_type.implemented() {
-        return Err(ScenarioError::NotImplemented(format!(
-            "bot type '{}' is not implemented in this version \
-             (implemented: chaos, synthetic_keyboard)",
-            scenario.bot.bot_type
-        )));
-    }
     if scenario.bot.bot_type == BotType::SyntheticKeyboard {
         if scenario.bot.key_presses.is_empty() {
             return Err(ScenarioError::Rejected(
@@ -660,13 +653,6 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
         }
     }
     for rule in &scenario.invariants {
-        if rule.rule == InvariantRule::Custom {
-            return Err(ScenarioError::NotImplemented(format!(
-                "invariant '{}': custom invariants are not implemented in v0.1 \
-                 (only 'nodes_in_bounds' is wired)",
-                rule.name
-            )));
-        }
         if rule.eventually_s.is_some() {
             return Err(ScenarioError::NotImplemented(format!(
                 "invariant '{}': eventually mode is not implemented in v0.1",

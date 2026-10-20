@@ -285,17 +285,16 @@ fn registered_reset_hook_is_invoked_and_counts() {
 }
 
 #[test]
-fn custom_invariant_is_rejected_as_not_implemented() {
-    let scenario: Scenario = serde_json::from_str(
+fn custom_invariant_is_rejected_at_parse_time() {
+    // "custom" is not a known InvariantRule variant anymore; it fails
+    // serde deserialization with an unknown-variant error.
+    let err = serde_json::from_str::<Scenario>(
         r#"{"bot":{"type":"chaos","seed":7},"duration_s":0.1,"tps":60,"invariants":[{"name":"score_cap","rule":"custom","path":"TestApi.score","value":100,"check":"le"}]}"#,
-    )
-    .unwrap();
-    let mut app = minimal_app();
-    let err = run_scenario(&mut app, &scenario).unwrap_err();
-    assert!(matches!(
-        err,
-        bevy_playtest::scenario::ScenarioError::NotImplemented(_)
-    ));
+    ).unwrap_err();
+    assert!(
+        err.to_string().contains("custom"),
+        "serde error must name the unknown variant 'custom': {err}"
+    );
 }
 
 #[test]

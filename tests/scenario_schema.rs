@@ -86,15 +86,22 @@ fn rejects_path_traversal_in_name() {
 }
 
 #[test]
-fn rejects_unimplemented_bot_loudly() {
-    for bot in ["pursuit", "planner", "custom", "synthetic_pointer"] {
-        let s = parse(minimal_scenario(bot));
-        match validate_scenario(&s) {
-            Err(ScenarioError::NotImplemented(msg)) => {
-                assert!(msg.contains(bot), "{msg}")
-            }
-            other => panic!("expected NotImplemented for {bot}, got {other:?}"),
-        }
+fn rejects_removed_bot_types_loudly() {
+    // Unimplemented bot types are removed from the enum: they fail
+    // deserialization with an unknown-variant error naming the type.
+    for bot in [
+        "pursuit",
+        "planner",
+        "custom",
+        "synthetic_pointer",
+        "replay",
+    ] {
+        let err = serde_json::from_value::<Scenario>(minimal_scenario(bot))
+            .expect_err("removed bot type must not parse");
+        assert!(
+            err.to_string().contains(bot),
+            "serde error must name the bot type '{bot}': {err}"
+        );
     }
 }
 
@@ -162,8 +169,8 @@ fn rejects_unknown_fields() {
 fn rejects_duplicate_invariant_names() {
     let mut json = minimal_scenario("chaos");
     json["invariants"] = serde_json::json!([
-        { "name": "hp", "rule": "custom", "path": "TestApi.score", "value": 10 },
-        { "name": "hp", "rule": "custom", "path": "TestApi.score", "value": 20 }
+        { "name": "hp", "rule": "nodes_in_bounds" },
+        { "name": "hp", "rule": "nodes_in_bounds" }
     ]);
     let s = parse(json);
     let err = validate_scenario(&s).unwrap_err().to_string();
@@ -171,15 +178,19 @@ fn rejects_duplicate_invariant_names() {
 }
 
 #[test]
-fn rejects_custom_invariants_as_not_implemented() {
+fn rejects_custom_invariants_at_parse_time() {
+    // "custom" is removed from InvariantRule: it fails deserialization
+    // with an unknown-variant error.
     let mut json = minimal_scenario("chaos");
     json["invariants"] = serde_json::json!([
-        { "name": "phase", "rule": "custom", "path": "TestApi.game_phase",
-          "value": "playing", "check": "lt" }
+        { "name": "phase", "rule": "custom" }
     ]);
-    let s = parse(json);
-    let err = validate_scenario(&s).unwrap_err().to_string();
-    assert!(err.contains("not implemented"), "{err}");
+    let err =
+        serde_json::from_value::<Scenario>(json).expect_err("custom invariant must not parse");
+    assert!(
+        err.to_string().contains("custom"),
+        "serde error must name the variant 'custom': {err}"
+    );
 }
 
 #[test]

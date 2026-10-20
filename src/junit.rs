@@ -176,8 +176,6 @@ mod tests {
             count: 1,
             detail: "out of bounds (10012.0)".into(),
             last_detail: "out of bounds (10012.0)".into(),
-            fingerprint: None,
-            fingerprint_scheme: 1,
         });
         r
     }
@@ -186,7 +184,7 @@ mod tests {
         // Minimal structural validation: balanced angle brackets OUTSIDE
         // CDATA sections, and tag open/close parity. CDATA content is
         // arbitrary text and may legitimately contain '<'/'>'. A real
-        // XML parser (quick-xml, as in the PoC) joins in v0.2.
+        // XML parser would be stricter; this catches gross malformation.
         let outside: String = strip_cdata(xml);
         let opens = outside.matches('<').count();
         let closes = outside.matches('>').count();
@@ -288,7 +286,7 @@ mod tests {
     #[test]
     fn cdata_split_protects_system_out() {
         let mut r = pass_report();
-        r.warnings = vec!["evil]]>injection".into()];
+        r.error = Some("evil]]>injection".into());
         let tc = r.to_junit_testcase("cdata-case", "suite");
         let inner_start = tc.find("<system-out>").unwrap() + "<system-out>".len();
         let inner_end = tc.rfind("</system-out>").unwrap();

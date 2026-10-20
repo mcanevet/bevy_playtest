@@ -7,8 +7,6 @@
 //! - Panics: std panic hook chained to the previous hook; captured with
 //!   location + current frame.
 //! - Logs: a tracing Subscriber layer capturing ERROR/WARN events.
-//! - Bevy errors: FallbackErrorHandler wrapper (v0.1: deferred, the
-//!   panic path covers crashes).
 
 use crate::rules::Rule;
 use std::cell::RefCell;
@@ -237,8 +235,6 @@ pub fn to_violation_entries(
                 count,
                 detail: format!("{message} (x{count})"),
                 last_detail: message,
-                fingerprint: None,
-                fingerprint_scheme: 1,
             },
         )
         .collect()

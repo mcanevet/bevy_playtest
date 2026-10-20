@@ -26,7 +26,7 @@ Public API surface for integrators.
   "invariants": [
     {
       "name": "string",
-      "rule": "nodes_in_bounds" | "custom",
+      "rule": "nodes_in_bounds",
       "min_x": number,
       "max_x": number,
       "min_y": number,
@@ -48,8 +48,10 @@ Public API surface for integrators.
 }
 ```
 
-Rejected at load: `custom` invariants, `eventually` mode, target filters,
-time windows, nonzero cheat `frame`s — `NotImplemented` error. Invalid
+Rejected at load: `eventually` mode, target filters, time windows, nonzero
+cheat `frame`s — `NotImplemented` error. Unknown rule values (e.g.
+`custom`) and unknown bot types (e.g. `pursuit`, `replay`) fail
+deserialization naming the offender. Invalid
 values (non-finite durations, broken bounds, typo'd or empty key
 lists) are rejected with specific errors.
 

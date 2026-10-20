@@ -361,26 +361,18 @@ async fn run_brp_inner(
         status,
         violations: violations.snapshot(),
         metrics: Default::default(),
-        coverage: Default::default(),
         frame_count: total_frames,
         tps: tps as u64,
         simulated_duration_s: total_frames as f64 / tps as f64,
         wall_time_s: wall_start.elapsed().as_secs_f64(),
-        pre_ready_frames: 0,
         // `error` means "why this run failed", not "the game chats on
         // stderr" — healthy Bevy games print asset/adapter noise. Attach
         // the stderr tail only when the run actually failed, as a
         // diagnostic.
         error: (status != PlaytestStatus::Pass).then(|| truncate_chars(&stderr, 2000)),
         action_log: vec![],
-        game_version: None,
         cheat_count: 0,
-        unreplayable_actions: 0,
-        warnings: vec![],
-        action_effect_rate: Default::default(),
         choices: recorded_choices,
-        robustness: Default::default(),
-        scope: Default::default(),
         harness_mode: "external_brp".to_string(),
     };
     let _ = input_count;

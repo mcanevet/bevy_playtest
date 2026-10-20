@@ -7,7 +7,6 @@ use bevy_ecs::prelude::*;
 use bevy_transform::prelude::Transform;
 
 use crate::driver::{RunState, RunViolations};
-use crate::enums::InvariantRule;
 use crate::scenario::Invariant;
 
 /// Evaluate all scenario invariants each frame. v0.1: only
@@ -20,15 +19,7 @@ pub fn evaluate_invariants_system(
     q: Query<(Entity, &Transform), With<crate::contract::Gameplay>>,
 ) {
     for inv in &invariants.0 {
-        match inv.rule {
-            InvariantRule::NodesInBounds => {
-                evaluate_bounds(inv, state.frame, &mut violations, &q);
-            }
-            InvariantRule::Custom => {
-                // Should have been rejected at load time (unimplemented).
-                continue;
-            }
-        }
+        evaluate_bounds(inv, state.frame, &mut violations, &q);
     }
 }
 
@@ -45,14 +36,7 @@ fn evaluate_bounds(
     let max_y = inv.max_y.unwrap_or(1000.0);
     let min_z = inv.min_z.unwrap_or(-1000.0);
     let max_z = inv.max_z.unwrap_or(1000.0);
-    let targets: Vec<&str> = inv.targets.iter().map(|s| s.as_str()).collect();
-    let target_set = !targets.is_empty();
-
     for (entity, transform) in q.iter() {
-        // Skip if target-filtered and this entity isn't named in the list.
-        if target_set {
-            // v0.1: no Name lookup (deferred); skip filtering.
-        }
         let t = transform.translation;
         let out =
             t.x < min_x || t.x > max_x || t.y < min_y || t.y > max_y || t.z < min_z || t.z > max_z;

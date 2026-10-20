@@ -12,7 +12,6 @@ use bevy_input::keyboard::{KeyCode, KeyboardFocusLost, KeyboardInput};
 use bevy_input::{prelude::ButtonInput, ButtonState};
 use bevy_time::{Time, TimeUpdateStrategy};
 use bevy_transform::prelude::Transform;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::contract::{CheatHooks, ResetHooks};
@@ -351,7 +350,6 @@ pub struct RunState {
     frozen_frames: u64,
     /// Grace period (frames) before frozen_world is reported.
     frozen_grace_frames: u64,
-    pre_ready_frames: u64,
 }
 
 impl Default for RunState {
@@ -366,7 +364,6 @@ impl Default for RunState {
             // true freezes caught. Injected in run_scenario before the
             // loop runs.
             frozen_grace_frames: 180,
-            pre_ready_frames: 0,
         }
     }
 }
@@ -417,7 +414,6 @@ impl FrameTimingStats {
 
 /// Run one scenario against an already-built `App`.
 ///
-/// The app must contain the harness plugin (added via `PlaytestPlugin`).
 /// Returns a structured report with violations, metrics, and action log.
 pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport, ScenarioError> {
     validate_scenario(scenario)?;
@@ -507,7 +503,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     }
 
     // Cheats: validate kinds (scheduled application lands with the
-    // cheat scheduler; v0.1 applies setup.cheats immediately pre-loop).
+    // cheat scheduler; setup.cheats are applied immediately pre-loop).
     {
         let known: Vec<String> = app
             .world()
@@ -684,8 +680,6 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
                      Gameplay entities so oracles have something to check"
                 .to_string(),
             last_detail: "no entities to observe — the run is vacuous".to_string(),
-            fingerprint: None,
-            fingerprint_scheme: 1,
         });
         status = PlaytestStatus::Fail;
     }
@@ -707,22 +701,14 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         status,
         violations: snap,
         metrics,
-        coverage: Default::default(),
         frame_count: state.frame,
         tps: state.tps,
         simulated_duration_s: state.frame as f64 / state.tps as f64,
         wall_time_s,
-        pre_ready_frames: state.pre_ready_frames,
         error: crash_detected.then(|| "run loop panicked".to_string()),
         action_log,
-        game_version: None,
         cheat_count: scenario.setup.cheats.len() as u64 as usize,
-        unreplayable_actions: 0,
-        warnings: vec![],
-        action_effect_rate: HashMap::new(),
         choices,
-        robustness: Default::default(),
-        scope: Default::default(),
         harness_mode: "in_process".to_string(),
     })
 }

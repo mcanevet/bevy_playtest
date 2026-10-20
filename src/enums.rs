@@ -6,59 +6,34 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Bot types. v0.1 implements `chaos`, `replay`, and `synthetic_keyboard`;
-/// the others are accepted on the wire but rejected by `validate_scenario`
-/// with a "not yet implemented in this version" message so scenarios
-/// never silently degrade.
+/// Bot types (v0.1: chaos and synthetic_keyboard only).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BotType {
     Chaos,
-    Pursuit,
-    Replay,
-    SyntheticPointer,
     SyntheticKeyboard,
-    Planner,
-    Custom,
-}
-
-impl BotType {
-    /// Whether the in-process driver implements this bot type in v0.1.
-    pub fn implemented(self) -> bool {
-        matches!(self, Self::Chaos | Self::SyntheticKeyboard)
-    }
 }
 
 impl std::fmt::Display for BotType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             Self::Chaos => "chaos",
-            Self::Pursuit => "pursuit",
-            Self::Replay => "replay",
-            Self::SyntheticPointer => "synthetic_pointer",
             Self::SyntheticKeyboard => "synthetic_keyboard",
-            Self::Planner => "planner",
-            Self::Custom => "custom",
         };
         f.write_str(s)
     }
 }
 
-/// Invariant rule types.
+/// Invariant rule types (v0.1: nodes_in_bounds only).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InvariantRule {
     NodesInBounds,
-    Custom,
 }
 
 impl std::fmt::Display for InvariantRule {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            Self::NodesInBounds => "nodes_in_bounds",
-            Self::Custom => "custom",
-        };
-        f.write_str(s)
+        f.write_str("nodes_in_bounds")
     }
 }
 
