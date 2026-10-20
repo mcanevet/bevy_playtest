@@ -102,18 +102,20 @@ fn tag_gameplay(mut commands: Commands, ball: Query<Entity, With<Ball>>) {
 }
 ```
 
-**Two practical requirements for in-process runs:**
+**Integration is one dependency, one plugin line, two env vars — no other
+ceremony.** No `build_app()` extraction, no `WinitPlugin` disabling, no
+plugin-group swap:
 
-1. **Extract app construction from `main()`** — Bevy apps must construct an `App`
-   somewhere accessible to the harness. If your game wires everything inline in
-   `main()`, extract it to a `build_app()` function (standard Bevy testing pattern).
+```rust
+app.add_plugins(DefaultPlugins);
+app.add_plugins(bevy_playtest::PlaytestPlugin); // AFTER the group
+```
 
-2. **Disable `WinitPlugin`** — the harness drives input itself; winit's event loop
-   conflicts with test runners. Use:
-   ```rust
-   app.add_plugins(DefaultPlugins.build().disable::<bevy::winit::WinitPlugin>());
-   ```
-   Render/audio/assets still initialize; the game runs headless.
+Under takeover (`BEVY_PLAYTEST_SCENARIO` set) the plugin's runner swap
+(last-set-wins) replaces winit's event loop, so the game runs headless
+with no window. Under `BRP_PORT` the same binary serves the external-BRP
+surface. The one ordering rule: add `PlaytestPlugin` AFTER any plugin
+group that sets a runner, or the takeover is silently inert.
 
 ### Verification depth (what is proven vs. what is asserted)
 

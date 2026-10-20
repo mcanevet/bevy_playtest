@@ -229,18 +229,21 @@ jobs:
 
       # The cache restores all dependency artifacts (incl. Bevy);
       # only the small fixture crates themselves rebuild here.
-      - name: Build fixture-runner
+      - name: Build fixture binaries
         run: >
           cargo build --locked --manifest-path fixtures/Cargo.toml
-          -p fixture-runner -p fixture_${{ matrix.fixture }} --bins
+          -p fixture_${{ matrix.fixture }} --bins
 
-      # No xvfb: WinitPlugin is disabled headless so nothing opens a
-      # display; Lavapipe renders via Vulkan without X (same as wgpu's
-      # own Linux CI).
+      # No xvfb: PlaytestPlugin's runner swap (last-set-wins) means
+      # nothing opens a display; Lavapipe renders via Vulkan without
+      # X (same as wgpu's own Linux CI).
       - name: In-process tier (headless, real game logic)
         env:
           WGPU_BACKEND: vulkan
-        run: ./target/debug/fixture-runner "${{ matrix.fixture }}"
+        run: >
+          printf '%s' '{"name":"ci","bot":{"type":"chaos","seed":42},"duration_s":2.0,"invariants":[],"setup":{}}' > /tmp/sc.json &&
+          BEVY_PLAYTEST_SCENARIO=/tmp/sc.json
+          timeout 300 ./target/debug/fixture_${{ matrix.fixture }}
 
       - name: External-BRP tier (bin driven over BRP)
         env:

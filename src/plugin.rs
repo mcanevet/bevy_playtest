@@ -1,36 +1,39 @@
 //! One-line game integration: `PlaytestPlugin`.
 //!
-//! Add the plugin to your `App`. When `BEVY_PLAYTEST_SCENARIO=<path>` is
-//! set at process start, the plugin replaces the app's runner before the
-//! windowed event loop can ever start: the scenario JSON is loaded,
-//! `run_scenario` drives the (already-built) app to completion, the
-//! report is written to `BEVY_PLAYTEST_REPORT` (default: scenario path
-//! + `.report.json`), the path is printed, and the process exits with:
+//! Add the plugin to your `App` (AFTER any plugin group such as
+//! `DefaultPlugins`). When `BEVY_PLAYTEST_SCENARIO=<path>` is set at
+//! process start, the plugin replaces the app's runner: the scenario
+//! JSON is loaded, `run_scenario` drives the (already-built) app to
+//! completion, the report is written to `BEVY_PLAYTEST_REPORT`
+//! (default: scenario path + `.report.json`), the path is printed, and
+//! the process exits with:
 //!
 //! - 0: Pass
 //! - 1: Fail (gating violations)
 //! - 2: Crash
-//! - 3: harness/config error (unreadable scenario, validation failure,
-//!   headless requested but winit is present)
+//! - 3: harness/config error (unreadable scenario, invalid env value)
 //!
 //! When the env var is absent the plugin is inert: no runner swap, no
 //! resources, no systems, no env reads past the one `var_os` check.
 //!
-//! Because a `Plugin` cannot uninstall a `WinitPlugin` that a plugin
-//! group already mounted, headless takeover of a windowed app is
-//! detected (via `bevy_winit::WinitPlugin`) and refused loudly with
-//! exit code 3 instead of silently opening a window in CI. Use
-//! [`PlaytestDefaultPlugins`] as the drop-in replacement for
-//! `DefaultPlugins` that handles the swap.
+//! # Headless by construction
 //!
-//! Ordering: `PlaytestPlugin` must be added AFTER
-//! `PlaytestDefaultPlugins` (e.g. `.add_plugins(PlaytestDefaultPlugins)
-//! .add_plugins(PlaytestPlugin)`). `PlaytestPlugin` is the only side
-//! that swaps the runner via `set_runner`, so a group added after it
-//! does not overwrite the takeover; but plugin-group internals add
-//! plugins in order, and a takeover installed before the group may be
-//! built against an incomplete `App`. Bevy also refuses duplicate
-//! unique plugins, so an accidental double-add fails loudly on its own.
+//! `set_runner` is last-set-wins: adding `PlaytestPlugin` after
+//! `DefaultPlugins` overwrites winit's runner with the takeover runner,
+//! and window creation (which happens inside winit's runner) never
+//! executes. A stock `DefaultPlugins` game therefore runs headless
+//! under takeover with no plugin-group swap and no window.
+//!
+//! # Ordering responsibility (no runtime guard)
+//!
+//! Plugin ordering is the user's responsibility, enforced by contract
+//! rather than runtime detection: if `PlaytestPlugin` is added BEFORE
+//! a group that sets a runner (e.g. `DefaultPlugins`), the group's
+//! runner wins and the takeover is silently inert. No cheap reliable
+//! runtime detection exists at plugin-build time (the competing runner
+//! is not yet installed), so we document the requirement instead of
+//! shipping a phantom guard. [`PlaytestDefaultPlugins`] remains as
+//! optional sugar for an explicitly headless plugin graph.
 //!
 //! Unknown `BEVY_PLAYTEST_*` variables are rejected with exit code 3:
 //! the scenario schema is strict (`deny_unknown_fields`), and env
@@ -47,8 +50,20 @@ pub const ENV_REPORT: &str = "BEVY_PLAYTEST_REPORT";
 /// `bevy_winit::WinitPlugin` is present (contract must not degrade to a
 /// silent windowed run).
 pub const ENV_HEADLESS: &str = "BEVY_PLAYTEST_HEADLESS";
+/// External-BRP port. When set, PlaytestPlugin adds RemotePlugin +
+/// RemoteHttpPlugin and registers types for reflection queries.
+pub const ENV_BRP_PORT: &str = "BRP_PORT";
 
-const KNOWN_ENV_VARS: [&str; 4] = [ENV_SCENARIO, ENV_REPORT, ENV_HEADLESS, ENV_REPLAY_PASS_B];
+const KNOWN_ENV_VARS: [&str; 6] = [
+    ENV_SCENARIO,
+    ENV_REPORT,
+    ENV_HEADLESS,
+    ENV_REPLAY_PASS_B,
+    ENV_BRP_PORT,
+    // Test-selection var (set by the acceptance suite / CI matrix to
+    // pick one fixture); inherited by the game process harmlessly.
+    "BEVY_PLAYTEST_FIXTURE",
+];
 
 /// Exit codes for the takeover process contract.
 pub mod exit_code {
@@ -66,11 +81,49 @@ pub struct PlaytestPlugin;
 
 impl Plugin for PlaytestPlugin {
     fn build(&self, app: &mut App) {
+        // BRP auto-enable: if BRP_PORT is set, add remote plugins and
+        // register types for reflection queries. Invalid port → exit 3.
+        if let Some(port_str) = std::env::var_os(ENV_BRP_PORT) {
+            let port_str = port_str.to_string_lossy();
+            let port: u16 = port_str.parse().unwrap_or_else(|_| {
+                eprintln!(
+                    "bevy_playtest: {} must be a valid port number (got '{}')",
+                    ENV_BRP_PORT, port_str
+                );
+                std::process::exit(exit_code::CONFIG_ERROR);
+            });
+
+            #[cfg(not(feature = "brp-plugin"))]
+            {
+                let _ = port; // validated above; feature is the deciding factor
+                eprintln!(
+                    "bevy_playtest: {} is set but the brp-plugin feature is not enabled. \
+                     Rebuild with --features brp-plugin to enable external-BRP mode.",
+                    ENV_BRP_PORT
+                );
+                std::process::exit(exit_code::CONFIG_ERROR);
+            }
+
+            #[cfg(feature = "brp-plugin")]
+            {
+                // RemotePlugin requires the async task pools; a stock
+                // game without DefaultPlugins hasn't initialized them.
+                bevy_tasks::IoTaskPool::get_or_init(|| {
+                    bevy_tasks::TaskPoolBuilder::default().build()
+                });
+                app.add_plugins(bevy_remote::RemotePlugin::default());
+                app.add_plugins(bevy_remote::http::RemoteHttpPlugin::default().with_port(port));
+                // Register types for reflection queries (mirrors the fixture shim)
+                app.register_type::<bevy_transform::prelude::Transform>();
+                app.register_type::<bevy_input::keyboard::KeyboardInput>();
+                // Also add PlaytestBrpPlugin for method registration
+                app.add_plugins(crate::brp_plugin::PlaytestBrpPlugin);
+            }
+        }
+
         match read_env_config() {
             Ok(Takeover::Inert) => {}
-            Ok(Takeover::HeadlessAssert) => {
-                assert_headless_possible(app);
-            }
+            Ok(Takeover::HeadlessAssert) => {}
             Ok(Takeover::Run(config)) => take_over(app, config),
             Err(err) => {
                 eprintln!("bevy_playtest: {err}");
@@ -174,7 +227,6 @@ fn run_takeover(app: &mut App, config: &TakeoverConfig) -> ! {
             "file",
         )
     };
-    assert_headless_possible(app);
     // Replay verification needs TWO freshly built Apps. The takeover
     // already owns process lifetime and `set_runner` hands us the App
     // after plugin-build; a true rebuild requires re-running the
@@ -342,19 +394,6 @@ fn write_report(path: &str, report: &crate::state::PlaytestReport) -> Result<(),
     let json = serde_json::to_string_pretty(report)
         .map_err(|err| format!("cannot serialize report: {err}"))?;
     std::fs::write(path, json).map_err(|err| format!("cannot write report '{path}': {err}"))
-}
-
-#[cfg(not(feature = "takeover-winit"))]
-fn assert_headless_possible(_app: &App) {}
-
-#[cfg(feature = "takeover-winit")]
-fn assert_headless_possible(_app: &App) {
-    // Spike (round 5): the takeover runner replaces winit's
-    // (set_runner is last-wins; PlaytestPlugin must be added AFTER
-    // DefaultPlugins). Window creation happens inside winit_runner,
-    // which never runs — DefaultPlugins + PlaytestPlugin works
-    // headless WITHOUT the PlaytestDefaultPlugins swap. Plugin-order
-    // regressions are caught loudly by the takeover watchdog system.
 }
 
 /// `DefaultPlugins` equivalent that plays well with [`PlaytestPlugin`].

@@ -1430,13 +1430,16 @@ dependencies = [
 name = "bevy_playtest"
 version = "0.1.0"
 dependencies = [
+ "bevy",
  "bevy_app",
  "bevy_ecs",
  "bevy_input",
  "bevy_reflect",
+ "bevy_remote",
  "bevy_tasks",
  "bevy_time",
  "bevy_transform",
+ "bevy_winit",
  "serde",
  "serde_json",
  "tracing",
@@ -2735,26 +2738,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
 
 [[package]]
-name = "fixture-runner"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "bevy_playtest",
- "fixture_alien_cake_addict",
- "fixture_breakout",
- "fixture_contributors",
- "fixture_desk_toy",
- "fixture_game_menu",
- "fixture_loading_screen",
- "fixture_mines",
- "serde_json",
-]
-
-[[package]]
 name = "fixture_alien_cake_addict"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bevy_playtest",
  "chacha20",
  "rand",
 ]
@@ -2764,6 +2752,7 @@ name = "fixture_breakout"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bevy_playtest",
 ]
 
 [[package]]
@@ -2771,6 +2760,7 @@ name = "fixture_contributors"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bevy_playtest",
  "chacha20",
  "rand",
  "thiserror 2.0.21",
@@ -2781,6 +2771,7 @@ name = "fixture_desk_toy"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bevy_playtest",
 ]
 
 [[package]]
@@ -2788,6 +2779,7 @@ name = "fixture_game_menu"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bevy_playtest",
 ]
 
 [[package]]
@@ -2795,6 +2787,7 @@ name = "fixture_loading_screen"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bevy_playtest",
 ]
 
 [[package]]
@@ -2802,6 +2795,7 @@ name = "fixture_mines"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bevy_playtest",
  "rand",
 ]
 
