@@ -6,3 +6,4 @@
 # scripts/fetch_bevy_examples.sh and the patches/ audit trail.
 /fixtures/*
 !/fixtures/Cargo.lock
+bevy_playtest-smoke.report.json
