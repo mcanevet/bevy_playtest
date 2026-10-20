@@ -44,30 +44,6 @@ impl std::fmt::Display for BotType {
     }
 }
 
-/// Chaos bot persona.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum Persona {
-    /// Default: uniform sampling over the declared surface.
-    #[default]
-    Uniform,
-    /// 2x rate, never waits.
-    Aggressive,
-    /// Mostly waits, occasional jabs.
-    Idle,
-}
-
-impl std::fmt::Display for Persona {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            Self::Uniform => "uniform",
-            Self::Aggressive => "aggressive",
-            Self::Idle => "idle",
-        };
-        f.write_str(s)
-    }
-}
-
 /// Invariant rule types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -173,26 +149,5 @@ impl std::fmt::Display for PlaytestStatus {
 impl From<PlaytestStatus> for String {
     fn from(s: PlaytestStatus) -> Self {
         s.to_string()
-    }
-}
-
-/// Mouse buttons for raw input (wire-compatible with bevy's PointerButton).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum PointerButton {
-    #[default]
-    Primary,
-    Secondary,
-    Middle,
-}
-
-impl std::fmt::Display for PointerButton {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            Self::Primary => "primary",
-            Self::Secondary => "secondary",
-            Self::Middle => "middle",
-        };
-        f.write_str(s)
     }
 }

@@ -25,7 +25,7 @@ accept `KeyCode` spellings (`ArrowLeft`, `KeyW`) or shortcuts (`left`,
 ## Reset or cheat between runs
 
 Games register typed hooks as resources. A reset runs before the scenario;
-cheats fire at scheduled frames:
+all cheats fire before the run loop starts:
 
 ```rust
 use bevy_playtest::contract::{CheatHooks, ResetHooks};

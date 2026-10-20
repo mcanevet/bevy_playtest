@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-use crate::enums::{BotType, CheckOp, InvariantRule, Persona, PointerButton};
+use crate::enums::{BotType, CheckOp, InvariantRule};
 
 fn default_tps() -> u32 {
     60
@@ -87,28 +87,12 @@ pub struct BotConfig {
     pub seed: u64,
     #[serde(default = "default_rate")]
     pub input_rate_hz: u32,
-    /// pursuit: agent/target entity Names (not implemented in v0.1).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_target: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target: Option<String>,
-    /// replay: frame-indexed typed intents.
-    #[serde(default)]
-    pub inputs: Vec<ReplayInput>,
     /// synthetic_keyboard: frame-indexed raw key presses.
     #[serde(default)]
     pub key_presses: Vec<KeyPressInput>,
-    /// chaos persona.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub persona: Option<Persona>,
-    /// Raw input surface for the chaos bot. When present, the chaos bot
-    /// emits raw actions instead of typed intents.
+    /// Input surface for the chaos bot: which keys it may press.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_surface: Option<RawSurface>,
-    /// How the harness acts on the game: "auto" (default), "intents",
-    /// or "raw".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub actuator: Option<String>,
 }
 
 /// Liveness configuration.
@@ -152,22 +136,12 @@ pub enum LivenessMode {
 pub struct RawSurface {
     #[serde(default)]
     pub keys: Vec<String>,
-    #[serde(default)]
-    pub mouse_buttons: bool,
-    #[serde(default)]
-    pub mouse_motion: bool,
-    #[serde(default)]
-    pub wheel: bool,
-    #[serde(default)]
-    pub gamepad: bool,
 }
 
 impl Default for RawSurface {
     fn default() -> Self {
         // Non-empty default surface for zero-contract chaos. Standard set:
-        // arrows + WASD (keyboard only). Mouse/gamepad stay opt-in: tier-0
-        // games frequently ignore them, and the dead-verb oracle would
-        // flag every unused button.
+        // arrows + WASD (keyboard only).
         Self {
             keys: vec![
                 "KeyW".into(),
@@ -179,71 +153,8 @@ impl Default for RawSurface {
                 "ArrowLeft".into(),
                 "ArrowRight".into(),
             ],
-            mouse_buttons: false,
-            mouse_motion: false,
-            wheel: false,
-            gamepad: false,
         }
     }
-}
-
-/// A typed replay intent, replayed verbatim at the given frame.
-#[derive(Deserialize, Serialize, Clone, Debug)]
-#[serde(deny_unknown_fields)]
-pub struct ReplayInput {
-    pub frame: u64,
-    pub intent: ReplayIntent,
-}
-
-/// A raw input action for the tier-0 actuator.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "raw", rename_all = "snake_case")]
-pub enum RawAction {
-    /// Key press.
-    Key { key: String, hold_frames: u32 },
-    /// Mouse button press.
-    MouseButton {
-        button: PointerButton,
-        hold_frames: u32,
-    },
-    /// Mouse motion (delta in logical pixels).
-    MouseMove { delta: (f32, f32) },
-    /// Absolute cursor position (logical pixels).
-    Cursor { pos: (f32, f32) },
-    /// Click gesture: move to pos, press, hold, release.
-    Click {
-        pos: (f32, f32),
-        button: PointerButton,
-        hold_frames: u32,
-    },
-    /// Mouse wheel scroll.
-    Wheel { dy: f32 },
-    /// Wait N frames (no-op, for pacing).
-    Wait { frames: u32 },
-}
-
-/// A typed replay intent.
-#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
-#[serde(tag = "intent", rename_all = "snake_case", deny_unknown_fields)]
-pub enum ReplayIntent {
-    Move {
-        dir: (f32, f32),
-    },
-    Axis {
-        name: String,
-        value: f32,
-    },
-    /// Select a tile/entity BY NAME, resolved against live `Name` +
-    /// `Gameplay` entities at fire time.
-    Select {
-        target: String,
-    },
-    Wait,
-    /// Raw input action for tier-0 games: replayed verbatim through the
-    /// real input chain.
-    Raw {
-        raw: RawAction,
-    },
 }
 
 /// synthetic_keyboard: press+release a key at a given frame, through the
@@ -706,71 +617,11 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
             }
         }
     }
-    // Actuator selection must be one of the known values.
-    if let Some(actuator) = &scenario.bot.actuator {
-        match actuator.as_str() {
-            "auto" | "intents" | "raw" => {}
-            other => {
-                let known: Vec<String> = ["auto", "intents", "raw"]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect();
-                let mut msg = format!(
-                    "bot.actuator '{other}' is invalid: expected one of auto | intents | raw"
-                );
-                if let Some(sug) = suggest_similar(other, &known) {
-                    msg.push_str(&format!(" — did you mean '{sug}'?"));
-                }
-                return Err(ScenarioError::Rejected(msg));
-            }
-        }
-    }
-    // The actuator knob is validated but never consumed: acting on
-    // game input happens through one fixed mechanism in v0.1. Reject
-    // rather than pretend the choice mattered.
-    if scenario.bot.actuator.is_some() {
-        return Err(ScenarioError::NotImplemented(
-            "bot.actuator is not implemented in v0.1 — the harness always \
-             uses its built-in input mechanism; omit the actuator field"
-                .into(),
-        ));
-    }
-    // Persona parsing has no consumer in v0.1: a persona that changes
-    // nothing is a silent lie about bot behavior.
-    if scenario.bot.persona.is_some() {
-        return Err(ScenarioError::NotImplemented(
-            "bot.persona is not implemented in v0.1 — the chaos bot's \
-             behavior is seed-driven; omit the persona field"
-                .into(),
-        ));
-    }
-    // Bot `inputs` (scripted raw actions) have no consumer on any
-    // implemented bot type; chaos bots would silently ignore them.
-    if !scenario.bot.inputs.is_empty() {
-        return Err(ScenarioError::NotImplemented(
-            "bot.inputs is not implemented in v0.1 — scripted inputs have \
-             no consumer; use synthetic_keyboard key_presses instead"
-                .into(),
-        ));
-    }
     // Chaos-bot input surface: every declared key must be a real,
     // recognized key the bot can actually press; an empty or bogus
     // surface yields a bot that silently does nothing.
     if scenario.bot.bot_type == BotType::Chaos {
         if let Some(surface) = &scenario.bot.raw_surface {
-            for (field, set) in [
-                ("mouse_buttons", surface.mouse_buttons),
-                ("mouse_motion", surface.mouse_motion),
-                ("wheel", surface.wheel),
-                ("gamepad", surface.gamepad),
-            ] {
-                if set {
-                    return Err(ScenarioError::NotImplemented(format!(
-                        "raw_surface.{field} is not implemented in v0.1 — the \
-                         chaos bot is keyboard-only; declare keys only"
-                    )));
-                }
-            }
             for key in &surface.keys {
                 if normalize_key_name(key).is_none() {
                     return Err(ScenarioError::Rejected(unknown_key_error(key, None)));
@@ -785,14 +636,6 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
             }
         }
     }
-    // Agent targeting is parsed but never consumed.
-    if scenario.bot.agent_target.is_some() || scenario.bot.target.is_some() {
-        return Err(ScenarioError::NotImplemented(
-            "bot.agent_target / bot.target are not implemented in v0.1 — \
-             the chaos bot addresses the whole game; omit these fields"
-                .into(),
-        ));
-    }
     // Scheduled cheats: the `frame` field parses but all cheats fire
     // pre-run in v0.1. A nonzero frame claims scheduling that doesn't
     // exist.
@@ -805,7 +648,6 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
             )));
         }
     }
-
     // Invariant names key the eventual-state and dedup tables —
     // duplicates would silently shadow each other.
     let mut seen = HashSet::new();

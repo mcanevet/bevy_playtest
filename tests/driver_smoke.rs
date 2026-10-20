@@ -14,20 +14,22 @@ fn minimal_app() -> App {
 /// (vacuity guard, frozen-world) without asserting anything about it.
 fn spawn_observable_entity(app: &mut App) {
     use bevy_playtest::contract::Gameplay;
-    app.add_systems(bevy_app::Update, |mut q: bevy_ecs::prelude::Query<
-        &mut bevy_transform::prelude::Transform,
-        bevy_ecs::prelude::With<Gameplay>,
-    >| {
-        for (i, mut t) in q.iter_mut().enumerate() {
-            t.translation.x = (i as f32) + 1.0;
-        }
-    });
+    app.add_systems(
+        bevy_app::Update,
+        |mut q: bevy_ecs::prelude::Query<
+            &mut bevy_transform::prelude::Transform,
+            bevy_ecs::prelude::With<Gameplay>,
+        >| {
+            for (i, mut t) in q.iter_mut().enumerate() {
+                t.translation.x = (i as f32) + 1.0;
+            }
+        },
+    );
     app.world_mut().spawn((
         bevy_playtest::contract::Gameplay,
         bevy_transform::prelude::Transform::from_xyz(0.0, 0.0, 0.0),
     ));
 }
-
 
 #[test]
 fn chaos_run_passes_on_minimal_app() {

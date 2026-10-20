@@ -83,18 +83,10 @@ impl ChoiceStream {
     /// can no longer shift later draws onto the wrong values.
     pub fn below(&mut self, frame: u64, bound: u64) -> u64 {
         // Consume replay entries older than the requested frame.
-        while self
-            .replay
-            .front()
-            .is_some_and(|c| c.frame < frame)
-        {
+        while self.replay.front().is_some_and(|c| c.frame < frame) {
             self.replay.pop_front();
         }
-        let replay_value = if self
-            .replay
-            .front()
-            .is_some_and(|c| c.frame == frame)
-        {
+        let replay_value = if self.replay.front().is_some_and(|c| c.frame == frame) {
             self.replay.pop_front().map(|c| c.value)
         } else {
             None

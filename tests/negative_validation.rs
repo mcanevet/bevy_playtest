@@ -1,8 +1,9 @@
 //! Negative-path test battery: everything here MUST be rejected at load
 //! or fail loudly at runtime. These encode the "never a vacuous pass"
 //! doctrine at the schema boundary: any knob that would be silently
-//! ignored must instead reject with NotImplemented/Rejected.
-//!
+//! ignored must instead reject — unknown fields fail at parse time
+//! (`deny_unknown_fields`), unimplemented-but-planned semantics fail at
+//! validation time with NotImplemented.
 
 use bevy_playtest::scenario::{validate_scenario, Scenario, ScenarioError};
 
@@ -23,7 +24,7 @@ fn parse(json: serde_json::Value) -> Scenario {
 
 /// Bogus key names in a chaos scenario's raw_surface must be rejected —
 /// otherwise the bot silently presses nothing and the run passes
-/// vacuously (undocumented contract).
+/// vacuously.
 #[test]
 fn rejects_invalid_chaos_keys() {
     let mut json = minimal_scenario("chaos");
@@ -36,7 +37,7 @@ fn rejects_invalid_chaos_keys() {
 }
 
 /// A chaos bot with an empty key surface can do nothing; it must reject
-/// rather than produce a vacuous pass (C1 adjacent).
+/// rather than produce a vacuous pass.
 #[test]
 fn rejects_empty_chaos_keys() {
     let mut json = minimal_scenario("chaos");
@@ -48,62 +49,51 @@ fn rejects_empty_chaos_keys() {
     );
 }
 
-/// Mouse/gamepad/wheel surface declarations are parsed but never read
-/// by the chaos bot; they must reject as NotImplemented instead of
-/// silently yielding a keyboard-only bot (C2).
+// ---------------------------------------------------------------------------
+// Removed bot fields: reject at parse time (deny_unknown_fields)
+// ---------------------------------------------------------------------------
+
+/// Fields that once parsed (persona, actuator, inputs, agent targeting,
+/// mouse/gamepad surface knobs) have been removed from the schema until
+/// implemented. Any of them in scenario JSON must fail deserialization
+/// with a serde unknown-field error naming the offender — never parse
+/// successfully and be silently dropped.
 #[test]
-fn rejects_unimplemented_surface_kinds() {
+fn removed_bot_fields_reject_at_parse_time() {
+    for (field, value) in [
+        ("persona", serde_json::json!("aggressive")),
+        ("actuator", serde_json::json!("intents")),
+        ("agent_target", serde_json::json!("Player")),
+        ("target", serde_json::json!("Boss")),
+        (
+            "inputs",
+            serde_json::json!([{"frame": 0, "intent": {"intent": "move", "dir": [0.0, 1.0]}}]),
+        ),
+    ] {
+        let mut json = minimal_scenario("chaos");
+        json["bot"][field] = value;
+        let err =
+            serde_json::from_value::<Scenario>(json).expect_err("removed bot field must not parse");
+        assert!(
+            err.to_string().contains(field),
+            "serde error must name the removed field '{field}': {err}"
+        );
+    }
+}
+
+/// Mouse/gamepad surface knobs are removed from RawSurface: declaring
+/// them must fail at parse time, not yield a silently keyboard-only bot.
+#[test]
+fn removed_surface_kinds_reject_at_parse_time() {
     for field in ["mouse_buttons", "mouse_motion", "wheel", "gamepad"] {
         let mut json = minimal_scenario("chaos");
         json["bot"]["raw_surface"] = serde_json::json!({ field: true });
-        let s = parse(json);
-        match validate_scenario(&s) {
-            Err(ScenarioError::NotImplemented(msg)) => {
-                assert!(msg.contains(field), "{msg}")
-            }
-            other => panic!("expected NotImplemented for raw_surface.{field}, got {other:?}"),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Accepted-but-unconsumed bot fields
-// ---------------------------------------------------------------------------
-
-/// `persona` parses but nothing consumes it (C2).
-#[test]
-fn rejects_unimplemented_persona() {
-    let mut json = minimal_scenario("chaos");
-    json["bot"]["persona"] = serde_json::json!("aggressive");
-    let s = parse(json);
-    match validate_scenario(&s) {
-        Err(ScenarioError::NotImplemented(msg)) => assert!(msg.contains("persona"), "{msg}"),
-        other => panic!("expected NotImplemented for persona, got {other:?}"),
-    }
-}
-
-/// `actuator` validates then is completely ignored (C2).
-#[test]
-fn rejects_unimplemented_actuator() {
-    let mut json = minimal_scenario("chaos");
-    json["bot"]["actuator"] = serde_json::json!("intents");
-    let s = parse(json);
-    match validate_scenario(&s) {
-        Err(ScenarioError::NotImplemented(msg)) => assert!(msg.contains("actuator"), "{msg}"),
-        other => panic!("expected NotImplemented for actuator, got {other:?}"),
-    }
-}
-
-/// Populated `inputs` on a chaos bot is silently ignored today (C2).
-#[test]
-fn rejects_inputs_on_chaos_bot() {
-    let mut json = minimal_scenario("chaos");
-    json["bot"]["inputs"] =
-        serde_json::json!([{ "frame": 0, "intent": { "intent": "move", "dir": [0.0, 1.0] } }]);
-    let s = parse(json);
-    match validate_scenario(&s) {
-        Err(ScenarioError::Rejected(_)) | Err(ScenarioError::NotImplemented(_)) => {}
-        other => panic!("expected rejection for chaos bot inputs, got {other:?}"),
+        let err = serde_json::from_value::<Scenario>(json)
+            .expect_err("removed surface knob must not parse");
+        assert!(
+            err.to_string().contains(field),
+            "serde error must name the removed knob '{field}': {err}"
+        );
     }
 }
 
@@ -113,8 +103,7 @@ fn rejects_inputs_on_chaos_bot() {
 
 /// Cheats currently all fire pre-run; a nonzero `frame` claims scheduled
 /// execution that doesn't exist. Until scheduling is implemented, a
-/// nonzero frame must reject (review finding: how-to.md previously
-/// documented scheduled cheats that never were).
+/// nonzero frame must reject.
 #[test]
 fn rejects_nonzero_cheat_frame() {
     let mut json = minimal_scenario("chaos");
@@ -129,12 +118,12 @@ fn rejects_nonzero_cheat_frame() {
 }
 
 // ---------------------------------------------------------------------------
-// Oracle selection (M14)
+// Oracle selection
 // ---------------------------------------------------------------------------
 
-/// `"oracles": []` currently parses to "run all" — the same meaning as
-/// `None`. A user writing `[]` almost certainly intends "none", which is
-/// not implemented. Until it is, the empty list must reject.
+/// `"oracles": []` parses to "run all" — the same meaning as `None`. A
+/// user writing `[]` almost certainly intends "none", which is not
+/// implemented. Until it is, the empty list must reject.
 #[test]
 fn rejects_empty_oracles_list() {
     let mut json = minimal_scenario("chaos");

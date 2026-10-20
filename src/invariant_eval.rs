@@ -54,12 +54,8 @@ fn evaluate_bounds(
             // v0.1: no Name lookup (deferred); skip filtering.
         }
         let t = transform.translation;
-        let out = t.x < min_x
-            || t.x > max_x
-            || t.y < min_y
-            || t.y > max_y
-            || t.z < min_z
-            || t.z > max_z;
+        let out =
+            t.x < min_x || t.x > max_x || t.y < min_y || t.y > max_y || t.z < min_z || t.z > max_z;
         if out {
             violations.0.report(
                 inv.rule.to_string().as_str(),

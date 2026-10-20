@@ -13,7 +13,10 @@ Public API surface for integrators.
     "input_rate_hz": number,      // default 10
     "key_presses": [              // required for synthetic_keyboard
       { "frame": number, "key": "string", "hold_frames": number }
-    ]
+    ],
+    "raw_surface": {              // optional, chaos only
+      "keys": ["KeyW", "ArrowLeft"]
+    }
   },
   "tps": number,                  // default 60
   "simulated_time": boolean,      // default true
@@ -28,6 +31,8 @@ Public API surface for integrators.
       "max_x": number,
       "min_y": number,
       "max_y": number,
+      "min_z": number,
+      "max_z": number,
       "targets": ["string"]       // empty = all Gameplay entities
     }
   ],
@@ -44,14 +49,20 @@ Public API surface for integrators.
 ```
 
 Rejected at load: `custom` invariants, `eventually` mode, target filters,
-time windows — `NotImplemented` error. Invalid values (non-finite
-durations, broken bounds, typo'd key names) are rejected with specific
-errors.
+time windows, nonzero cheat `frame`s — `NotImplemented` error. Invalid
+values (non-finite durations, broken bounds, typo'd or empty key
+lists) are rejected with specific errors.
+
+Unknown fields (including once-documented-in-planning fields like
+`persona`, `actuator`, `inputs`, `agent_target`, or mouse/gamepad
+surface knobs — none of which are implemented) fail deserialization
+with a serde unknown-field error naming the offender.
 
 ## Invariants
 
 - `nodes_in_bounds`: per-entity AABB check on `Gameplay`-tagged entities;
-  bounds are per-axis (`min_x`/`max_x`/`min_y`/`max_y`), each defaulting
+  bounds are per-axis (`min_x`/`max_x`/`min_y`/`max_y`/`min_z`/`max_z`),
+  each defaulting
   to ±1000 when unset. Additionally, a hard-coded global bounds check
   (±1000 on x/y/z) runs on all entities regardless of invariants or
   tagging — stray geometry will trip it even with zero invariants declared.

@@ -186,7 +186,7 @@ async fn run_brp_inner(
     let mut recorded_choices = Vec::new();
     let mut input_count = 0u64;
     let mut remote_rows_seen: u64 = 0;
-    /// Frame index of the last observed world change (for liveness).
+    // Frame index of the last observed world change (for liveness).
     let mut last_change_frame: u64 = 0;
     let mut last_positions: std::collections::HashMap<String, (f64, f64)> =
         std::collections::HashMap::new();
@@ -246,7 +246,9 @@ async fn run_brp_inner(
                 value: idx,
                 bound,
             });
-            let Some(&key) = keys.get(idx as usize) else { continue };
+            let Some(&key) = keys.get(idx as usize) else {
+                continue;
+            };
             input_count += 1;
             send_key(&client, key, "Pressed", frame, &mut violations).await;
             held.push((key, frame + hold_frames));
@@ -369,8 +371,7 @@ async fn run_brp_inner(
         // stderr" — healthy Bevy games print asset/adapter noise. Attach
         // the stderr tail only when the run actually failed, as a
         // diagnostic.
-        error: (status != PlaytestStatus::Pass)
-            .then(|| truncate_chars(&stderr, 2000)),
+        error: (status != PlaytestStatus::Pass).then(|| truncate_chars(&stderr, 2000)),
         action_log: vec![],
         game_version: None,
         cheat_count: 0,
@@ -555,4 +556,3 @@ fn evaluate_remote_transforms(
 fn count_rows(result: &Value) -> u64 {
     result.as_array().map(|r| r.len() as u64).unwrap_or(0)
 }
-
