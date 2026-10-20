@@ -51,6 +51,11 @@ name = "takeover_demo_stock"
 path = "src/bin/takeover_demo_stock.rs"
 required-features = ["takeover"]
 
+[[bin]]
+name = "takeover_demo_nondet"
+path = "src/bin/takeover_demo_nondet.rs"
+required-features = ["takeover"]
+
 [features]
 default = ["in-process"]
 in-process = []

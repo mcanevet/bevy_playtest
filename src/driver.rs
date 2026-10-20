@@ -378,6 +378,43 @@ pub struct FrameTimingStats {
     pub anomalies: u64,
 }
 
+fn pretty_cmp(cmp: crate::scenario::CountCmp) -> &'static str {
+    match cmp {
+        crate::scenario::CountCmp::Lt => "fewer",
+        crate::scenario::CountCmp::Gt => "more",
+        crate::scenario::CountCmp::Eq => "equal",
+    }
+}
+
+fn normalize_digits(msg: &str) -> String {
+    let mut out = String::with_capacity(msg.len());
+    let mut prev_digit = false;
+    for c in msg.chars() {
+        if c.is_ascii_digit() {
+            if !prev_digit {
+                out.push('#');
+            }
+            prev_digit = true;
+        } else {
+            out.push(c);
+            prev_digit = false;
+        }
+    }
+    out
+}
+
+fn transform_entity_count(world: &mut bevy_ecs::prelude::World) -> usize {
+    world
+        .query_filtered::<(), bevy_ecs::query::With<bevy_transform::prelude::Transform>>()
+        .iter(world)
+        .count()
+}
+
+/// Run condition: fingerprint only when the scenario opted in.
+fn verify_replay_enabled(scenario: Res<ScenarioResource>) -> bool {
+    scenario.0.verify_replay
+}
+
 impl FrameTimingStats {
     pub fn observe(&mut self, value: f64) {
         self.count += 1;
@@ -539,6 +576,13 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
                 .remove_resource::<CheatHooks>()
                 .unwrap_or_default();
             for cheat in &scenario.setup.cheats {
+                // Postcondition contract: entity count before the hook
+                // vs after, evaluated immediately — catches silent
+                // no-op hooks (the anti-lying-oracle).
+                let pre_count = cheat
+                    .expects
+                    .as_ref()
+                    .map(|_| transform_entity_count(app.world_mut()));
                 if let Some(hook) = hooks.0.get(&cheat.kind) {
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         hook(app.world_mut());
@@ -555,6 +599,39 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
                             );
                         }
                     });
+                }
+                if let Some(expected) = &cheat.expects {
+                    let post_count = transform_entity_count(app.world_mut());
+                    let ok = match expected.transform_entity_count {
+                        crate::scenario::CountCmp::Lt => {
+                            post_count < pre_count.unwrap_or(post_count)
+                        }
+                        crate::scenario::CountCmp::Gt => {
+                            post_count > pre_count.unwrap_or(post_count)
+                        }
+                        crate::scenario::CountCmp::Eq => {
+                            post_count == pre_count.unwrap_or(post_count)
+                        }
+                    };
+                    if !ok {
+                        if let Some(mut violations) =
+                            app.world_mut().get_resource_mut::<RunViolations>()
+                        {
+                            violations.0.report(
+                                rules::Rule::CheatContractViolated.name(),
+                                &cheat.kind,
+                                format!(
+                                    "cheat '{}' postcondition violated: transform entity                                      count was {}, expected {} after the hook ran ({} -> {}) —                                      the hook may be a silent no-op",
+                                    cheat.kind,
+                                    pretty_cmp(expected.transform_entity_count),
+                                    pre_count.unwrap_or(post_count),
+                                    pre_count.unwrap_or(post_count),
+                                    post_count
+                                ),
+                                0,
+                            );
+                        }
+                    }
                 }
             }
             app.insert_resource(hooks);
@@ -595,6 +672,9 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     app.insert_resource(crate::invariant_eval::ScenarioInvariants(
         scenario.invariants.clone(),
     ));
+    if scenario.verify_replay {
+        app.insert_resource(crate::replay::ReplaySeries::default());
+    }
 
     app.add_systems(
         Update,
@@ -606,6 +686,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             crate::invariant_eval::evaluate_invariants_system,
             crate::oracles::nan_oracle_system,
             crate::oracles::bounds_oracle_system,
+            crate::replay::fingerprint_system.run_if(verify_replay_enabled),
         ),
     );
 
@@ -642,11 +723,25 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         .map(|v| v.0)
         .unwrap_or_default();
 
+    let drained = sinks::drain();
+    let observed_info = sinks::drain_observed_info();
+    // Coverage v1: log-based observation. A declared observation is
+    // "observed" when any captured log/panic message contains the
+    // declared name (digit-normalized on both sides per the sinks
+    // dedup convention). Observation is opt-in by logging convention.
+    let normalized_messages: Vec<String> = drained
+        .iter()
+        .map(|c| match c {
+            sinks::Captured::Log { message, .. } => normalize_digits(message),
+            sinks::Captured::Panic { message, .. } => normalize_digits(message),
+        })
+        .chain(observed_info.iter().map(|m| normalize_digits(m)))
+        .collect();
     let mut snap = violations.snapshot();
     // Z7: drain panics/logs captured during the run (including the one
     // that unwound the loop itself) and merge into the snapshot.
     snap.extend(sinks::to_violation_entries(
-        sinks::drain(),
+        drained,
         scenario.strict_warnings,
     ));
     snap.sort_by(|a, b| {
@@ -710,11 +805,81 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         })
         .collect();
 
+    // Coverage: declared observations (log-based) + chaos surface exercise.
+    let coverage = if !scenario.observes.is_empty() || scenario.bot.raw_surface.is_some() {
+        let fallback = ["KeyW", "KeyA", "KeyS", "KeyD"];
+        let declared_keys: Vec<&str> = match &scenario.bot.raw_surface {
+            Some(s) => s.keys.iter().map(String::as_str).collect(),
+            _ => fallback.to_vec(),
+        };
+        let drawn_keys: std::collections::HashSet<String> = choices
+            .iter()
+            .filter_map(|c| {
+                let idx = c.bound as usize;
+                if idx < declared_keys.len() {
+                    Some(crate::scenario::normalize_key_name(declared_keys[idx])?.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let unexercised: Vec<String> = declared_keys
+            .iter()
+            .filter(|k| {
+                let norm = crate::scenario::normalize_key_name(k);
+                norm.is_none() || !drawn_keys.contains(norm.unwrap())
+            })
+            .map(|k| k.to_string())
+            .collect();
+        let surface_coverage = if declared_keys.is_empty() {
+            1.0
+        } else {
+            (declared_keys.len() - unexercised.len()) as f32 / declared_keys.len() as f32
+        };
+        let mut observations: Vec<crate::state::ObservationRecord> = scenario
+            .observes
+            .iter()
+            .map(|name| {
+                let norm_name = normalize_digits(name);
+                let observed = normalized_messages.iter().any(|m| m.contains(&norm_name));
+                crate::state::ObservationRecord {
+                    name: name.clone(),
+                    observed,
+                }
+            })
+            .collect();
+        observations.sort_by(|a, b| a.name.cmp(&b.name));
+        let holes = observations.iter().filter(|o| !o.observed).count();
+        if scenario.strict_coverage && holes > 0 {
+            snap.push(crate::state::ViolationEntry {
+                rule: crate::rules::Rule::CoverageHole.name().to_string(),
+                target: "coverage".to_string(),
+                first_frame: 0,
+                last_frame: state.frame,
+                count: holes as u64,
+                detail: format!(
+                    "{} declared observation(s) were never observed by any mechanism;                      declare logging for these events or wire a hook",
+                    holes
+                ),
+                last_detail: "unobserved declarations".to_string(),
+            });
+            status = PlaytestStatus::Fail;
+        }
+        Some(crate::state::Coverage {
+            observations,
+            unexercised_keys: unexercised,
+            surface_coverage,
+        })
+    } else {
+        None
+    };
+
     Ok(PlaytestReport {
         schema_version: 1,
         status,
         violations: snap,
         metrics,
+        coverage,
         frame_count: state.frame,
         tps: state.tps,
         simulated_duration_s: state.frame as f64 / state.tps as f64,

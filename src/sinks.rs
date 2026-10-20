@@ -28,6 +28,13 @@ pub enum Captured {
 }
 
 thread_local! {
+    /// INFO-level messages seen while capture is active: observation
+    /// fuel for declared coverage. Kept separate from the violation
+    /// sink — INFO never gates a run.
+    static OBSERVED_INFO: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+thread_local! {
     static SINK: RefCell<Vec<Captured>> = const { RefCell::new(Vec::new()) };
     static CAPTURE_ACTIVE: RefCell<bool> = const { RefCell::new(false) };
     static CURRENT_FRAME: RefCell<u64> = const { RefCell::new(0) };
@@ -87,6 +94,17 @@ where
             return;
         }
         let level = *event.metadata().level();
+        // Coverage observation needs INFO messages too (declared
+        // observations often surface as info logs). They never become
+        // violations — only observation fuel.
+        if level == tracing::Level::INFO {
+            let mut visitor = MessageVisitor(String::new());
+            event.record(&mut visitor);
+            if !visitor.0.is_empty() {
+                OBSERVED_INFO.with(|s| s.borrow_mut().push(visitor.0));
+            }
+            return;
+        }
         if !matches!(level, tracing::Level::WARN | tracing::Level::ERROR) {
             return;
         }
@@ -168,6 +186,12 @@ pub fn set_current_frame(frame: u64) {
 
 pub fn current_frame() -> u64 {
     CURRENT_FRAME.with(|f| *f.borrow())
+}
+
+/// Drain captured INFO messages (observation fuel). Called by the
+/// driver alongside `drain`.
+pub fn drain_observed_info() -> Vec<String> {
+    OBSERVED_INFO.with(|s| std::mem::take(&mut *s.borrow_mut()))
 }
 
 /// Drain all captured events (consumes them).

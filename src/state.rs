@@ -97,6 +97,25 @@ pub struct ActionEntry {
     pub details: Option<String>,
 }
 
+/// Behavioral coverage for a run: declared observations and the
+/// harness's own action-surface exercise.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Coverage {
+    /// Per declared observation: observed (by any mechanism) or hole.
+    pub observations: Vec<ObservationRecord>,
+    /// Chaos-surface keys never drawn this run.
+    pub unexercised_keys: Vec<String>,
+    /// Fraction of declared surface keys drawn at least once.
+    pub surface_coverage: f32,
+}
+
+/// One declared observation and whether any mechanism saw it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ObservationRecord {
+    pub name: String,
+    pub observed: bool,
+}
+
 /// Playtest report (v0.1).
 #[derive(Clone, Debug, Serialize)]
 pub struct PlaytestReport {
@@ -127,6 +146,10 @@ pub struct PlaytestReport {
     /// in-process runs (inherently full parity).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub brp_parity: Option<String>,
+    /// Behavioral coverage. Absent when the scenario declared neither
+    /// observations nor a chaos surface to exercise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<Coverage>,
 }
 
 impl PlaytestReport {
@@ -148,6 +171,7 @@ impl PlaytestReport {
             scenario_source: None,
             reset_hooks_registered: None,
             brp_parity: None,
+            coverage: None,
         }
     }
 

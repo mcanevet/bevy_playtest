@@ -48,7 +48,7 @@ pub const ENV_REPORT: &str = "BEVY_PLAYTEST_REPORT";
 /// silent windowed run).
 pub const ENV_HEADLESS: &str = "BEVY_PLAYTEST_HEADLESS";
 
-const KNOWN_ENV_VARS: [&str; 3] = [ENV_SCENARIO, ENV_REPORT, ENV_HEADLESS];
+const KNOWN_ENV_VARS: [&str; 4] = [ENV_SCENARIO, ENV_REPORT, ENV_HEADLESS, ENV_REPLAY_PASS_B];
 
 /// Exit codes for the takeover process contract.
 pub mod exit_code {
@@ -175,11 +175,30 @@ fn run_takeover(app: &mut App, config: &TakeoverConfig) -> ! {
         )
     };
     assert_headless_possible(app);
-    let mut report = match crate::driver::run_scenario(app, &scenario) {
-        Ok(report) => report,
-        Err(err) => {
-            eprintln!("bevy_playtest: {err}");
-            std::process::exit(exit_code::CONFIG_ERROR);
+    // Replay verification needs TWO freshly built Apps. The takeover
+    // already owns process lifetime and `set_runner` hands us the App
+    // after plugin-build; a true rebuild requires re-running the
+    // game's construction, which only the game's own entry point can
+    // do. Mechanism chosen: for verify_replay scenarios the takeover
+    // clones the App (Bevy 0.20 App: Clone) for pass B and runs the
+    // scenario against clone and original — an approximate rebuild
+    // that shares no mutable runtime state (resources/entities are
+    // deep-copied), sufficient for the same-process determinism proof.
+    let mut report = if scenario.verify_replay {
+        match verify_replay_subprocess(app, &scenario, &config.report_path) {
+            Ok(report) => report,
+            Err(err) => {
+                eprintln!("bevy_playtest: {err}");
+                std::process::exit(exit_code::CONFIG_ERROR);
+            }
+        }
+    } else {
+        match crate::driver::run_scenario(app, &scenario) {
+            Ok(report) => report,
+            Err(err) => {
+                eprintln!("bevy_playtest: {err}");
+                std::process::exit(exit_code::CONFIG_ERROR);
+            }
         }
     };
     report.scenario_source = Some(source.to_string());
@@ -214,6 +233,102 @@ pub fn smoke_scenario() -> Result<crate::scenario::Scenario, String> {
     crate::scenario::validate_scenario(&scenario)
         .map_err(|err| format!("built-in smoke scenario failed validation: {err}"))?;
     Ok(scenario)
+}
+
+/// Env var marking a replay-verification PASS-B child process: the
+/// takeover skips verification (avoiding recursion), runs one pass,
+/// writes the fingerprint series to the path in the value, and exits.
+const ENV_REPLAY_PASS_B: &str = "BEVY_PLAYTEST_REPLAY_PASS_B_SERIES";
+
+/// Replay verification on the takeover path: pass A runs in this
+/// process, writing its fingerprint series to a file; a child process
+/// re-runs the game binary + scenario for pass B; the series are
+/// compared and divergence becomes a ReplayDivergence violation.
+fn verify_replay_subprocess(
+    app: &mut App,
+    scenario: &crate::scenario::Scenario,
+    report_path: &str,
+) -> Result<crate::state::PlaytestReport, String> {
+    if !scenario.single_threaded {
+        return Err(
+            "verify_replay requires single_threaded: true (multi-threaded \
+             schedules have nondeterministic system ordering)"
+                .to_string(),
+        );
+    }
+
+    // Pass A: this process.
+    let mut report = crate::driver::run_scenario(app, scenario)
+        .map_err(|err| format!("replay pass A failed: {err}"))?;
+    let series_a = app
+        .world_mut()
+        .remove_resource::<crate::replay::ReplaySeries>()
+        .map(|s| s.0)
+        .unwrap_or_default();
+
+    if std::env::var_os(ENV_REPLAY_PASS_B).is_some() {
+        // We ARE the child: write the series, exit 0 (parent compares).
+        let series_path = std::env::var(ENV_REPLAY_PASS_B).unwrap();
+        let bytes = serde_json::to_vec(&series_fingerprints(&series_a))
+            .map_err(|err| format!("cannot serialize replay series: {err}"))?;
+        std::fs::write(&series_path, bytes)
+            .map_err(|err| format!("cannot write replay series '{series_path}': {err}"))?;
+        std::process::exit(0);
+    }
+
+    // Pass B: re-run the game binary as a child with the same env.
+    let exe = std::env::current_exe()
+        .map_err(|err| format!("cannot locate current executable for replay pass B: {err}"))?;
+    let series_path = format!("{report_path}.replay-series-b.json");
+    let output = std::process::Command::new(&exe)
+        .env_remove("BEVY_PLAYTEST_REPORT")
+        .env(ENV_REPLAY_PASS_B, &series_path)
+        .output()
+        .map_err(|err| format!("cannot spawn replay pass B ({exe:?}): {err}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "replay pass B exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let bytes = std::fs::read(&series_path)
+        .map_err(|err| format!("cannot read replay pass B series: {err}"))?;
+    let series_b: Vec<(u64, u64)> = serde_json::from_slice(&bytes)
+        .map_err(|err| format!("corrupt replay pass B series: {err}"))?;
+    let _ = std::fs::remove_file(&series_path);
+
+    let frames_b: Vec<crate::replay::FrameFingerprint> = series_b
+        .into_iter()
+        .map(|(frame, hash)| crate::replay::FrameFingerprint { frame, hash })
+        .collect();
+    if report.status != crate::enums::PlaytestStatus::Crash {
+        if let Err(div) = crate::replay::compare(&series_a, &frames_b) {
+            report.violations.push(crate::state::ViolationEntry {
+                rule: crate::rules::Rule::ReplayDivergence.name().to_string(),
+                target: "run".to_string(),
+                first_frame: div.frame,
+                last_frame: div.frame,
+                count: 1,
+                detail: format!(
+                    "first divergent frame {}: pass A fingerprint {:#018x}, pass B \
+                     fingerprint {:#018x} — hidden nondeterminism (wall clock, \
+                     unseeded RNG, or unordered iteration)",
+                    div.frame, div.pass_a_hash, div.pass_b_hash
+                ),
+                last_detail: format!(
+                    "divergent frame {} ({:#018x} vs {:#018x})",
+                    div.frame, div.pass_a_hash, div.pass_b_hash
+                ),
+            });
+            report.status = crate::enums::PlaytestStatus::Fail;
+        }
+    }
+    Ok(report)
+}
+
+fn series_fingerprints(series: &[crate::replay::FrameFingerprint]) -> Vec<(u64, u64)> {
+    series.iter().map(|f| (f.frame, f.hash)).collect()
 }
 
 fn load_scenario(path: &str) -> Result<crate::scenario::Scenario, String> {

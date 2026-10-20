@@ -75,6 +75,23 @@ pub struct Scenario {
     /// Liveness configuration (default 2s timeout, real-time mode).
     #[serde(default)]
     pub liveness: LivenessConfig,
+    /// Replay-divergence verification: run the scenario twice against
+    /// freshly built Apps and compare per-frame fingerprints. Default
+    /// false. In-process only — BRP mode rejects it (wall-clock pacing
+    /// makes honest replay verification impossible there).
+    #[serde(default)]
+    pub verify_replay: bool,
+    /// Declared behavioral observations for coverage: free-form event
+    /// names. The report records, per name, whether any mechanism
+    /// observed it this run (v1 mechanism: digit-normalized log
+    /// messages — observation is opt-in by logging convention).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub observes: Vec<String>,
+    /// Make any coverage hole a Fail instead of a report-only note.
+    /// Doctrine-safe: the declares are explicit, so an unobserved
+    /// event is user-visible truth, not silence.
+    #[serde(default)]
+    pub strict_coverage: bool,
 }
 
 /// Bot configuration.
@@ -234,6 +251,35 @@ pub struct ResetCall {
 pub struct CheatCall {
     pub frame: u64,
     pub kind: String,
+    /// Postcondition contract: entity-count comparison against the
+    /// pre-hook value, evaluated after the hook runs. Catches silently
+    /// no-op hooks. v1 is statistical (counts), not semantic — value
+    /// contracts are roadmapped behind reflection wiring.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expects: Option<CheatExpectation>,
+}
+
+/// Declarative postcondition on a cheat/reset hook. v1: the world's
+/// transform-entity count after the hook, compared to the count
+/// before it ran.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CheatExpectation {
+    /// Comparison applied to the transform-entity count.
+    pub transform_entity_count: CountCmp,
+}
+
+/// Count comparison ops for cheat postconditions.
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CountCmp {
+    /// Fewer entities than before (a reset that rebuilt the world).
+    Lt,
+    /// More entities than before.
+    Gt,
+    /// Exactly the same count. Asserts stability; a no-op hook also
+    /// satisfies this — use it deliberately.
+    Eq,
 }
 
 // ---------------------------------------------------------------------------

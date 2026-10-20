@@ -381,3 +381,71 @@ fn gameplay_selector_on_stock_game_fires_vacuous_invariant() {
         "violation must suggest the all selector: {detail}"
     );
 }
+
+#[test]
+fn replay_verification_passes_on_deterministic_stock_game() {
+    let stock = PathBuf::from(env!("CARGO_BIN_EXE_takeover_demo_stock"));
+    let dir = unique_dir("replay_ok");
+    let scenario_path = dir.join("scenario.json");
+    let report_path = dir.join("report.json");
+    std::fs::write(
+        &scenario_path,
+        r#"{"bot":{"type":"chaos","seed":42},"duration_s":0.05,"tps":60,
+            "verify_replay":true}"#,
+    )
+    .unwrap();
+    let out = Command::new(&stock)
+        .env(ENV_SCENARIO, &scenario_path)
+        .env(ENV_REPORT, &report_path)
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(exit_code::PASS),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
+    assert_eq!(report["status"], "pass", "{report}");
+}
+
+#[test]
+fn replay_divergence_fails_on_nondeterministic_stock_game() {
+    let nondet = PathBuf::from(env!("CARGO_BIN_EXE_takeover_demo_nondet"));
+    let dir = unique_dir("replay_div");
+    let scenario_path = dir.join("scenario.json");
+    let report_path = dir.join("report.json");
+    std::fs::write(
+        &scenario_path,
+        r#"{"bot":{"type":"chaos","seed":42},"duration_s":0.05,"tps":60,
+            "verify_replay":true}"#,
+    )
+    .unwrap();
+    let out = Command::new(&nondet)
+        .env(ENV_SCENARIO, &scenario_path)
+        .env(ENV_REPORT, &report_path)
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(exit_code::FAIL),
+        "wall-clock nondeterminism must fail: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
+    assert_eq!(report["status"], "fail", "{report}");
+    let rules: Vec<&str> = report["violations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["rule"].as_str().unwrap())
+        .collect();
+    assert!(
+        rules.contains(&"replay_divergence"),
+        "expected replay_divergence among {rules:?}"
+    );
+}

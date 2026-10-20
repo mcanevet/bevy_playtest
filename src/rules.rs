@@ -57,6 +57,9 @@ impl Rule {
             Self::ResetHookPanicked => "The game's ResetHooks handler panicked.",
             Self::CheatHookPanicked => "The game's CheatHooks handler panicked.",
             Self::VacuousRun => "Nothing was ever observable: no entities to check and no inputs emitted — the run proves nothing about the game.",
+            Self::ReplayDivergence => "Same scenario + seed run twice must produce identical per-frame fingerprints; divergence means hidden nondeterminism (wall clock, unseeded RNG, unordered iteration).",
+            Self::CheatContractViolated => "A cheat/reset hook's declared postcondition did not hold — the hook may be a silent no-op.",
+            Self::CoverageHole => "A declared observation was never observed by any mechanism this run.",
             Self::OracleError => "An oracle itself errored while evaluating (infrastructure failure, not a game bug).",
             Self::ScenarioError => "The scenario itself failed (rejected config) rather than the game misbehaving.",
         }
@@ -85,6 +88,11 @@ declare_rules! {
 
     // Vacuity guard: a run where nothing was ever observable.
     VacuousRun => "vacuous_run",
+
+    // Verification depth (round 4)
+    ReplayDivergence => "replay_divergence",
+    CheatContractViolated => "cheat_contract_violated",
+    CoverageHole => "coverage_hole",
 
     // Infrastructure errors (producible; oracle_error only in BRP tier)
     OracleError => "oracle_error",

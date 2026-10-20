@@ -133,6 +133,16 @@ pub fn run_scenario_brp(
             "external-BRP mode supports only the chaos bot in v0.1".to_string(),
         ));
     }
+    // Wall-clock pacing across processes makes honest replay verification
+    // impossible in BRP mode — the report must never claim it.
+    if scenario.verify_replay {
+        return Err(ScenarioError::NotImplemented(
+            "verify_replay is not supported in external-BRP mode: wall-clock \
+             pacing between processes makes honest replay verification \
+             impossible; use the in-process driver for determinism proof"
+                .to_string(),
+        ));
+    }
 
     // Run the async core on a dedicated executor thread.
     let cfg_owned = cfg.clone();
@@ -387,6 +397,7 @@ async fn run_brp_inner(
         scenario_source: None,
         reset_hooks_registered: None,
         brp_parity: Some(brp_parity),
+        coverage: None,
     };
     let _ = input_count;
     Ok(report)

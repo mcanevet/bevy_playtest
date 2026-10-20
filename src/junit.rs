@@ -146,6 +146,21 @@ pub fn reports_to_junit(reports: &[(String, PlaytestReport)], suite_name: &str) 
         errors,
         total_time
     ));
+    let coverage_holes: usize = reports
+        .iter()
+        .map(|(_, r)| {
+            r.coverage
+                .as_ref()
+                .map(|c| c.observations.iter().filter(|o| !o.observed).count())
+                .unwrap_or(0)
+        })
+        .sum();
+    if coverage_holes > 0 {
+        out.push_str(&format!(
+            "    <properties>\n      <property name=\"coverage_holes\" value=\"{}\"/>\n    </properties>\n",
+            coverage_holes
+        ));
+    }
     for (name, r) in reports {
         out.push_str(&r.to_junit_testcase(name, suite_name));
     }
@@ -319,5 +334,34 @@ mod tests {
         assert!(doc.contains("errors=\"0\""));
         assert_eq!(doc.matches("<testcase").count(), 2);
         assert_eq!(doc.matches("</testcase>").count(), 2);
+    }
+    #[test]
+    fn junit_suite_carries_coverage_hole_property() {
+        let mut r = pass_report();
+        r.coverage = Some(crate::state::Coverage {
+            observations: vec![
+                crate::state::ObservationRecord {
+                    name: "seen".to_string(),
+                    observed: true,
+                },
+                crate::state::ObservationRecord {
+                    name: "unseen".to_string(),
+                    observed: false,
+                },
+            ],
+            unexercised_keys: vec![],
+            surface_coverage: 1.0,
+        });
+        let xml = reports_to_junit(&[("case".to_string(), r)], "cov");
+        assert!(
+            xml.contains("<property name=\"coverage_holes\" value=\"1\"/>"),
+            "{xml}"
+        );
+    }
+
+    #[test]
+    fn junit_suite_without_coverage_has_no_property() {
+        let xml = reports_to_junit(&[("case".to_string(), pass_report())], "nc");
+        assert!(!xml.contains("coverage_holes"), "{xml}");
     }
 }

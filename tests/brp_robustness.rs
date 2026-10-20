@@ -471,3 +471,22 @@ fn brp_parity_flips_with_plugin_presence() {
     .expect("run completes");
     assert_eq!(report.brp_parity.as_deref(), Some("degraded"));
 }
+
+#[test]
+fn brp_mode_rejects_verify_replay_loudly() {
+    let bin = compile_mock("brp_mock_game");
+    let port = free_port();
+    let mut s = quick_scenario();
+    s.verify_replay = true;
+    let err = run_scenario_brp(
+        &cfg(&bin, "clean-static", port, Duration::from_secs(10)),
+        &s,
+    )
+    .expect_err("verify_replay must reject in BRP mode");
+    match err {
+        bevy_playtest::scenario::ScenarioError::NotImplemented(msg) => {
+            assert!(msg.contains("verify_replay"), "{msg}");
+        }
+        other => panic!("expected NotImplemented, got {other:?}"),
+    }
+}

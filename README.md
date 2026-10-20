@@ -106,6 +106,41 @@ fn tag_gameplay(mut commands: Commands, ball: Query<Entity, With<Ball>>) {
    ```
    Render/audio/assets still initialize; the game runs headless.
 
+### Verification depth (what is proven vs. what is asserted)
+
+Three mechanisms take a run from "asserted" to "proven":
+
+1. **Replay divergence** (`"verify_replay": true`) runs the scenario
+   twice against fresh Apps and compares per-frame fingerprints
+   (choice draws + sorted Transform translations). Divergence is a
+   `replay_divergence` Fail identifying the first divergent frame.
+   This PROVES determinism for the observable surface — it does not
+   prove absence of nondeterminism in unobserved state (components
+   without Transform). In-process only; BRP mode rejects the field
+   (wall-clock pacing makes honest verification impossible there).
+   On the takeover/plugin path, pass B re-runs your game binary as a
+   subprocess — whole-process determinism, the strongest form. NOTE:
+   `verify_replay` requires `single_threaded: true` (default).
+
+2. **Cheat postcondition contracts** (`expects` on cheat entries):
+   v1 is statistical — transform-entity count comparisons
+   (`lt`/`gt`/`eq`) against the pre-hook value, evaluated
+   immediately after the hook runs. This catches silently no-op hooks
+   (a failing contract is a `cheat_contract_violated` Fail carrying
+   both counts). Semantic contracts (resource/component VALUES) are
+   roadmapped behind reflection wiring — v1 cannot catch a hook that
+   mutates state without changing entity counts.
+
+3. **Behavioral coverage** (`observes: [...]` declarations): the
+   report records, per declared event, whether any mechanism saw it
+   this run. v1 mechanism: log-message matching (digit-normalized,
+   INFO included) — observation is opt-in by logging convention
+   (`tracing::info!("enemy_killed")`). Unobserved declarations are
+   coverage holes in the report; `"strict_coverage": true` makes
+   them Fail. Coverage also reports the fraction of the chaos
+   `raw_surface` keys actually drawn. Holes without the strict flag
+   are visible truth, not silent passes — but they don't gate.
+
 ### BRP parity matrix
 
 | Capability               | In-process | External BRP | External BRP + PlaytestBrpPlugin |
