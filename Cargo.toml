@@ -56,8 +56,13 @@ name = "takeover_demo_nondet"
 path = "src/bin/takeover_demo_nondet.rs"
 required-features = ["takeover"]
 
+[[bin]]
+name = "takeover_demo_default"
+path = "src/bin/takeover_demo_default.rs"
+required-features = ["takeover"]
+
 [features]
-default = ["in-process"]
+default = ["in-process", "takeover"]
 in-process = []
 takeover = ["in-process", "takeover-winit"]
 takeover-winit = ["takeover", "dep:bevy_winit", "dep:bevy"]

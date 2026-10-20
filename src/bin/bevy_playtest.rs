@@ -48,7 +48,9 @@ SUBCOMMANDS:
         Run the current workspace's game via `cargo run`, injecting
         BEVY_PLAYTEST_SCENARIO (and BEVY_PLAYTEST_REPORT for --report).
         The game must already add bevy_playtest::PlaytestPlugin (see the
-        crate docs for the one-line integration). `smoke` selects the
+        crate docs for the one-line integration). If <scenario-path> is
+        omitted, the CLI auto-discovers playtest.scenario.json or the
+        first alphabetically in playtests/*.json. `smoke` selects the
         built-in scenario. The child's exit code is propagated:
         0 Pass, 1 Fail, 2 Crash, 3 harness/config error.
 
@@ -140,7 +142,37 @@ struct RunArgs {
     features: Vec<String>,
 }
 
-fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
+fn discover_scenario(base: &Path) -> Result<String, String> {
+    let file = base.join("playtest.scenario.json");
+    if file.is_file() {
+        return Ok(file.display().to_string());
+    }
+    let dir = base.join("playtests");
+    if dir.is_dir() {
+        let mut matches: Vec<_> = std::fs::read_dir(&dir)
+            .map_err(|err| format!("cannot read playtests/: {err}"))?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+            .map(|e| e.path().display().to_string())
+            .collect();
+        matches.sort();
+        match matches.len() {
+            0 => {}
+            1 => return Ok(matches[0].clone()),
+            _ => {
+                return Err(usage_error(&format!(
+                    "multiple scenarios in playtests/ ({}); specify one with a positional argument",
+                    matches.join(", ")
+                )))
+            }
+        }
+    }
+    Err(usage_error(
+        "no scenario found: create playtest.scenario.json or put JSON files in playtests/",
+    ))
+}
+
+fn parse_run_args(args: &[String], base: &Path) -> Result<RunArgs, String> {
     let mut scenario: Option<String> = None;
     let mut out = RunArgs {
         scenario: String::new(),
@@ -185,12 +217,11 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
         }
         i += 1;
     }
-    let Some(scenario) = scenario else {
-        return Err(usage_error(
-            "run requires a scenario path (or the built-in 'smoke')",
-        ));
+    let resolved_scenario = match scenario {
+        Some(s) => s,
+        None => discover_scenario(base)?,
     };
-    out.scenario = scenario;
+    out.scenario = resolved_scenario;
     Ok(out)
 }
 
@@ -411,7 +442,7 @@ fn main() {
     };
     match subcommand.as_str() {
         "init" => std::process::exit(cmd_init(&args[1..], &cwd)),
-        "run" => match parse_run_args(&args[1..]) {
+        "run" => match parse_run_args(&args[1..], &cwd) {
             Ok(run) => std::process::exit(cmd_run(&run, &cwd)),
             Err(msg) => die(msg),
         },
@@ -502,17 +533,27 @@ mod tests {
 
     #[test]
     fn run_arg_parsing_contract() {
-        let run = parse_run_args(&[
-            String::from("smoke"),
-            String::from("--report"),
-            String::from("out.json"),
-        ])
+        let run = parse_run_args(
+            &[
+                String::from("smoke"),
+                String::from("--report"),
+                String::from("out.json"),
+            ],
+            &tmp_dir("legacy"),
+        )
         .unwrap();
         assert_eq!(run.scenario, "smoke");
         assert_eq!(run.report.as_deref(), Some("out.json"));
-        assert!(parse_run_args(&[]).is_err(), "run without scenario rejects");
         assert!(
-            parse_run_args(&[String::from("s.json"), String::from("--wat")]).is_err(),
+            parse_run_args(&[], &tmp_dir("legacy")).is_err(),
+            "extra positionals reject"
+        );
+        assert!(
+            parse_run_args(
+                &[String::from("s.json"), String::from("--wat")],
+                &tmp_dir("legacy")
+            )
+            .is_err(),
             "unknown run flag rejects"
         );
     }
@@ -520,6 +561,59 @@ mod tests {
         let p = dir.join(rel);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(p, text).unwrap();
+    }
+
+    #[test]
+    fn run_auto_discovers_playtest_scenario_json() {
+        let dir = tmp_dir("disc_file");
+        std::fs::write(dir.join("playtest.scenario.json"), "{}").unwrap();
+        let args = parse_run_args(&[], &dir).unwrap();
+        assert!(args.scenario.contains("playtest.scenario.json"));
+    }
+
+    #[test]
+    fn run_auto_discovers_playtests_directory_single_match() {
+        let dir = tmp_dir("disc_dir");
+        std::fs::create_dir_all(dir.join("playtests")).unwrap();
+        std::fs::write(dir.join("playtests/a.json"), "{}").unwrap();
+        let args = parse_run_args(&[], &dir).unwrap();
+        assert!(args.scenario.ends_with("a.json"), "{}", args.scenario);
+    }
+
+    #[test]
+    fn run_auto_discovery_prefers_explicit_root_file() {
+        let dir = tmp_dir("disc_pref");
+        std::fs::write(dir.join("playtest.scenario.json"), "{}").unwrap();
+        std::fs::create_dir_all(dir.join("playtests")).unwrap();
+        std::fs::write(dir.join("playtests/z.json"), "{}").unwrap();
+        let args = parse_run_args(&[], &dir).unwrap();
+        assert!(args.scenario.contains("playtest.scenario.json"));
+    }
+
+    #[test]
+    fn run_auto_discovery_multiple_matches_is_usage_error() {
+        let dir = tmp_dir("disc_amb");
+        std::fs::create_dir_all(dir.join("playtests")).unwrap();
+        std::fs::write(dir.join("playtests/a.json"), "{}").unwrap();
+        std::fs::write(dir.join("playtests/b.json"), "{}").unwrap();
+        let err = parse_run_args(&[], &dir).unwrap_err();
+        assert!(err.contains("multiple scenarios"), "{err}");
+    }
+
+    #[test]
+    fn run_auto_discovery_no_match_is_usage_error_with_hint() {
+        let dir = tmp_dir("disc_none");
+        let err = parse_run_args(&[], &dir).unwrap_err();
+        assert!(err.contains("no scenario found"), "{err}");
+        assert!(err.contains("playtest.scenario.json"), "{err}");
+    }
+
+    #[test]
+    fn run_explicit_positional_skips_discovery() {
+        let dir = tmp_dir("disc_explicit");
+        std::fs::write(dir.join("playtest.scenario.json"), "{}").unwrap();
+        let args = parse_run_args(&["mine.json".to_string()], &dir).unwrap();
+        assert_eq!(args.scenario, "mine.json");
     }
 
     #[test]
@@ -582,20 +676,26 @@ mod tests {
 
     #[test]
     fn run_features_forward_repeated_flags() {
-        let args = parse_run_args(&[
-            "s.json".to_string(),
-            "--features".to_string(),
-            "takeover".to_string(),
-            "--features".to_string(),
-            "brp-plugin".to_string(),
-        ])
+        let args = parse_run_args(
+            &[
+                "s.json".to_string(),
+                "--features".to_string(),
+                "takeover".to_string(),
+                "--features".to_string(),
+                "brp-plugin".to_string(),
+            ],
+            &tmp_dir("legacy"),
+        )
         .unwrap();
         assert_eq!(args.features, vec!["takeover", "brp-plugin"]);
     }
 
     #[test]
     fn run_features_requires_a_value() {
-        let err = parse_run_args(&["s.json".to_string(), "--features".to_string()]);
+        let err = parse_run_args(
+            &["s.json".to_string(), "--features".to_string()],
+            &tmp_dir("legacy"),
+        );
         assert!(err.is_err());
     }
 }

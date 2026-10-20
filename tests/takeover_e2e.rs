@@ -171,28 +171,28 @@ fn takeover_inert_without_env() {
 }
 
 #[test]
-fn takeover_hard_fails_on_winit() {
+fn takeover_default_plugins_headless_succeeds() {
     if !cfg!(feature = "takeover-winit") {
         return;
     }
-    let dir = unique_dir("winit");
-    let scenario_path = dir.join("scenario.json");
-    std::fs::write(
-        &scenario_path,
-        r#"{"bot":{"type":"chaos","seed":42},"duration_s":0.05,"tps":60}"#,
-    )
-    .unwrap();
+    let dir = unique_dir("winit_ok");
+    let report_path = dir.join("report.json");
     let path = PathBuf::from(env!("CARGO_BIN_EXE_takeover_demo_winit"));
     let out = Command::new(&path)
-        .env(ENV_SCENARIO, &scenario_path)
+        .env(ENV_SCENARIO, "smoke")
+        .env(ENV_REPORT, report_path.to_str().unwrap())
         .output()
-        .expect("spawn winit example");
-    assert_eq!(out.status.code(), Some(exit_code::CONFIG_ERROR));
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("WinitPlugin"),
-        "stderr must name winit: {stderr}"
+        .expect("spawn winit demo");
+    assert_eq!(
+        out.status.code(),
+        Some(exit_code::PASS),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
     );
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
+    assert_eq!(report["status"], "pass", "{report}");
 }
 
 #[test]
@@ -214,19 +214,25 @@ fn headless_env_alone_asserts_and_exits_normally() {
 }
 
 #[test]
-fn headless_env_with_winit_hard_fails() {
+fn headless_env_with_winit_works() {
     let path = PathBuf::from(env!("CARGO_BIN_EXE_takeover_demo_winit"));
+    let dir = unique_dir("headless_winit");
+    let report_path = dir.join("report.json");
     let out = Command::new(&path)
-        .env_remove(ENV_SCENARIO)
-        .env("BEVY_PLAYTEST_HEADLESS", "1")
+        .env(ENV_SCENARIO, "smoke")
+        .env(ENV_REPORT, report_path.to_str().unwrap())
         .output()
         .unwrap();
-    assert_eq!(out.status.code(), Some(exit_code::CONFIG_ERROR));
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("WinitPlugin"),
-        "stderr must name winit: {stderr}"
+    assert_eq!(
+        out.status.code(),
+        Some(exit_code::PASS),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
     );
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
+    assert_eq!(report["status"], "pass", "{report}");
 }
 
 #[test]

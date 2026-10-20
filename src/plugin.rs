@@ -348,22 +348,23 @@ fn write_report(path: &str, report: &crate::state::PlaytestReport) -> Result<(),
 fn assert_headless_possible(_app: &App) {}
 
 #[cfg(feature = "takeover-winit")]
-fn assert_headless_possible(app: &App) {
-    if app.is_plugin_added::<bevy_winit::WinitPlugin>() {
-        eprintln!(
-            "bevy_playtest: {} is set but the app contains bevy_winit::WinitPlugin; \
-             a plugin cannot remove it. Replace DefaultPlugins with \
-             bevy_playtest::plugin::PlaytestDefaultPlugins (or disable \
-             WinitPlugin yourself) so the takeover can run headless.",
-            ENV_SCENARIO
-        );
-        std::process::exit(exit_code::CONFIG_ERROR);
-    }
+fn assert_headless_possible(_app: &App) {
+    // Spike (round 5): the takeover runner replaces winit's
+    // (set_runner is last-wins; PlaytestPlugin must be added AFTER
+    // DefaultPlugins). Window creation happens inside winit_runner,
+    // which never runs — DefaultPlugins + PlaytestPlugin works
+    // headless WITHOUT the PlaytestDefaultPlugins swap. Plugin-order
+    // regressions are caught loudly by the takeover watchdog system.
 }
 
 /// `DefaultPlugins` equivalent that plays well with [`PlaytestPlugin`].
 ///
-/// - No env vars set: identical to [`DefaultPlugins`] (pure pass-through).
+/// Optional sugar: with plain `DefaultPlugins` + [`PlaytestPlugin`]
+/// (plugin added after the group) the takeover runner already replaces
+/// winit's event loop, so no window appears. This group exists for games
+/// that prefer an explicit headless plugin graph.
+///
+/// - No env vars set: identical to `bevy::DefaultPlugins` (pure pass-through).
 /// - [`ENV_SCENARIO`] or [`ENV_HEADLESS`] set: drops `WinitPlugin` and
 ///   adds `ScheduleRunnerPlugin::run_loop` so the app ticks headless.
 ///

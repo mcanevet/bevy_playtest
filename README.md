@@ -16,7 +16,7 @@ the CLI:
 
 ```rust
 app.add_plugins(bevy_playtest::PlaytestDefaultPlugins);
-app.add_plugins(bevy_playtest::PlaytestPlugin);
+app.add_plugins(bevy_playtest::PlaytestPlugin); // added AFTER DefaultPlugins
 ```
 
 ```console
@@ -31,7 +31,10 @@ with a `Transform` — zero bevy_playtest-specific code in the game.
 marked entities and **fails loudly (not vacuously)** when it matches
 zero entities, suggesting the `all` selector.)
 
-Even faster, no file at all: `bevy_playtest run smoke`.
+Even faster, no file at all: `bevy_playtest run smoke`. Or omit the
+argument entirely — the CLI auto-discovers `playtest.scenario.json` or
+the first JSON in `playtests/` (alphabetically). Multiple matches
+produce an error with a suggestion to specify one explicitly.
 
 Integration cost story vs. rivals: the plugin line is the only required
 change (rival parity); markers/hooks/`build_app()` extraction are
@@ -42,20 +45,26 @@ present, `takeover` feature enabled, plugin referenced in `src/`
 (plain-text grep — renames/re-exports/macros can hide references),
 scenario file valid. Exit 0 = ready, exit 4 = hints shown.
 
-### One-line integration (PlaytestPlugin, `takeover` feature)
+### One-line integration (PlaytestPlugin, now default)
 
 Add the plugin; when `BEVY_PLAYTEST_SCENARIO` is set, your binary becomes its
 own headless playtest runner (exit codes: 0 Pass, 1 Fail, 2 Crash, 3 config
 error). Without the env var the plugin is inert.
 
 ```toml
-bevy_playtest = { version = "...", features = ["takeover"] }
+bevy_playtest = "..."
 ```
 
 ```rust
-app.add_plugins(bevy_playtest::PlaytestDefaultPlugins); // instead of DefaultPlugins
-app.add_plugins(bevy_playtest::PlaytestPlugin);          // after the group
+app.add_plugins(DefaultPlugins);      // ordinary windowed setup — takeover still works
+app.add_plugins(bevy_playtest::PlaytestPlugin); // MUST come after plugin groups
 ```
+
+Headless is automatic: with `BEVY_PLAYTEST_SCENARIO` set, the takeover
+runner replaces winit's event loop, so no window appears — no
+`PlaytestDefaultPlugins` swap needed (it remains available as optional
+sugar). Caveat: `PlaytestPlugin` must be added AFTER `DefaultPlugins`,
+or winit's runner wins and the takeover is silently inert.
 
 Then, for a zero-config smoke test:
 

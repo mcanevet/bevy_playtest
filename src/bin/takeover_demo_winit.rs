@@ -1,12 +1,11 @@
-//! Winit-backed demo "game" for PlaytestPlugin hard-fail tests.
-//!
-//! Mounts DefaultPlugins (windowless mode) + PlaytestPlugin: with
-//! BEVY_PLAYTEST_SCENARIO set the takeover must refuse (exit 3) rather
-//! than silently run a winit loop in CI.
+//! Demo "game" proving DefaultPlugins + PlaytestPlugin runs headless
+//! when BEVY_PLAYTEST_SCENARIO is set — the takeover runner replaces
+//! winit's event loop, so no window ever appears.
 #[cfg(feature = "takeover-winit")]
 fn main() {
     use bevy_app::prelude::*;
     use bevy_playtest::PlaytestPlugin;
+    use bevy_transform::prelude::*;
 
     let mut app = App::new();
     app.add_plugins(bevy::DefaultPlugins.set(bevy::window::WindowPlugin {
@@ -16,6 +15,15 @@ fn main() {
         close_when_requested: true,
     }));
     app.add_plugins(PlaytestPlugin);
+    // A moving Transform so the frozen-world liveness oracle stays happy.
+    app.add_systems(Startup, |mut commands: bevy_ecs::prelude::Commands| {
+        commands.spawn(Transform::from_xyz(0.0, 0.0, 0.0));
+    });
+    app.add_systems(Update, |mut q: bevy_ecs::prelude::Query<&mut Transform>| {
+        for mut t in q.iter_mut() {
+            t.translation.x += 0.05;
+        }
+    });
     app.run();
 }
 
