@@ -196,6 +196,35 @@ fn takeover_default_plugins_headless_succeeds() {
 }
 
 #[test]
+fn headless_env_with_winit_hard_fails() {
+    // Doc contract: BEVY_PLAYTEST_HEADLESS alone (no scenario, so no
+    // runner swap) must refuse loudly (exit 3) if WinitPlugin is
+    // present — a window would open otherwise.
+    if !cfg!(feature = "takeover-winit") {
+        return;
+    }
+    let path = PathBuf::from(env!("CARGO_BIN_EXE_takeover_demo_winit"));
+    let out = Command::new(&path)
+        .env_remove(ENV_SCENARIO)
+        .env_remove(ENV_REPORT)
+        .env("BEVY_PLAYTEST_HEADLESS", "1")
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(exit_code::CONFIG_ERROR),
+        "headless assert must fail loudly with winit and no scenario; stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("WinitPlugin") || stderr.contains("window"),
+        "stderr must explain the headless refusal: {stderr}"
+    );
+}
+
+#[test]
 fn headless_env_alone_asserts_and_exits_normally() {
     let dir = unique_dir("headless");
     let out = Command::new(game_binary())

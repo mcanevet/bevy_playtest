@@ -57,6 +57,7 @@ impl Rule {
             Self::ResetHookPanicked => "The game's ResetHooks handler panicked.",
             Self::CheatHookPanicked => "The game's CheatHooks handler panicked.",
             Self::VacuousRun => "Nothing was ever observable: no entities to check and no inputs emitted — the run proves nothing about the game.",
+            Self::VacuousInvariant => "A Gameplay-targeted invariant matched zero entities; the check proves nothing until entities are marked or the 'all' selector is used.",
             Self::ReplayDivergence => "Same scenario + seed run twice must produce identical per-frame fingerprints; divergence means hidden nondeterminism (wall clock, unseeded RNG, unordered iteration).",
             Self::CheatContractViolated => "A cheat/reset hook's declared postcondition did not hold — the hook may be a silent no-op.",
             Self::CoverageHole => "A declared observation was never observed by any mechanism this run.",
@@ -88,6 +89,9 @@ declare_rules! {
 
     // Vacuity guard: a run where nothing was ever observable.
     VacuousRun => "vacuous_run",
+
+    // Vacuity guard: a single invariant matched zero entities.
+    VacuousInvariant => "vacuous_invariant",
 
     // Verification depth (round 4)
     ReplayDivergence => "replay_divergence",

@@ -21,9 +21,6 @@ use crate::scenario::{validate_scenario, Scenario, ScenarioError};
 use crate::state::PlaytestReport;
 use crate::{rules, sinks};
 
-/// Minimum audited actions before the vacuity guard may fire (Z1 rule 3).
-pub const VACUITY_MIN_ACTIONS: u64 = 20;
-
 // ---------------------------------------------------------------------------
 // Scenario resource
 // ---------------------------------------------------------------------------

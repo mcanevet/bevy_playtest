@@ -46,9 +46,9 @@ use bevy_app::prelude::*;
 pub const ENV_SCENARIO: &str = "BEVY_PLAYTEST_SCENARIO";
 /// Optional report output path (default: `<scenario>.report.json`).
 pub const ENV_REPORT: &str = "BEVY_PLAYTEST_REPORT";
-/// Set: assert headlessness even without a scenario — exit 3 if
-/// `bevy_winit::WinitPlugin` is present (contract must not degrade to a
-/// silent windowed run).
+/// Set: assert headlessness even without a scenario. When set, the
+/// plugin (added after DefaultPlugins) replaces winit's runner with a
+/// schedule loop so no window opens and no display is needed.
 pub const ENV_HEADLESS: &str = "BEVY_PLAYTEST_HEADLESS";
 /// External-BRP port. When set, PlaytestPlugin adds RemotePlugin +
 /// RemoteHttpPlugin and registers types for reflection queries.
@@ -118,12 +118,21 @@ impl Plugin for PlaytestPlugin {
                 app.register_type::<bevy_input::keyboard::KeyboardInput>();
                 // Also add PlaytestBrpPlugin for method registration
                 app.add_plugins(crate::brp_plugin::PlaytestBrpPlugin);
+                // External-BRP mode is headless by construction: the
+                // game is driven remotely for automated playtests, so
+                // replace winit's runner with a schedule loop (same
+                // last-set-wins mechanism as the takeover). Without
+                // this, a DefaultPlugins game on a display-less host
+                // (CI) panics in winit's event-loop construction.
+                app.add_plugins(bevy_app::ScheduleRunnerPlugin::run_loop(
+                    std::time::Duration::from_secs_f64(1.0 / 60.0),
+                ));
             }
         }
 
         match read_env_config() {
             Ok(Takeover::Inert) => {}
-            Ok(Takeover::HeadlessAssert) => {}
+            Ok(Takeover::HeadlessAssert) => assert_headless(app),
             Ok(Takeover::Run(config)) => take_over(app, config),
             Err(err) => {
                 eprintln!("bevy_playtest: {err}");
@@ -197,6 +206,27 @@ fn read_env_config() -> Result<Takeover, String> {
 /// inside the app's own schedule: winit's (or any other) runner is
 /// swapped out before it can drive a single frame, the scenario drains
 /// to completion under `run_scenario`'s loop, then the process exits.
+/// Headless-assert contract: with only [`ENV_HEADLESS`] set there is
+/// no runner swap, so a `WinitPlugin` present at build time means the
+/// app WILL open a window. Refuse loudly instead (the documented
+/// correct plugin order — groups before PlaytestPlugin — is exactly
+/// when this detection is reliable).
+#[cfg(feature = "takeover-winit")]
+fn assert_headless(app: &App) {
+    if app.is_plugin_added::<bevy_winit::WinitPlugin>() {
+        eprintln!(
+            "bevy_playtest: {} is set but WinitPlugin is present and no \
+             BEVY_PLAYTEST_SCENARIO is set to swap the runner — a window \
+             would open. Remove WinitPlugin or set a scenario.",
+            ENV_HEADLESS
+        );
+        std::process::exit(exit_code::CONFIG_ERROR);
+    }
+}
+
+#[cfg(not(feature = "takeover-winit"))]
+fn assert_headless(_app: &App) {}
+
 fn take_over(app: &mut App, config: TakeoverConfig) {
     app.set_runner(move |mut app: App| -> AppExit {
         run_takeover(&mut app, &config);
