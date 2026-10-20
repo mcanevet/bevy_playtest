@@ -20,7 +20,7 @@ env:
   # line tables for accurate coverage, full debuginfo costs gigabytes
   # the runners don't have (debug build of Bevy alone is ~19 GB).
   # NOTE: must match across build and test jobs so caches are compatible.
-  # Also applies to the MSRV job (1.95.0) — the flag predates it.
+  # Also applies to the MSRV job (1.97.1) — the flag predates it.
   RUSTFLAGS: "-C debuginfo=line-tables-only"
 
 jobs:
@@ -147,7 +147,7 @@ jobs:
           fail_ci_if_error: true
 
   # MSRV: the harness crate's floor is set by its highest bevy_* dep
-  # (bevy_ecs 0.20 requires rustc 1.95). Verify the declared floor
+  # (bevy 0.20 requires rustc 1.97.1). Verify the declared floor
   # still compiles so users on older toolchains are not broken
   # silently. Uses cargo check (fast) — the full battery runs on the
   # current toolchain.
@@ -162,7 +162,7 @@ jobs:
       - name: Install MSRV toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master: adds toolchain input
         with:
-          toolchain: 1.99.1
+          toolchain: 1.97.1
 
       - name: Install Linux dependencies (bevy backends + software Vulkan)
         run: |
@@ -175,10 +175,10 @@ jobs:
       # the newest toolchain; MSRV compatibility of locked dep versions
       # is a semver question best caught at publish time. MSRV check
       # verifies the crate's own code compiles on the declared floor.
-      # `cargo +1.95.0` bypasses the repo's rust-toolchain.toml (which
+      # `cargo +1.97.1` bypasses the repo's rust-toolchain.toml (which
       # rustup would otherwise honor in this directory).
       - name: cargo check on MSRV
-        run: cargo +1.95.0 check -p bevy_playtest --all-features
+        run: cargo +1.97.1 check -p bevy_playtest --all-features
 
   test:
     runs-on: ubuntu-26.04
