@@ -192,7 +192,7 @@ pub struct Invariant {
     pub max_z: Option<f32>,
     /// Entity Names. Empty = all Gameplay entities.
     #[serde(default)]
-    pub targets: Vec<String>,
+    pub target_selector: Option<crate::enums::TargetSelector>,
     /// custom thresholds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<serde_json::Value>,
@@ -437,6 +437,9 @@ pub enum ScenarioError {
     UnknownCheat { kind: String, known: Vec<String> },
     /// The scenario references a bot type not implemented in this version.
     NotImplemented(String),
+    /// The scenario depends on reset semantics (restart-like frame-0
+    /// cheats) but the game registered no reset hooks.
+    ResetMissing,
 }
 
 impl std::fmt::Display for ScenarioError {
@@ -477,6 +480,12 @@ impl std::fmt::Display for ScenarioError {
                 )
             }
             Self::NotImplemented(msg) => write!(f, "not implemented: {msg}"),
+            Self::ResetMissing => write!(
+                f,
+                "reset missing: scenario depends on reset semantics (frame-0 cheats) \
+                 but the game registered no reset hooks; register ResetHooks \
+                 or remove the restart semantics from the scenario"
+            ),
         }
     }
 }
@@ -656,13 +665,6 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
         if rule.eventually_s.is_some() {
             return Err(ScenarioError::NotImplemented(format!(
                 "invariant '{}': eventually mode is not implemented in v0.1",
-                rule.name
-            )));
-        }
-        if !rule.targets.is_empty() {
-            return Err(ScenarioError::NotImplemented(format!(
-                "invariant '{}': target filtering is not implemented in v0.1 \
-                 (checks apply to all Gameplay entities)",
                 rule.name
             )));
         }

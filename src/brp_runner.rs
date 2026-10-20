@@ -176,6 +176,16 @@ async fn run_brp_inner(
         .await
         .map_err(ScenarioError::Rejected)?;
 
+    // Parity detection: the game-side PlaytestBrpPlugin serves
+    // bevy_playtest/health; absence means today's degraded mode (no
+    // panic/log visibility, no hooks, no time control). The report
+    // must distinguish the two — never a silent downgrade.
+    let brp_parity = match client.call("rpc.discover", None).await {
+        Ok(Value::Object(methods)) if methods.keys().any(|k| k == "bevy_playtest/health") => "full",
+        _ => "degraded",
+    }
+    .to_string();
+
     // Wire-level: pass the port to the game via env only; if the game
     // binds a fixed port, cfg.port must match. Document this contract.
 
@@ -375,6 +385,8 @@ async fn run_brp_inner(
         choices: recorded_choices,
         harness_mode: "external_brp".to_string(),
         scenario_source: None,
+        reset_hooks_registered: None,
+        brp_parity: Some(brp_parity),
     };
     let _ = input_count;
     Ok(report)

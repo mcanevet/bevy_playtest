@@ -9,6 +9,39 @@ report (JSON + JUnit XML).
 
 ## Integrating a game
 
+### Zero-annotation happy path (rivals' bar, met)
+
+No marker types, no extracted `build_app()`, no hooks — one plugin line plus
+the CLI:
+
+```rust
+app.add_plugins(bevy_playtest::PlaytestDefaultPlugins);
+app.add_plugins(bevy_playtest::PlaytestPlugin);
+```
+
+```console
+$ bevy_playtest init                      # writes playtest.scenario.json
+$ $EDITOR playtest.scenario.json           # set "target_selector": "all" on invariants
+$ bevy_playtest run playtest.scenario.json
+```
+
+With `"target_selector": "all"`, bounds invariants check every entity
+with a `Transform` — zero bevy_playtest-specific code in the game.
+(The default selector `gameplay` checks only `contract::Gameplay`-
+marked entities and **fails loudly (not vacuously)** when it matches
+zero entities, suggesting the `all` selector.)
+
+Even faster, no file at all: `bevy_playtest run smoke`.
+
+Integration cost story vs. rivals: the plugin line is the only required
+change (rival parity); markers/hooks/`build_app()` extraction are
+opt-in refinements for tighter contracts, never prerequisites.
+
+`bevy_playtest doctor` audits a project's readiness: dependency
+present, `takeover` feature enabled, plugin referenced in `src/`
+(plain-text grep — renames/re-exports/macros can hide references),
+scenario file valid. Exit 0 = ready, exit 4 = hints shown.
+
 ### One-line integration (PlaytestPlugin, `takeover` feature)
 
 Add the plugin; when `BEVY_PLAYTEST_SCENARIO` is set, your binary becomes its
@@ -72,6 +105,20 @@ fn tag_gameplay(mut commands: Commands, ball: Query<Entity, With<Ball>>) {
    app.add_plugins(DefaultPlugins.build().disable::<bevy::winit::WinitPlugin>());
    ```
    Render/audio/assets still initialize; the game runs headless.
+
+### BRP parity matrix
+
+| Capability               | In-process | External BRP | External BRP + PlaytestBrpPlugin |
+|--------------------------|------------|--------------|----------------------------------|
+| Panic capture            | ✓          | ✗            | ✓ (`bevy_playtest/health`)       |
+| Log capture              | ✓          | ✗            | ✓                                |
+| Reset hooks              | ✓          | ✗            | ✓ (`bevy_playtest/reset`)        |
+| Cheat hooks              | ✓          | ✗            | ✓ (`bevy_playtest/cheat`)        |
+| Time scale control       | N/A        | ✗            | ✓ (`bevy_playtest/time`)         |
+| Pause/step               | ✓          | ✗            | ✗ (in-process only)              |
+
+The report's `brp_parity` field distinguishes "full" from "degraded"
+modes; never a silent downgrade.
 
 ### Zero-contract external-BRP (experimental)
 

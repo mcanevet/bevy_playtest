@@ -261,3 +261,61 @@ fn roundtrips_through_serde() {
     assert_eq!(s.bot.seed, s2.bot.seed);
     assert_eq!(s.invariants.len(), s2.invariants.len());
 }
+
+#[test]
+fn target_selector_all_parses() {
+    let mut json = minimal_scenario("chaos");
+    json["invariants"] = serde_json::json!([
+        { "name": "bounds", "rule": "nodes_in_bounds", "target_selector": "all",
+          "min_x": -1.0, "max_x": 1.0 }
+    ]);
+    let s = parse(json);
+    assert_eq!(
+        s.invariants[0].target_selector,
+        Some(bevy_playtest::enums::TargetSelector::All)
+    );
+    let mut json = minimal_scenario("chaos");
+    json["invariants"] = serde_json::json!([
+        { "name": "bounds", "rule": "nodes_in_bounds", "target_selector": "gameplay" }
+    ]);
+    let s = parse(json);
+    assert_eq!(
+        s.invariants[0]
+            .target_selector
+            .as_ref()
+            .map(|x| x.to_owned()),
+        Some(bevy_playtest::enums::TargetSelector::Gameplay)
+    );
+}
+
+#[test]
+fn target_selector_unknown_rejects() {
+    let mut json = minimal_scenario("chaos");
+    json["invariants"] = serde_json::json!([
+        { "name": "b", "rule": "nodes_in_bounds", "target_selector": "al" }
+    ]);
+    let err = serde_json::from_value::<Scenario>(json).unwrap_err();
+    assert!(err.to_string().contains("al"), "{err}");
+}
+
+#[test]
+fn legacy_targets_field_now_rejects() {
+    let mut json = minimal_scenario("chaos");
+    json["invariants"] = serde_json::json!([
+        { "name": "b", "rule": "nodes_in_bounds", "targets": ["a"] }
+    ]);
+    let err = serde_json::from_value::<Scenario>(json).unwrap_err();
+    assert!(err.to_string().contains("unknown field"), "{err}");
+}
+
+#[test]
+fn target_selector_named_rejects_at_parse() {
+    // named targets are roadmap: not a variant, so any form of it fails
+    // deserialization loudly rather than silently degrading.
+    let mut json = minimal_scenario("chaos");
+    json["invariants"] = serde_json::json!([
+        { "name": "b", "rule": "nodes_in_bounds", "target_selector": "named" }
+    ]);
+    let err = serde_json::from_value::<Scenario>(json).unwrap_err();
+    assert!(err.to_string().contains("named"), "{err}");
+}

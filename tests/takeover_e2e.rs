@@ -287,3 +287,97 @@ fn smoke_typo_is_treated_as_a_file_path() {
 // for a thin wrapper that forwards env vars. The CLI contract is covered
 // by unit tests in src/bin/bevy_playtest.rs; the smoke/file-path boundary
 // is covered by the smoke_typo_is_treated_as_a_file_path test above.
+
+#[test]
+fn all_selector_runs_on_stock_game_without_annotations() {
+    let stock = PathBuf::from(env!("CARGO_BIN_EXE_takeover_demo_stock"));
+    let dir = unique_dir("stock");
+
+    let scenario_path = dir.join("scenario.json");
+    let report_path = dir.join("report.json");
+    std::fs::write(
+        &scenario_path,
+        r#"{"bot":{"type":"chaos","seed":42},"duration_s":0.05,"tps":60,
+            "invariants":[{"name":"bounds","rule":"nodes_in_bounds",
+                          "target_selector":"all",
+                          "min_x":-5.0,"max_x":5.0}]}"#,
+    )
+    .unwrap();
+    let out = Command::new(&stock)
+        .env(ENV_SCENARIO, &scenario_path)
+        .env(ENV_REPORT, &report_path)
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(exit_code::PASS),
+        "stock game with all-selector must pass: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
+    assert_eq!(report["status"], "pass", "{report}");
+
+    let tight = dir.join("tight.json");
+    let tight_report = dir.join("tight.report.json");
+    std::fs::write(
+        &tight,
+        r#"{"bot":{"type":"chaos","seed":42},"duration_s":0.05,"tps":60,
+            "invariants":[{"name":"bounds","rule":"nodes_in_bounds",
+                          "target_selector":"all",
+                          "min_x":-0.5,"max_x":0.5}]}"#,
+    )
+    .unwrap();
+    let out = Command::new(&stock)
+        .env(ENV_SCENARIO, &tight)
+        .env(ENV_REPORT, &tight_report)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(exit_code::FAIL));
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&tight_report).unwrap()).unwrap();
+    assert_eq!(report["status"], "fail", "{report}");
+}
+
+#[test]
+fn gameplay_selector_on_stock_game_fires_vacuous_invariant() {
+    let stock = PathBuf::from(env!("CARGO_BIN_EXE_takeover_demo_stock"));
+    let dir = unique_dir("stock_vacuous");
+
+    let scenario_path = dir.join("scenario.json");
+    let report_path = dir.join("report.json");
+    std::fs::write(
+        &scenario_path,
+        r#"{"bot":{"type":"chaos","seed":42},"duration_s":0.05,"tps":60,
+            "invariants":[{"name":"bounds","rule":"nodes_in_bounds"}]}"#,
+    )
+    .unwrap();
+    let out = Command::new(&stock)
+        .env(ENV_SCENARIO, &scenario_path)
+        .env(ENV_REPORT, &report_path)
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(exit_code::FAIL),
+        "gameplay selector with zero marked entities must Fail loudly"
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
+    let violations = report["violations"].as_array().unwrap();
+    assert!(
+        violations.iter().any(|v| v["rule"] == "vacuous_invariant"),
+        "must flag vacuous_invariant: {report}"
+    );
+    let detail = violations
+        .iter()
+        .find(|v| v["rule"] == "vacuous_invariant")
+        .unwrap()["detail"]
+        .as_str()
+        .unwrap();
+    assert!(
+        detail.contains("'all'"),
+        "violation must suggest the all selector: {detail}"
+    );
+}

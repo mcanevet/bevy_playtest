@@ -453,6 +453,20 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
 
     // Resets: validate against registered hooks, then invoke (inside a
     // panic boundary — a panicking hook is reported, not fatal).
+    // needs_reset: any cheat/restart semantics in the scenario mean the
+    // run depends on reset semantics — without hooks this must fail
+    // loudly (never a fake no-op reset).
+    let needs_reset =
+        !scenario.setup.resets.is_empty() || scenario.setup.cheats.iter().any(|c| c.frame == 0);
+    let registered_hooks = app
+        .world()
+        .get_resource::<ResetHooks>()
+        .map(|h| !h.0.is_empty())
+        .unwrap_or(false);
+    if needs_reset && !scenario.setup.resets.is_empty() && !registered_hooks {
+        return Err(ScenarioError::ResetMissing);
+    }
+    let reset_hooks_registered = needs_reset.then_some(registered_hooks);
     {
         let kinds: Vec<String> = scenario
             .setup
@@ -711,6 +725,8 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         choices,
         harness_mode: "in_process".to_string(),
         scenario_source: None,
+        reset_hooks_registered,
+        brp_parity: None,
     })
 }
 

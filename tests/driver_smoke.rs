@@ -248,7 +248,19 @@ fn unknown_reset_kind_is_rejected_at_load_time() {
         r#"{"bot":{"type":"chaos","seed":7},"duration_s":0.1,"tps":60,"setup":{"resets":[{"kind":"hard_reset"}]}}"#,
     )
     .unwrap();
+    // no hooks at all: ResetMissing is the louder, more actionable error
     let mut app = minimal_app();
+    let err = run_scenario(&mut app, &scenario).unwrap_err();
+    assert!(matches!(
+        err,
+        bevy_playtest::scenario::ScenarioError::ResetMissing
+    ));
+
+    // hooks present but the kind is unknown: UnknownReset with suggestions
+    let mut app = minimal_app();
+    let mut hooks = bevy_playtest::contract::ResetHooks::default();
+    hooks.register("soft", |_world: &mut bevy_ecs::world::World| {});
+    app.world_mut().insert_resource(hooks);
     let err = run_scenario(&mut app, &scenario).unwrap_err();
     assert!(matches!(
         err,
@@ -350,4 +362,44 @@ fn z_axis_escape_is_caught_by_nodes_in_bounds() {
         "an entity at z=1e9 must not pass a bounds invariant unflagged; got {:?}",
         report.violations
     );
+}
+
+#[test]
+fn reset_missing_fires_for_reset_dependent_scenario_without_hooks() {
+    let scenario: Scenario = serde_json::from_str(
+        r#"{"bot":{"type":"chaos","seed":7},"duration_s":0.1,"tps":60,"setup":{"resets":[{"kind":"anything"}]}}"#,
+    )
+    .unwrap();
+    let mut app = minimal_app();
+    let err = run_scenario(&mut app, &scenario).unwrap_err();
+    assert!(matches!(
+        err,
+        bevy_playtest::scenario::ScenarioError::ResetMissing
+    ));
+}
+
+#[test]
+fn report_distinguishes_reset_hook_presence() {
+    use bevy_playtest::contract::ResetHooks;
+    let scenario: Scenario =
+        serde_json::from_str(r#"{"bot":{"type":"chaos","seed":7},"duration_s":0.1,"tps":60}"#)
+            .unwrap();
+    let mut app = minimal_app();
+    spawn_observable_entity(&mut app);
+    // scenario has no reset semantics -> field absent even without hooks
+    let report = run_scenario(&mut app, &scenario).unwrap();
+    assert_eq!(report.reset_hooks_registered, None);
+
+    // now with reset semantics and hooks registered: presence is reported
+    let scenario: Scenario = serde_json::from_str(
+        r#"{"bot":{"type":"chaos","seed":7},"duration_s":0.1,"tps":60,"setup":{"resets":[{"kind":"soft"}]}}"#,
+    )
+    .unwrap();
+    let mut app = minimal_app();
+    spawn_observable_entity(&mut app);
+    let mut hooks = ResetHooks::default();
+    hooks.register("soft", |_world: &mut bevy_ecs::world::World| {});
+    app.world_mut().insert_resource(hooks);
+    let report = run_scenario(&mut app, &scenario).unwrap();
+    assert_eq!(report.reset_hooks_registered, Some(true));
 }

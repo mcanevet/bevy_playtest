@@ -118,6 +118,15 @@ pub struct PlaytestReport {
     /// Absent for non-takeover producers that never had a source path.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scenario_source: Option<String>,
+    /// Whether reset hooks were registered by the game for this run.
+    /// Absent when the run involved no reset semantics.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reset_hooks_registered: Option<bool>,
+    /// External-BRP parity: "full" when the game serves the
+    /// bevy_playtest/* BRP methods, "degraded" otherwise. Absent for
+    /// in-process runs (inherently full parity).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub brp_parity: Option<String>,
 }
 
 impl PlaytestReport {
@@ -137,6 +146,8 @@ impl PlaytestReport {
             choices: vec![],
             harness_mode: "in_process".to_string(),
             scenario_source: None,
+            reset_hooks_registered: None,
+            brp_parity: None,
         }
     }
 

@@ -16,10 +16,29 @@ pub fn evaluate_invariants_system(
     state: Res<RunState>,
     mut violations: ResMut<RunViolations>,
     invariants: Res<ScenarioInvariants>,
-    q: Query<(Entity, &Transform), With<crate::contract::Gameplay>>,
+    q_gameplay: Query<(Entity, &Transform), With<crate::contract::Gameplay>>,
+    q_all: Query<(Entity, &Transform)>,
 ) {
     for inv in &invariants.0 {
-        evaluate_bounds(inv, state.frame, &mut violations, &q);
+        let default_selector = crate::enums::TargetSelector::default();
+        let selector = inv.target_selector.as_ref().unwrap_or(&default_selector);
+        match selector {
+            crate::enums::TargetSelector::All => {
+                evaluate_bounds(inv, state.frame, &mut violations, &mut q_all.iter());
+            }
+            crate::enums::TargetSelector::Gameplay => {
+                if q_gameplay.is_empty() && state.frame == 0 {
+                    violations.0.report(
+                        "vacuous_invariant",
+                        &inv.name,
+                        "gameplay-targeted invariant matched zero entities; mark entities with contract::Gameplay or use the 'all' target selector"
+                            .to_string(),
+                        state.frame,
+                    );
+                }
+                evaluate_bounds(inv, state.frame, &mut violations, &mut q_gameplay.iter());
+            }
+        }
     }
 }
 
@@ -28,7 +47,7 @@ fn evaluate_bounds(
     inv: &Invariant,
     frame: u64,
     violations: &mut RunViolations,
-    q: &Query<(Entity, &Transform), With<crate::contract::Gameplay>>,
+    transforms: &mut dyn Iterator<Item = (Entity, &Transform)>,
 ) {
     let min_x = inv.min_x.unwrap_or(-1000.0);
     let max_x = inv.max_x.unwrap_or(1000.0);
@@ -36,7 +55,7 @@ fn evaluate_bounds(
     let max_y = inv.max_y.unwrap_or(1000.0);
     let min_z = inv.min_z.unwrap_or(-1000.0);
     let max_z = inv.max_z.unwrap_or(1000.0);
-    for (entity, transform) in q.iter() {
+    for (entity, transform) in transforms {
         let t = transform.translation;
         let out =
             t.x < min_x || t.x > max_x || t.y < min_y || t.y > max_y || t.z < min_z || t.z > max_z;

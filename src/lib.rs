@@ -1,6 +1,8 @@
 //! bevy_playtest: playtesting harness for Bevy games.
 
 pub mod brp;
+#[cfg(feature = "brp-plugin")]
+pub mod brp_plugin;
 #[cfg(feature = "brp")]
 pub mod brp_runner;
 pub mod choice;

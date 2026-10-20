@@ -126,3 +126,15 @@ impl From<PlaytestStatus> for String {
         s.to_string()
     }
 }
+
+/// Target selector for invariants: which entities the rule applies to.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetSelector {
+    /// Apply to entities with the Gameplay marker (default).
+    #[default]
+    Gameplay,
+    /// Apply to all entities with a Transform component (zero-annotation
+    /// path: no bevy_playtest-specific code in the game needed).
+    All,
+}

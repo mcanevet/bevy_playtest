@@ -55,6 +55,10 @@ fn main() {
             let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind");
             serve_brp(listener, &mode);
         }
+        "parity-full" => {
+            let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind");
+            serve_par(listener, true);
+        }
         "clean-noisy" => {
             // Serve perfectly valid transforms AND chatter on stderr
             // (asset noise, adapter logs — normal for a healthy game).
@@ -72,6 +76,45 @@ fn main() {
             serve_clean(listener);
         }
         _ => unreachable!(),
+    }
+}
+
+
+/// Serve a clean world while advertising (or not) the parity methods
+/// in rpc.discover.
+fn serve_par(listener: TcpListener, advertise: bool) {
+    for stream in listener.incoming() {
+        let mut stream = stream.expect("stream");
+        let mut buf = [0u8; 65536];
+        let n = match stream.read(&mut buf) {
+            Ok(0) | Err(_) => continue,
+            Ok(n) => n,
+        };
+        let req = String::from_utf8_lossy(&buf[..n]).into_owned();
+        let is_query = req.contains("\"world.query\"");
+        let is_discover = req.contains("\"rpc.discover\"");
+        let is_health = req.contains("\"bevy_playtest/health\"");
+        let body = if is_discover {
+            if advertise {
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"bevy_playtest/health\":{},\"bevy_playtest/reset\":{},\"bevy_playtest/cheat\":{},\"bevy_playtest/time\":{}}}".to_string()
+            } else {
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"world.query\":{}}}".to_string()
+            }
+        } else if is_health {
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"panicked\":false,\"recent_logs\":[]}}".to_string()
+        } else if is_query {
+            let rows = "[{\"entity\":1,\"components\":{\"bevy_transform::components::transform::Transform\":{\"translation\":[0.0,0.0,0.0]}}}]";
+            format!("{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{rows}}}")
+        } else {
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}".to_string()
+        };
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = stream.write_all(resp.as_bytes());
+        let _ = stream.flush();
     }
 }
 
@@ -407,4 +450,24 @@ fn brp_violation_details_carry_no_stale_prefix() {
             v.detail
         );
     }
+}
+
+#[test]
+fn brp_parity_flips_with_plugin_presence() {
+    let bin = compile_mock("brp_mock_game");
+    let port = free_port();
+    let report = run_scenario_brp(
+        &cfg(&bin, "parity-full", port, Duration::from_secs(10)),
+        &quick_scenario(),
+    )
+    .expect("run completes");
+    assert_eq!(report.brp_parity.as_deref(), Some("full"));
+
+    let port = free_port();
+    let report = run_scenario_brp(
+        &cfg(&bin, "clean-static", port, Duration::from_secs(10)),
+        &quick_scenario(),
+    )
+    .expect("run completes");
+    assert_eq!(report.brp_parity.as_deref(), Some("degraded"));
 }

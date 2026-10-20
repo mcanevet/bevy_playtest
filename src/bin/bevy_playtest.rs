@@ -57,6 +57,10 @@ SUBCOMMANDS:
         auto-selected; otherwise pass --package or --bin. Build output
         is passed through untouched.
 
+    doctor
+        Inspect the current cargo project for integration readiness.
+        Exit 0 if ready, 4 with actionable hints otherwise.
+
 WORKED INVARIANTS EXAMPLE (add to the scenario JSON):
     \"invariants\": [{
         \"name\": \"player_in_bounds\",
@@ -133,6 +137,7 @@ struct RunArgs {
     report: Option<String>,
     package: Option<String>,
     bin: Option<String>,
+    features: Vec<String>,
 }
 
 fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
@@ -142,6 +147,7 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
         report: None,
         package: None,
         bin: None,
+        features: vec![],
     };
     let mut i = 0;
     while i < args.len() {
@@ -158,12 +164,16 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
                 i += 1;
                 out.bin = Some(value_of(args, i, "--bin")?);
             }
+            "--features" | "-F" => {
+                i += 1;
+                out.features.push(value_of(args, i, "--features")?);
+            }
             "--" => {
                 break;
             }
             other if other.starts_with('-') => {
                 return Err(usage_error(&format!(
-                    "unknown flag '{other}' (run takes <scenario> [--report <path>] [--package <name>] [--bin <name>])"
+                    "unknown flag '{other}' (run takes <scenario> [--report <path>] [--package <name>] [--bin <name>] [--features <f>]...)"
                 )))
             }
             positional if scenario.is_none() => scenario = Some(positional.to_string()),
@@ -290,6 +300,108 @@ fn cmd_run(args: &RunArgs, base: &Path) -> i32 {
     }
 }
 
+/// Check a cargo project for bevy_playtest integration readiness.
+/// Findings are printed; exit 0 when ready, EXIT_USAGE otherwise.
+/// Source checks are plain text greps of src/ — document the limits:
+/// renames/re-exports/macros can hide references; Cargo.toml checks
+/// are authoritative for dep+feature presence.
+fn cmd_doctor(base: &Path) -> i32 {
+    let mut ready = true;
+
+    let manifest = base.join("Cargo.toml");
+    if !manifest.is_file() {
+        println!("✗ no Cargo.toml in current directory");
+        return EXIT_USAGE;
+    }
+    let manifest_text = std::fs::read_to_string(&manifest).unwrap_or_default();
+
+    let has_dep = manifest_text.contains("bevy_playtest");
+    println!(
+        "{} dependency: bevy_playtest in Cargo.toml",
+        if has_dep { "✓" } else { "✗" }
+    );
+    if !has_dep {
+        println!("  hint: cargo add bevy_playtest --features takeover");
+        ready = false;
+    }
+
+    let has_takeover = manifest_text.contains("takeover");
+    println!(
+        "{} feature: takeover enabled for bevy_playtest",
+        if has_takeover { "✓" } else { "?" }
+    );
+    if !has_takeover {
+        println!("  hint: if PlaytestPlugin seems inert, check you enabled the takeover feature:");
+        println!("    bevy_playtest = {{ version = \"0.20\", features = [\"takeover\"] }}");
+        if has_dep {
+            ready = false;
+        }
+    }
+
+    let src_dir = base.join("src");
+    let mut plugin_referenced = false;
+    if src_dir.is_dir() {
+        fn walk(dir: &Path, found: &mut bool) {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if p.is_dir() {
+                        walk(&p, found);
+                    } else if p.extension().is_some_and(|e| e == "rs") {
+                        if let Ok(text) = std::fs::read_to_string(&p) {
+                            if text.contains("PlaytestPlugin")
+                                || text.contains("PlaytestDefaultPlugins")
+                            {
+                                *found = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        walk(&src_dir, &mut plugin_referenced);
+    }
+    println!(
+        "{} source: PlaytestPlugin referenced in src/",
+        if plugin_referenced { "✓" } else { "✗" }
+    );
+    if !plugin_referenced {
+        println!("  hint: app.add_plugins(bevy_playtest::PlaytestPlugin);");
+        ready = false;
+    }
+
+    let scenario_path = base.join(DEFAULT_INIT_PATH);
+    if scenario_path.is_file() {
+        let text = std::fs::read_to_string(&scenario_path).unwrap_or_default();
+        match serde_json::from_str::<bevy_playtest::scenario::Scenario>(&text) {
+            Ok(scenario) => match bevy_playtest::scenario::validate_scenario(&scenario) {
+                Ok(()) => println!("✓ scenario: {} parses and validates", DEFAULT_INIT_PATH),
+                Err(err) => {
+                    println!("✗ scenario: {} fails validation: {err}", DEFAULT_INIT_PATH);
+                    ready = false;
+                }
+            },
+            Err(err) => {
+                println!("✗ scenario: {} does not parse: {err}", DEFAULT_INIT_PATH);
+                ready = false;
+            }
+        }
+    } else {
+        println!(
+            "- scenario: no {} (optional; `bevy_playtest init` creates one, or `run smoke`)",
+            DEFAULT_INIT_PATH
+        );
+    }
+
+    if ready {
+        println!("ready: integration looks complete");
+        0
+    } else {
+        println!("not ready: fix the ✗ items above");
+        EXIT_USAGE
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cwd = PathBuf::from(".");
@@ -303,6 +415,7 @@ fn main() {
             Ok(run) => std::process::exit(cmd_run(&run, &cwd)),
             Err(msg) => die(msg),
         },
+        "doctor" => std::process::exit(cmd_doctor(&cwd)),
         "help" | "--help" | "-h" => {
             print!("{}", HELP);
         }
@@ -365,6 +478,7 @@ mod tests {
             report: None,
             package: None,
             bin: None,
+            features: vec![],
         };
         assert_eq!(cmd_run(&run, &dir), EXIT_USAGE);
     }
@@ -381,6 +495,7 @@ mod tests {
             report: None,
             package: None,
             bin: None,
+            features: vec![],
         };
         assert_eq!(cmd_run(&run, &dir), EXIT_USAGE);
     }
@@ -400,5 +515,87 @@ mod tests {
             parse_run_args(&[String::from("s.json"), String::from("--wat")]).is_err(),
             "unknown run flag rejects"
         );
+    }
+    fn write(dir: &Path, rel: &str, text: &str) {
+        let p = dir.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    }
+
+    #[test]
+    fn doctor_fully_integrated_project_is_ready() {
+        let dir = tmp_dir("doctor_ok");
+        write(
+            &dir,
+            "Cargo.toml",
+            "[dependencies]\nbevy_playtest = { version = \"0.20\", features = [\"takeover\"] }\n",
+        );
+        write(
+            &dir,
+            "src/main.rs",
+            "app.add_plugins(bevy_playtest::PlaytestPlugin);",
+        );
+        write(&dir, "playtest.scenario.json", INIT_TEMPLATE);
+        assert_eq!(cmd_doctor(&dir), 0);
+    }
+
+    #[test]
+    fn doctor_reports_each_missing_piece() {
+        let dir = tmp_dir("doctor_bad");
+        write(&dir, "Cargo.toml", "[dependencies]\n");
+        write(&dir, "src/main.rs", "fn main() {}");
+        assert_eq!(cmd_doctor(&dir), EXIT_USAGE);
+
+        // dependency present but no plugin reference: still not ready
+        let dir = tmp_dir("doctor_half");
+        write(
+            &dir,
+            "Cargo.toml",
+            "[dependencies]\nbevy_playtest = { version = \"0.20\", features = [\"takeover\"] }\n",
+        );
+        write(&dir, "src/main.rs", "fn main() {}");
+        assert_eq!(cmd_doctor(&dir), EXIT_USAGE);
+    }
+
+    #[test]
+    fn doctor_flags_invalid_scenario_file() {
+        let dir = tmp_dir("doctor_bad_scenario");
+        write(
+            &dir,
+            "Cargo.toml",
+            "[dependencies]\nbevy_playtest = { version = \"0.20\", features = [\"takeover\"] }\n",
+        );
+        write(
+            &dir,
+            "src/main.rs",
+            "app.add_plugins(bevy_playtest::PlaytestPlugin);",
+        );
+        write(&dir, "playtest.scenario.json", "{ not json");
+        assert_eq!(cmd_doctor(&dir), EXIT_USAGE);
+    }
+
+    #[test]
+    fn doctor_without_manifest_is_usage_error() {
+        let dir = tmp_dir("doctor_empty");
+        assert_eq!(cmd_doctor(&dir), EXIT_USAGE);
+    }
+
+    #[test]
+    fn run_features_forward_repeated_flags() {
+        let args = parse_run_args(&[
+            "s.json".to_string(),
+            "--features".to_string(),
+            "takeover".to_string(),
+            "--features".to_string(),
+            "brp-plugin".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(args.features, vec!["takeover", "brp-plugin"]);
+    }
+
+    #[test]
+    fn run_features_requires_a_value() {
+        let err = parse_run_args(&["s.json".to_string(), "--features".to_string()]);
+        assert!(err.is_err());
     }
 }
