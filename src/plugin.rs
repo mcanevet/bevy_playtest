@@ -118,15 +118,18 @@ impl Plugin for PlaytestPlugin {
                 app.register_type::<bevy_input::keyboard::KeyboardInput>();
                 // Also add PlaytestBrpPlugin for method registration
                 app.add_plugins(crate::brp_plugin::PlaytestBrpPlugin);
-                // External-BRP mode is headless by construction: the
-                // game is driven remotely for automated playtests, so
-                // replace winit's runner with a schedule loop (same
-                // last-set-wins mechanism as the takeover). Without
-                // this, a DefaultPlugins game on a display-less host
-                // (CI) panics in winit's event-loop construction.
-                app.add_plugins(bevy_app::ScheduleRunnerPlugin::run_loop(
-                    std::time::Duration::from_secs_f64(1.0 / 60.0),
-                ));
+                // External-BRP mode should run headless (no window for
+                // an automation-driven game). PlaytestDefaultPlugins
+                // already installs the schedule runner; for plain
+                // DefaultPlugins games add one here so no window opens
+                // on display-ful hosts (display-less hosts need the
+                // PlaytestDefaultPlugins swap — WinitPlugin builds its
+                // event loop eagerly at plugin-build time).
+                if !app.is_plugin_added::<bevy_app::ScheduleRunnerPlugin>() {
+                    app.add_plugins(bevy_app::ScheduleRunnerPlugin::run_loop(
+                        std::time::Duration::from_secs_f64(1.0 / 60.0),
+                    ));
+                }
             }
         }
 
@@ -434,8 +437,12 @@ fn write_report(path: &str, report: &crate::state::PlaytestReport) -> Result<(),
 /// that prefer an explicit headless plugin graph.
 ///
 /// - No env vars set: identical to `bevy::DefaultPlugins` (pure pass-through).
-/// - [`ENV_SCENARIO`] or [`ENV_HEADLESS`] set: drops `WinitPlugin` and
-///   adds `ScheduleRunnerPlugin::run_loop` so the app ticks headless.
+/// - [`ENV_SCENARIO`], [`ENV_HEADLESS`], or [`ENV_BRP_PORT`] set: drops
+///   `WinitPlugin` and adds `ScheduleRunnerPlugin::run_loop` so the app
+///   ticks headless. (bevy_winit 0.20 builds its event loop eagerly in
+///   `WinitPlugin::build` — a display-less host panics before any
+///   runner swap could intervene, so removing the plugin is the only
+///   reliable headless path.)
 ///
 /// Requires the `takeover-winit` feature (adds the `bevy_winit` and
 /// `bevy` (DefaultPlugins) dependencies).
@@ -446,7 +453,10 @@ pub struct PlaytestDefaultPlugins;
 impl bevy_app::prelude::PluginGroup for PlaytestDefaultPlugins {
     fn build(self) -> bevy_app::PluginGroupBuilder {
         let builder = bevy::DefaultPlugins.build();
-        if std::env::var_os(ENV_SCENARIO).is_some() || std::env::var_os(ENV_HEADLESS).is_some() {
+        if std::env::var_os(ENV_SCENARIO).is_some()
+            || std::env::var_os(ENV_HEADLESS).is_some()
+            || std::env::var_os(ENV_BRP_PORT).is_some()
+        {
             builder.disable::<bevy_winit::WinitPlugin>().add(
                 bevy_app::ScheduleRunnerPlugin::run_loop(std::time::Duration::from_secs_f64(
                     1.0 / 60.0,

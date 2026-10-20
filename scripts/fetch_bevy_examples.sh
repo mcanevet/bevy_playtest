@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 # Fetch Bevy showcase games and prepare them as fixtures for bevy_playtest.
 #
-# ONE-INSERTION TRANSFORM (round 6): each fixture is upstream source with
-# a single line inserted before the final `.run()`:
+# TWO-STEP TRANSFORM: each fixture is upstream source with
+#   1) DefaultPlugins renamed to bevy_playtest::PlaytestDefaultPlugins
+#      (drops WinitPlugin when BEVY_PLAYTEST_SCENARIO/HEADLESS is set —
+#      bevy_winit 0.20 builds its event loop EAGERLY at plugin-build
+#      time, so a runner swap alone cannot save a display-less host)
+#   2) one line inserted before the final `.run()`:
 #
 #     .add_plugins(bevy_playtest::PlaytestPlugin)
 #
-# That one line makes the binary BOTH tiers:
+# That makes the binary BOTH tiers:
 #   - in-process takeover: BEVY_PLAYTEST_SCENARIO=<scenario> cargo run --bin fixture_X
 #   - external BRP:        BRP_PORT=<port> cargo run --bin fixture_X
 #
-# PlaytestPlugin's runner swap (last-set-wins) makes a stock DefaultPlugins
-# game run headless with no plugin-group swap (proven round 5). No lib.rs,
-# no build_app(), no wrapper module, no fixture-runner.
+# No lib.rs, no build_app(), no wrapper module, no fixture-runner.
 #
 # Run from the bevy_playtest repo root.
 
@@ -99,30 +101,47 @@ for name in "${SHOWCASE_GAMES[@]}"; do
     done < <(sed -n 's/^mod \([a-z_]*\);/\1/p' "${target_dir}/src/main.rs")
     echo "    (source: local checkout or github)"
 
-    # 2. ONE-INSERTION transform: insert the plugin line before the final
-    #    `.run()`. Single anchor; a game whose shape defeats it dies loudly
-    #    (never silently skipped — that would ship a windowed fixture).
+    # 2. TWO-STEP transform for headless CI compatibility:
+    #    a) Replace `DefaultPlugins` with `bevy_playtest::PlaytestDefaultPlugins`
+    #       (drops WinitPlugin when BEVY_PLAYTEST_SCENARIO or HEADLESS is set).
+    #    b) Insert the PlaytestPlugin line before `.run()` (last-set-wins runner swap).
+    #    Games that explicitly construct DefaultPlugins differently will die loudly
+    #    here — never silently ship a windowed fixture.
     python3 - "${target_dir}/src/main.rs" "${target_dir}/src/main.rs.playtest" << 'PYEOF'
 import re, sys
 src_path, out_path = sys.argv[1], sys.argv[2]
 src = open(src_path).read()
-# Anchor: the single `.run();` line (any indentation). Insert the
-# plugin line with matching indentation immediately before it.
+# Step a: rename DefaultPlugins -> bevy_playtest::PlaytestDefaultPlugins
+# (drops WinitPlugin when BEVY_PLAYTEST_SCENARIO/HEADLESS is set; identical
+# pass-through otherwise). .set(...) modifier chains carry over: both are
+# PluginGroups of the same underlying type.
+out, n = re.subn(
+    r"(?<![A-Za-z_:])DefaultPlugins(?![A-Za-z_:])",
+    "bevy_playtest::PlaytestDefaultPlugins",
+    src,
+)
+if n != 1:
+    sys.exit(f"DefaultPlugins appears {n} times (need exactly 1)")
+# Step b: anchor to single `.run();` line; insert PlaytestPlugin before it.
 pat = re.compile(r"^([ \t]*)\.run\(\);$", re.M)
-matches = pat.findall(src)
+matches = pat.findall(out)
 if len(matches) != 1:
     sys.exit(f"anchor '.run();' appears {len(matches)} times (need exactly 1)")
 indent = matches[0] or "    "
-out, n = pat.subn(lambda m: f"{m.group(1)}.add_plugins(bevy_playtest::PlaytestPlugin)\n{m.group(0)}", src, count=1)
+out, n = pat.subn(lambda m: f"{m.group(1)}.add_plugins(bevy_playtest::PlaytestPlugin)\n{m.group(0)}", out, count=1)
 assert n == 1
 open(out_path, "w").write(out)
 PYEOF
 
-    # Loud verification: the insertion MUST have landed exactly once.
+    # Loud verification: both transformations MUST have landed exactly once.
     grep -q 'bevy_playtest::PlaytestPlugin' "${target_dir}/src/main.rs.playtest" \
         || die "fixture ${name}: plugin insertion did not apply"
     [ "$(grep -c 'bevy_playtest::PlaytestPlugin' "${target_dir}/src/main.rs.playtest")" = "1" ] \
         || die "fixture ${name}: plugin insertion applied more than once"
+    grep -q 'bevy_playtest::PlaytestDefaultPlugins' "${target_dir}/src/main.rs.playtest" \
+        || die "fixture ${name}: PlaytestDefaultPlugins swap did not apply"
+    grep -q 'WinitPlugin' "${target_dir}/src/main.rs.playtest" \
+        && die "fixture ${name}: raw WinitPlugin reference remains in patched main"
 
     # Standalone-crate fixups for sibling modules
     for f in "${target_dir}/src/"*.rs; do
@@ -164,10 +183,14 @@ EOF
 ## Zero-Contract Claim
 
 - **src/main.rs** — byte-identical to upstream.
-- **src/main.rs.playtest** — upstream + ONE inserted line:
-  `.add_plugins(bevy_playtest::PlaytestPlugin)` before the final `.run()`.
+- **src/main.rs.playtest** — upstream + TWO mechanical edits:
+  1. `DefaultPlugins` → `bevy_playtest::PlaytestDefaultPlugins` (headless-safe
+     plugin group: drops `WinitPlugin` when a playtest env var is set).
+  2. `.add_plugins(bevy_playtest::PlaytestPlugin)` inserted before the final
+     `.run()`.
 
-Audit: `diff src/main.rs src/main.rs.playtest` (one inserted line).
+Audit: `diff src/main.rs src/main.rs.playtest` (two mechanical edits, no
+logic changes).
 
 ## Modes
 
