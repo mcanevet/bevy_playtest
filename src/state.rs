@@ -114,6 +114,10 @@ pub struct PlaytestReport {
     pub choices: Vec<Choice>,
     /// Mode that produced this report.
     pub harness_mode: String,
+    /// Provenance of the executed scenario: "file" or "builtin_smoke".
+    /// Absent for non-takeover producers that never had a source path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scenario_source: Option<String>,
 }
 
 impl PlaytestReport {
@@ -132,6 +136,7 @@ impl PlaytestReport {
             cheat_count: 0,
             choices: vec![],
             harness_mode: "in_process".to_string(),
+            scenario_source: None,
         }
     }
 

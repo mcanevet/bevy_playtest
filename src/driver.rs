@@ -710,6 +710,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         cheat_count: scenario.setup.cheats.len() as u64 as usize,
         choices,
         harness_mode: "in_process".to_string(),
+        scenario_source: None,
     })
 }
 

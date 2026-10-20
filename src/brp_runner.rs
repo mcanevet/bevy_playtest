@@ -374,6 +374,7 @@ async fn run_brp_inner(
         cheat_count: 0,
         choices: recorded_choices,
         harness_mode: "external_brp".to_string(),
+        scenario_source: None,
     };
     let _ = input_count;
     Ok(report)

@@ -9,6 +9,43 @@ report (JSON + JUnit XML).
 
 ## Integrating a game
 
+### One-line integration (PlaytestPlugin, `takeover` feature)
+
+Add the plugin; when `BEVY_PLAYTEST_SCENARIO` is set, your binary becomes its
+own headless playtest runner (exit codes: 0 Pass, 1 Fail, 2 Crash, 3 config
+error). Without the env var the plugin is inert.
+
+```toml
+bevy_playtest = { version = "...", features = ["takeover"] }
+```
+
+```rust
+app.add_plugins(bevy_playtest::PlaytestDefaultPlugins); // instead of DefaultPlugins
+app.add_plugins(bevy_playtest::PlaytestPlugin);          // after the group
+```
+
+Then, for a zero-config smoke test:
+
+```console
+$ BEVY_PLAYTEST_SCENARIO=smoke cargo run
+```
+
+Or the full three-command happy path:
+
+```console
+$ bevy_playtest init                 # writes playtest.scenario.json
+$ $EDITOR playtest.scenario.json     # add invariants (example in --help)
+$ bevy_playtest run playtest.scenario.json
+```
+
+`PlaytestDefaultPlugins` swaps to a headless runner when a
+`BEVY_PLAYTEST_*` env var is set, and is a pure pass-through to
+`DefaultPlugins` otherwise. If you forget to swap and keep `DefaultPlugins`,
+the takeover detects `WinitPlugin` and exits 3 instead of opening a window.
+Known limitations of the automatic headless takeover: games whose first state
+is a menu may need a reset hook before the scenario is meaningful; rendering
+is unavailable (software-only) so visual assertions do not apply.
+
 ### Basic integration (tag gameplay entities)
 
 Tag gameplay-relevant entities with `bevy_playtest::contract::Gameplay`. That's it.

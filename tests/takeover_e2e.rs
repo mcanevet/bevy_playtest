@@ -228,3 +228,62 @@ fn headless_env_with_winit_hard_fails() {
         "stderr must name winit: {stderr}"
     );
 }
+
+#[test]
+fn smoke_literal_runs_builtin_and_marks_provenance() {
+    let dir = unique_dir("smoke");
+    let report_path = dir.join("smoke.report.json");
+    let out = Command::new(game_binary())
+        .env(ENV_SCENARIO, "smoke")
+        .env(ENV_REPORT, report_path.to_str().unwrap())
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(exit_code::PASS),
+        "stdout: {}
+stderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
+    assert_eq!(report["status"], "pass", "{report}");
+    assert_eq!(report["scenario_source"], "builtin_smoke", "{report}");
+    assert_eq!(report["frame_count"].as_u64().unwrap(), 300, "{report}");
+}
+
+#[test]
+fn smoke_report_defaults_to_cwd() {
+    let dir = unique_dir("smoke_cwd");
+    let out = Command::new(game_binary())
+        .env(ENV_SCENARIO, "smoke")
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(exit_code::PASS));
+    let default_report = dir.join("bevy_playtest-smoke.report.json");
+    assert!(default_report.is_file(), "smoke default report missing");
+}
+
+#[test]
+fn smoke_typo_is_treated_as_a_file_path() {
+    for wrong in ["SMOKE", "Smoke"] {
+        let out = Command::new(game_binary())
+            .env(ENV_SCENARIO, wrong)
+            .output()
+            .unwrap();
+        assert_eq!(
+            out.status.code(),
+            Some(exit_code::CONFIG_ERROR),
+            "'{wrong}' must be file-path treated"
+        );
+        assert_stderr_contains(&out, "cannot read scenario");
+    }
+}
+
+// NOTE: a full e2e `bevy_playtest run` test would need to compile a temp
+// cargo project with bevy dependencies; that cost is disproportionate
+// for a thin wrapper that forwards env vars. The CLI contract is covered
+// by unit tests in src/bin/bevy_playtest.rs; the smoke/file-path boundary
+// is covered by the smoke_typo_is_treated_as_a_file_path test above.

@@ -124,7 +124,13 @@ fn read_env_config() -> Result<Takeover, String> {
     }
     let report_path = std::env::var_os(ENV_REPORT)
         .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|| format!("{scenario_path}.report.json"));
+        .unwrap_or_else(|| {
+            if scenario_path == SMOKE_LITERAL {
+                "bevy_playtest-smoke.report.json".to_string()
+            } else {
+                format!("{scenario_path}.report.json")
+            }
+        });
     Ok(Takeover::Run(TakeoverConfig {
         scenario_path,
         report_path,
@@ -145,21 +151,38 @@ fn take_over(app: &mut App, config: TakeoverConfig) {
 }
 
 fn run_takeover(app: &mut App, config: &TakeoverConfig) -> ! {
-    let scenario = match load_scenario(&config.scenario_path) {
-        Ok(scenario) => scenario,
-        Err(err) => {
-            eprintln!("bevy_playtest: {err}");
-            std::process::exit(exit_code::CONFIG_ERROR);
-        }
+    let (scenario, source) = if config.scenario_path == SMOKE_LITERAL {
+        (
+            match smoke_scenario() {
+                Ok(s) => s,
+                Err(err) => {
+                    eprintln!("bevy_playtest: {err}");
+                    std::process::exit(exit_code::CONFIG_ERROR);
+                }
+            },
+            "builtin_smoke",
+        )
+    } else {
+        (
+            match load_scenario(&config.scenario_path) {
+                Ok(scenario) => scenario,
+                Err(err) => {
+                    eprintln!("bevy_playtest: {err}");
+                    std::process::exit(exit_code::CONFIG_ERROR);
+                }
+            },
+            "file",
+        )
     };
     assert_headless_possible(app);
-    let report = match crate::driver::run_scenario(app, &scenario) {
+    let mut report = match crate::driver::run_scenario(app, &scenario) {
         Ok(report) => report,
         Err(err) => {
             eprintln!("bevy_playtest: {err}");
             std::process::exit(exit_code::CONFIG_ERROR);
         }
     };
+    report.scenario_source = Some(source.to_string());
     match write_report(&config.report_path, &report) {
         Ok(()) => {}
         Err(err) => {
@@ -174,6 +197,23 @@ fn run_takeover(app: &mut App, config: &TakeoverConfig) -> ! {
         crate::enums::PlaytestStatus::Crash => exit_code::CRASH,
     };
     std::process::exit(code)
+}
+
+/// Case-sensitive magic literal for the built-in smoke scenario.
+pub const SMOKE_LITERAL: &str = "smoke";
+
+/// The built-in smoke scenario: chaos bot, no authored invariants (the
+/// global oracles still run), ~5s at default tps. Constructed in code
+/// through the same `validate_scenario` path as a parsed file so it can
+/// never drift from the schema contract.
+pub fn smoke_scenario() -> Result<crate::scenario::Scenario, String> {
+    let scenario: crate::scenario::Scenario = serde_json::from_str(
+        r#"{"name":"smoke","bot":{"type":"chaos","seed":42},"duration_s":5.0}"#,
+    )
+    .map_err(|err| format!("built-in smoke scenario failed to parse: {err}"))?;
+    crate::scenario::validate_scenario(&scenario)
+        .map_err(|err| format!("built-in smoke scenario failed validation: {err}"))?;
+    Ok(scenario)
 }
 
 fn load_scenario(path: &str) -> Result<crate::scenario::Scenario, String> {
@@ -338,6 +378,24 @@ mod tests {
         // Inert: no runner swap. Prove it by running to a normal exit.
         let exit = app.run();
         assert_eq!(exit, AppExit::Success);
+    }
+
+    #[test]
+    fn smoke_literal_resolves_to_valid_scenario() {
+        let scenario = smoke_scenario().expect("smoke validates");
+        assert_eq!(scenario.bot.bot_type, crate::enums::BotType::Chaos);
+        assert_eq!(scenario.duration_s, 5.0);
+        assert_eq!(scenario.name.as_deref(), Some("smoke"));
+    }
+
+    #[test]
+    fn smoke_literal_gets_cwd_report_default() {
+        with_env(&[(ENV_SCENARIO, SMOKE_LITERAL)], || {
+            let Takeover::Run(cfg) = read_env_config().unwrap() else {
+                panic!("expected Run")
+            };
+            assert_eq!(cfg.report_path, "bevy_playtest-smoke.report.json");
+        });
     }
 
     #[test]
