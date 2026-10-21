@@ -203,8 +203,12 @@ jobs:
         run: cargo test --locked --test fault_injection
 
       # Full unit + integration battery (fast, no fixtures needed).
+      # --skip: acceptance tests require fixture binaries (built only
+      # in the build job, downloaded by the test matrix legs).
       - name: Workspace unit tests
-        run: cargo test --locked --workspace --all-features --lib --tests
+        run: >
+          cargo test --locked --workspace --all-features --lib --tests --
+          --skip fixtures_run_under_external_brp
 
   # Coverage: push to main only — PRs keep coverage off the feedback
   # loop entirely; main measures the trend.
