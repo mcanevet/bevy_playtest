@@ -24,9 +24,16 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
-          toolchain: "1.97"
+          toolchain: "1.99"
+      - name: Install Linux dependencies
+        # semver-checks / cargo doc build wayland-sys, which needs
+        # pkg-config + libwayland-dev to compile.
+        run: |
+          sudo apt-get update -yq
+          sudo apt-get install -yq --no-install-recommends \
+            libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev
       - name: Run release-plz
         uses: release-plz/action@8b5bf233ecb5779f63508db7cd050e948ee77cc2 # v0.5.144
         with:
@@ -55,9 +62,16 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
-          toolchain: "1.97"
+          toolchain: "1.99"
+      - name: Install Linux dependencies
+        # semver-checks / cargo doc build wayland-sys, which needs
+        # pkg-config + libwayland-dev to compile.
+        run: |
+          sudo apt-get update -yq
+          sudo apt-get install -yq --no-install-recommends \
+            libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev
       - name: Run release-plz
         uses: release-plz/action@8b5bf233ecb5779f63508db7cd050e948ee77cc2 # v0.5.144
         with:
