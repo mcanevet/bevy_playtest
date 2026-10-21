@@ -16,15 +16,14 @@ permissions:
 
 env:
   CARGO_INCREMENTAL: "0"
-  # Line tables only (no full DWARF types/variables): llvm-cov needs
-  # line tables for accurate coverage, full debuginfo costs gigabytes
-  # the runners don't have (debug build of Bevy alone is ~19 GB).
-  # NOTE: must match across build and test jobs so caches are compatible.
+  # Line tables only: llvm-cov needs line tables for accurate coverage,
+  # full debuginfo costs gigabytes the runners don't have. Must match
+  # across all jobs so the cache is compatible.
   RUSTFLAGS: "-C debuginfo=line-tables-only"
 
 jobs:
-  # Single build job: generates fixtures, builds everything (including
-  # test binaries), saves one shared cache entry. Matrix legs restore it.
+  # Critical path: generate fixtures, restore cache, build everything,
+  # upload binaries as artifacts for the test matrix legs.
   build:
     # ubuntu-26.04: validated in PR #10 (stock rust-lld works; the old
     # bfd fallback was a 24.04 SIGBUS workaround, now dropped). Keeping
@@ -40,11 +39,8 @@ jobs:
           persist-credentials: false
 
       # Reclaim disk before building: the stock image ships ~9 GB of
-      # Android SDK and ~3 GB of .NET we never touch, and a debug build
-      # of Bevy exceeds the ~14 GB free by itself. Inlined (rather than
-      # jlumbroso/free-disk-space) to avoid another unpinned third-party
-      # action; reports per-path sizes so a silent layout change (a
-      # MISSING line) is visible in logs.
+      # Android SDK and ~3 GB of .NET we never touch. Reports per-path
+      # sizes so a silent image-layout change (a MISSING line) shows.
       - name: Free disk space
         run: |
           df -h / | tee /tmp/df-before.txt
@@ -58,13 +54,7 @@ jobs:
           done
           echo "--- after cleanup ---"
           df -h /
-          free -h || true
-          gcc --version | head -1
-          ld --version | head -1
-          ld.lld --version 2>/dev/null | head -1 || echo "ld.lld not present"
 
-      # Install the exact toolchain named in rust-toolchain.toml.
-      # Pinned to the 1.99.0 branch for reproducibility.
       - name: Install Rust
         uses: dtolnay/rust-toolchain@ff7f6a3374ce205788da40198ec918bd5d67aea7 # 1.99.0
         with:
@@ -80,29 +70,90 @@ jobs:
       - name: Generate fixtures from pinned Bevy revision
         run: ./scripts/fetch_bevy_examples.sh
 
-      - name: Cache target directory
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      # Restore the shared target/ cache (exact key or closest
+      # fallback). Test legs do NOT touch this cache — they download
+      # the fixture-binary artifact instead.
+      - name: Restore target cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           # Both workspaces share ONE physical target dir
           # (.cargo/config.toml), so one path covers everything.
-          # Key includes the toolchain and linker flags: cargo
-          # fingerprints embed the rustc version and RUSTFLAGS, so a
-          # toolchain bump must rotate the entry or every job silently
-          # degrades to a full rebuild (which, on an exact-key hit,
-          # would also never re-save).
           path: target/
           key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}-lld
           restore-keys: |
             ${{ runner.os }}-target-
 
-      - name: Build fixture workspace (all games + runner)
-        run: cargo build --locked --manifest-path fixtures/Cargo.toml --workspace
+      # Build the whole fixture workspace (fills the cache with every
+      # fixture's exact fingerprints) plus the acceptance test binary.
+      - name: Build fixture workspace + acceptance tests
+        run: |
+          cargo build --locked --manifest-path fixtures/Cargo.toml --workspace
+          cargo test --locked --features brp --no-run
 
-      - name: Pre-compile acceptance tests (no run)
-        run: cargo test --locked --features brp --no-run
+      # Ship ONLY the 7 played fixture binaries + the acceptance test
+      # binary to the legs (tens of MB, seconds to download). The
+      # _pristine twins are never executed in CI — dead weight, skipped.
+      - name: Upload fixture binaries
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: fixture-binaries
+          path: |
+            target/debug/fixture_alien_cake_addict
+            target/debug/fixture_breakout
+            target/debug/fixture_contributors
+            target/debug/fixture_desk_toy
+            target/debug/fixture_game_menu
+            target/debug/fixture_loading_screen
+            target/debug/fixture_mines
+            target/debug/deps/acceptance-*
+          retention-days: 1
+          if-no-files-found: error
 
-      # Quality gates: enforce the same fmt/clippy the maintainers run
-      # locally, so drift cannot merge.
+      # Save the cache so future runs (including PR runs restoring via
+      # restore-keys) hit the exact key. Skipped silently when the entry
+      # already exists, so routine runs cost nothing here.
+      - name: Save target cache
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: target/
+          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}-lld
+
+  # Quality gates, off the critical path: run in parallel with test
+  # legs rather than gating them.
+  lint:
+    name: lint (fmt/clippy/doc)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@ff7f6a3374ce205788da40198ec918bd5d67aea7 # 1.99.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Install Linux dependencies (bevy backends + software Vulkan)
+        run: |
+          sudo apt-get update -yq
+          sudo apt-get install -yq --no-install-recommends \
+            libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev \
+            mesa-vulkan-drivers
+
+      - name: Generate fixtures from pinned Bevy revision
+        run: ./scripts/fetch_bevy_examples.sh
+
+      - name: Restore target cache (read-only)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: target/
+          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}-lld
+          restore-keys: |
+            ${{ runner.os }}-target-
+          cache-mode: read-only
+
+      # Same quality gates as before, so drift cannot merge.
       - name: Format check
         run: cargo fmt --all --check
 
@@ -114,9 +165,40 @@ jobs:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --locked --no-deps --all-features
 
+  # Unit + fault-injection battery, parallel to lint and the legs.
+  unit:
+    name: unit tests + fault injection
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@ff7f6a3374ce205788da40198ec918bd5d67aea7 # 1.99.0
+
+      - name: Install Linux dependencies (bevy backends + software Vulkan)
+        run: |
+          sudo apt-get update -yq
+          sudo apt-get install -yq --no-install-recommends \
+            libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev \
+            mesa-vulkan-drivers
+
+      - name: Generate fixtures from pinned Bevy revision
+        run: ./scripts/fetch_bevy_examples.sh
+
+      - name: Restore target cache (read-only)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: target/
+          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}-lld
+          restore-keys: |
+            ${{ runner.os }}-target-
+          cache-mode: read-only
+
       # Negative controls: prove the oracles DETECT the violations they
-      # claim to (NaN, bounds, frozen world, panic, error log). Fast
-      # (<1s); belongs in the build job, not per-fixture legs.
+      # claim to catch. Fast (<1s).
       - name: Fault-injection oracle tests
         run: cargo test --locked --test fault_injection
 
@@ -124,8 +206,40 @@ jobs:
       - name: Workspace unit tests
         run: cargo test --locked --workspace --all-features --lib --tests
 
-      # Coverage: measure line coverage and upload to Codecov (public repo
-      # needs no token). Threshold: 80% lines covered.
+  # Coverage: push to main only — PRs keep coverage off the feedback
+  # loop entirely; main measures the trend.
+  coverage:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    needs: build
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@ff7f6a3374ce205788da40198ec918bd5d67aea7 # 1.99.0
+
+      - name: Install Linux dependencies (bevy backends + software Vulkan)
+        run: |
+          sudo apt-get update -yq
+          sudo apt-get install -yq --no-install-recommends \
+            libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev \
+            mesa-vulkan-drivers
+
+      - name: Generate fixtures from pinned Bevy revision
+        run: ./scripts/fetch_bevy_examples.sh
+
+      - name: Restore target cache (read-only)
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: target/
+          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}-lld
+          restore-keys: |
+            ${{ runner.os }}-target-
+          cache-mode: read-only
+
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
         with:
@@ -135,9 +249,6 @@ jobs:
         run: |
           cargo llvm-cov --locked --workspace --all-features --lcov --output-path lcov.info
 
-      # Tokenless uploads only work for unprotected branches; main
-      # requires a token even on public repos. Set CODECOV_TOKEN as a
-      # repo secret (Codecov repo Settings -> Configuration).
       - name: Upload to Codecov
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7
         with:
@@ -145,14 +256,11 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: true
 
-  # MSRV job removed: Renovate kept bumping the toolchain pin, defeating the
-  # job's purpose (verify a stable floor). We rely on `cargo check --all-features`
-  # on the current toolchain to catch breakage; MSRV enforcement can be added
-  # back later with a single-source-from-Cargo.toml approach.
-
+  # Fixture matrix legs: no cache restore, no compilation — just
+  # download the binaries the build job shipped and run them.
   test:
     runs-on: ubuntu-26.04
-    timeout-minutes: 15
+    timeout-minutes: 10
     needs: build
     strategy:
       fail-fast: false
@@ -171,42 +279,32 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@ff7f6a3374ce205788da40198ec918bd5d67aea7 # 1.99.0
-
-      - name: Install Linux dependencies (bevy backends + software Vulkan)
+      # Runtime libraries only (no -dev packages, no Rust toolchain
+      # needed for compilation): legs only execute prebuilt binaries.
+      - name: Install Linux runtime dependencies
         run: |
           sudo apt-get update -yq
           sudo apt-get install -yq --no-install-recommends \
-            libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev \
+            libasound2t64 libudev1 libxkbcommon0 libwayland-client0 \
             mesa-vulkan-drivers
 
-      - name: Generate fixtures from pinned Bevy revision
-        run: ./scripts/fetch_bevy_examples.sh
-
-      - name: Restore shared build cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      - name: Download fixture binaries
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          # Both workspaces share ONE physical target dir
-          # (.cargo/config.toml), so one path covers everything.
-          path: target/
-          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}-lld
-          restore-keys: |
-            ${{ runner.os }}-target-
-          # Explicitly declare read-only mode for PR safety; the build
-          # job owns the write path.
-          cache-mode: read-only
+          name: fixture-binaries
+          path: target/debug/
 
-      # The cache restores all dependency artifacts (incl. Bevy);
-      # only the small fixture crates themselves rebuild here.
-      - name: Build fixture binaries
-        run: >
-          cargo build --locked --manifest-path fixtures/Cargo.toml
-          -p fixture_${{ matrix.fixture }} --bins
+      # Make the played fixture binary executable; deps/ items arrive
+      # executable already but chmod defensively.
+      - name: Stage binaries
+        run: |
+          chmod +x target/debug/fixture_${{ matrix.fixture }}
+          chmod +x target/debug/deps/acceptance-*
+          ldd target/debug/fixture_${{ matrix.fixture }} | tee /tmp/ldd.txt
+          grep -v "not found" /tmp/ldd.txt || true
 
-      # No xvfb: PlaytestPlugin's runner swap (last-set-wins) means
-      # nothing opens a display; Lavapipe renders via Vulkan without
-      # X (same as wgpu's own Linux CI).
+      # In-process tier (headless, real game logic). No cargo needed —
+      # run the shipped binary directly.
       - name: In-process tier (headless, real game logic)
         env:
           WGPU_BACKEND: vulkan
@@ -215,8 +313,15 @@ jobs:
           BEVY_PLAYTEST_SCENARIO=/tmp/sc.json
           timeout 300 ./target/debug/fixture_${{ matrix.fixture }}
 
+      # External-BRP tier: the acceptance binary embeds CARGO_MANIFEST_DIR
+      # (repo root) and looks for target/debug/fixture_<name> — both
+      # satisfied by checkout + artifact placement. Running it directly
+      # avoids cargo rebuild entirely.
       - name: External-BRP tier (bin driven over BRP)
         env:
           BEVY_PLAYTEST_FIXTURE: ${{ matrix.fixture }}
           WGPU_BACKEND: vulkan
-        run: cargo test --locked --features brp --test acceptance -- --nocapture
+        run: |
+          BIN=$(find target/debug/deps -maxdepth 1 -name 'acceptance-*' -perm -u+x | head -1)
+          test -n "$BIN"
+          "$BIN" --nocapture
