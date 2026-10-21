@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.1.1](https://github.com/mcanevet/bevy_playtest/compare/v0.1.0...v0.1.1) - 2026-10-21
+
+### Other
+
+- fix release-plz workflow (add Linux deps + pin toolchain)
+- minimize wall-clock via parallel jobs + binary artifacts
+- ci Update actions/checkout action to v7
+- add release-plz workflow and config
+
 ### Added
 - In-process playtest takeover: `BEVY_PLAYTEST_SCENARIO` turns the game
   binary into its own headless runner (exit codes 0 Pass / 1 Fail / 2
