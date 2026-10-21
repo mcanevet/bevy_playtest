@@ -1,0 +1,68 @@
+name: release-plz
+
+on:
+  push:
+    branches: [main]
+
+env:
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  # Publish unpublished packages (fires when the release PR merges).
+  release-plz-release:
+    name: release-plz release
+    runs-on: ubuntu-latest
+    permissions:
+      # Push tags and create releases.
+      contents: write
+      # Detect the release PR and its commits.
+      pull-requests: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@b4ffde65f46336eb88ce21d1df235b600c7549ba # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97"
+      - name: Run release-plz
+        uses: release-plz/action@8b5bf233ecb5779f63508db7cd050e948ee77cc2 # v0.5.144
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  # Open/update a PR with the new versions and changelog.
+  release-plz-pr:
+    name: release-plz PR
+    runs-on: ubuntu-latest
+    permissions:
+      # Push to the pull request branch.
+      contents: write
+      # Create and update pull requests.
+      pull-requests: write
+    concurrency:
+      # Serialized per branch so PR updates never conflict.
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@b4ffde65f46336eb88ce21d1df235b600c7549ba # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97"
+      - name: Run release-plz
+        uses: release-plz/action@8b5bf233ecb5779f63508db7cd050e948ee77cc2 # v0.5.144
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Not needed for crates.io; required for private registries.
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
