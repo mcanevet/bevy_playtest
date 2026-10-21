@@ -1,0 +1,22 @@
+[workspace]
+# Diff local packages against the versions published on crates.io,
+# not local tags. v0.x bumping (via next_version): feat -> patch,
+# breaking -> minor; use `release-plz set-version` or edit the release
+# PR for deliberate minor bumps.
+
+# Cross-check that the public API matches the semver bump decision.
+semver_check = true
+
+# Publish with `cargo publish` when the release PR merges.
+publish = true
+
+# Create the git tag and the GitHub release.
+git_tag_enable = true
+git_release_enable = true
+
+# Allow local commits to exist (release PR carries the version bump).
+allow_dirty = false
+
+[changelog]
+# git-cliff backend. Non-conventional commits land under "Other".
+trim = true
