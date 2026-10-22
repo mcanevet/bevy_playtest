@@ -2,8 +2,16 @@
 **/target/
 
 # Fixtures: generated from the pinned Bevy revision by the fetch script —
-# never committed (except the lockfile). Source of truth is
-# scripts/fetch_bevy_examples.sh and the patches/ audit trail.
+# never committed (except the lockfile and the per-game playtest tests).
+# Source of truth is scripts/fetch_bevy_examples.sh and the patches/
+# audit trail.
+# EXCEPTION: tests/playtest.rs is committed — it carries per-game
+# playtest assertions (known findings, expectations) that must survive
+# regeneration; the fetch script seeds it only if missing.
 /fixtures/*
 !/fixtures/Cargo.lock
+!/fixtures/*/
+/fixtures/*/*
+!/fixtures/*/tests/
+!/fixtures/*/tests/playtest.rs
 bevy_playtest-smoke.report.json

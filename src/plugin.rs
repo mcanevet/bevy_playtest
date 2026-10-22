@@ -43,6 +43,9 @@
 use bevy_app::prelude::*;
 
 /// Env var holding the scenario path. Absent => plugin inert.
+/// Special literals: `"smoke"` (built-in smoke scenario) and
+/// `"battery"` (built-in default battery — the zero-config verdict
+/// run: single-seed chaos + all oracles).
 pub const ENV_SCENARIO: &str = "BEVY_PLAYTEST_SCENARIO";
 /// Optional report output path (default: `<scenario>.report.json`).
 pub const ENV_REPORT: &str = "BEVY_PLAYTEST_REPORT";
@@ -192,6 +195,8 @@ fn read_env_config() -> Result<Takeover, String> {
         .unwrap_or_else(|| {
             if scenario_path == SMOKE_LITERAL {
                 "bevy_playtest-smoke.report.json".to_string()
+            } else if scenario_path == BATTERY_LITERAL {
+                "bevy_playtest-battery.report.json".to_string()
             } else {
                 format!("{scenario_path}.report.json")
             }
@@ -247,6 +252,17 @@ fn run_takeover(app: &mut App, config: &TakeoverConfig) -> ! {
                 }
             },
             "builtin_smoke",
+        )
+    } else if config.scenario_path == BATTERY_LITERAL {
+        (
+            match battery_scenario() {
+                Ok(s) => s,
+                Err(err) => {
+                    eprintln!("bevy_playtest: {err}");
+                    std::process::exit(exit_code::CONFIG_ERROR);
+                }
+            },
+            "builtin_battery",
         )
     } else {
         (
@@ -306,6 +322,11 @@ fn run_takeover(app: &mut App, config: &TakeoverConfig) -> ! {
 /// Case-sensitive magic literal for the built-in smoke scenario.
 pub const SMOKE_LITERAL: &str = "smoke";
 
+/// Case-sensitive magic literal for the built-in default battery:
+/// the zero-config battery run. Accepted as a `BEVY_PLAYTEST_SCENARIO`
+/// value.
+pub const BATTERY_LITERAL: &str = "battery";
+
 /// The built-in smoke scenario: chaos bot, no authored invariants (the
 /// global oracles still run), ~5s at default tps. Constructed in code
 /// through the same `validate_scenario` path as a parsed file so it can
@@ -317,6 +338,23 @@ pub fn smoke_scenario() -> Result<crate::scenario::Scenario, String> {
     .map_err(|err| format!("built-in smoke scenario failed to parse: {err}"))?;
     crate::scenario::validate_scenario(&scenario)
         .map_err(|err| format!("built-in smoke scenario failed validation: {err}"))?;
+    Ok(scenario)
+}
+
+/// The built-in default battery: the zero-config battery run. Single
+/// seeded chaos pass with all oracles (20s run, 15s frozen-world
+/// grace — shorter than the run so the liveness oracle CAN fire;
+/// static-screen games are covered by the grace, not by an unreachable
+/// oracle). Multi-seed aggregation lands with the runner-side battery
+/// API; the takeover runs one pass per process by design (replay
+/// verification needs process-clean state).
+pub fn battery_scenario() -> Result<crate::scenario::Scenario, String> {
+    let scenario: crate::scenario::Scenario = serde_json::from_str(
+        r#"{"name":"battery","bot":{"type":"chaos","seed":42},"duration_s":20.0,"liveness":{"timeout_s":15.0}}"#,
+    )
+    .map_err(|err| format!("built-in battery scenario failed to parse: {err}"))?;
+    crate::scenario::validate_scenario(&scenario)
+        .map_err(|err| format!("built-in battery scenario failed validation: {err}"))?;
     Ok(scenario)
 }
 
@@ -514,6 +552,26 @@ mod tests {
             let cfg = read_env_config().unwrap();
             assert_eq!(cfg, Takeover::Inert);
         });
+    }
+
+    #[test]
+    fn battery_scenario_literal_accepted() {
+        // BEVY_PLAYTEST_SCENARIO=battery routes to the builtin battery.
+        with_env(&[(ENV_SCENARIO, BATTERY_LITERAL)], || {
+            let cfg = read_env_config().unwrap();
+            assert_eq!(
+                cfg,
+                Takeover::Run(TakeoverConfig {
+                    scenario_path: BATTERY_LITERAL.to_string(),
+                    report_path: "bevy_playtest-battery.report.json".to_string(),
+                })
+            );
+        });
+    }
+
+    #[test]
+    fn battery_scenario_validates() {
+        battery_scenario().expect("built-in battery validates");
     }
 
     #[test]
