@@ -1,18 +1,23 @@
 #!/usr/bin/env bash
 # Fetch Bevy showcase games and prepare them as fixtures for bevy_playtest.
 #
-# TWO-STEP TRANSFORM: each fixture is upstream source with
-#   1) DefaultPlugins renamed to bevy_playtest::PlaytestDefaultPlugins
-#      (drops WinitPlugin when BEVY_PLAYTEST_SCENARIO/HEADLESS is set —
-#      bevy_winit 0.20 builds its event loop EAGERLY at plugin-build
-#      time, so a runner swap alone cannot save a display-less host)
-#   2) one line inserted before the final `.run()`:
+# FEATURE-GATED TRANSFORM (self-dev-dependency pattern): each fixture
+# is upstream source with two cfg-gated mechanical edits:
+#   1) `DefaultPlugins` rewritten to a call to `default_plugins()` —
+#      a helper pair that returns bevy_playtest::PlaytestDefaultPlugins
+#      under the `playtest` feature (drops WinitPlugin when a playtest
+#      env var is set; bevy_winit 0.20 builds its event loop EAGERLY at
+#      plugin-build time) and plain DefaultPlugins otherwise.
+#   2) `.add_plugins(playtest_plugins())` inserted before the final
+#      `.run()` — an empty tuple without the feature, the PlaytestPlugin
+#      with it.
 #
-#     .add_plugins(bevy_playtest::PlaytestPlugin)
-#
-# That makes the binary BOTH tiers:
-#   - in-process takeover: BEVY_PLAYTEST_SCENARIO=<scenario> cargo run --bin fixture_X
-#   - external BRP:        BRP_PORT=<port> cargo run --bin fixture_X
+# Plus a Cargo.toml with an optional bevy_playtest dep, a `playtest`
+# feature, and a SELF-dev-dependency that activates the feature only
+# for test builds — so:
+#   - plain `cargo build` / `--release`: ZERO bevy_playtest code
+#   - plain `cargo test`: feature on, runs tests/playtest.rs (the
+#     battery), the exact user-facing integration pattern
 #
 # No lib.rs, no build_app(), no wrapper module, no fixture-runner.
 #
@@ -101,55 +106,93 @@ for name in "${SHOWCASE_GAMES[@]}"; do
     done < <(sed -n 's/^mod \([a-z_]*\);/\1/p' "${target_dir}/src/main.rs")
     echo "    (source: local checkout or github)"
 
-    # 2. TWO-STEP transform for headless CI compatibility:
-    #    a) Replace `DefaultPlugins` with `bevy_playtest::PlaytestDefaultPlugins`
-    #       (drops WinitPlugin when BEVY_PLAYTEST_SCENARIO or HEADLESS is set).
-    #    b) Insert the PlaytestPlugin line before `.run()` (last-set-wins runner swap).
-    #    Games that explicitly construct DefaultPlugins differently will die loudly
-    #    here — never silently ship a windowed fixture.
-    python3 - "${target_dir}/src/main.rs" "${target_dir}/src/main.rs.playtest" << 'PYEOF'
+    # 2. Feature-gated transform (self-dev-dependency pattern):
+    #    a) `DefaultPlugins` -> `default_plugins()` call + cfg'd helper
+    #       pair returning PlaytestDefaultPlugins (playtest) / plain
+    #       DefaultPlugins (otherwise).
+    #    b) `.add_plugins(playtest_plugins())` before `.run()` — cfg'd
+    #       helper returning the PlaytestPlugin (playtest) / empty
+    #       tuple (otherwise).
+    #    Without the feature, plain `cargo build` compiles the ORIGINAL
+    #    plugin graph unchanged; only `cargo test` (via the self-dev-dep)
+    #    activates the feature. Games that construct DefaultPlugins
+    #    differently will die loudly here — never silently ship a
+    #    windowed fixture.
+    python3 - "${target_dir}/src/main.rs" "${target_dir}/src/main.rs" << 'PYEOF'
 import re, sys
-src_path, out_path = sys.argv[1], sys.argv[2]
-src = open(src_path).read()
-# Step a: rename DefaultPlugins -> bevy_playtest::PlaytestDefaultPlugins
-# (drops WinitPlugin when BEVY_PLAYTEST_SCENARIO/HEADLESS is set; identical
-# pass-through otherwise). .set(...) modifier chains carry over: both are
-# PluginGroups of the same underlying type.
+path = sys.argv[1]
+src = open(path).read()
+# Step a: alias DefaultPlugins via a cfg'd helper fn (rustfmt-stable:
+# no import alias pair fighting alphabetical sort). Keeps `.set(...)`
+# modifier chains intact — the call yields the group, `.set()` on the
+# returned group works identically.
+helper = '''#[cfg(feature = "playtest")]
+fn default_plugins() -> bevy_playtest::PlaytestDefaultPlugins {
+    bevy_playtest::PlaytestDefaultPlugins
+}
+#[cfg(not(feature = "playtest"))]
+fn default_plugins() -> bevy::DefaultPlugins {
+    bevy::DefaultPlugins
+}
+'''
+# Rewrite the single DefaultPlugins reference to default_plugins().
 out, n = re.subn(
-    r"(?<![A-Za-z_:])DefaultPlugins(?![A-Za-z_:])",
-    "bevy_playtest::PlaytestDefaultPlugins",
+    r"(?<![A-Za-z_:.])DefaultPlugins(?!\()",
+    "default_plugins()",
     src,
 )
 if n != 1:
     sys.exit(f"DefaultPlugins appears {n} times (need exactly 1)")
-# Step b: anchor to single `.run();` line; insert PlaytestPlugin before it.
+# Place the helper just before `fn main`.
+if "fn default_plugins()" in out:
+    sys.exit("default_plugins helper already present")
+out = out.replace("fn main()", helper + "\nfn main()", 1)
+# Step b: anchor to single `.run();` line; insert cfg'd PlaytestPlugin
+# before it. `#[cfg]` cannot be attached to an expression inside a
+# builder chain, so gate the *name*: `playtest_plugins()` resolves to
+# a tuple of plugins, empty without the feature.
+helper = '''#[cfg(feature = "playtest")]
+fn playtest_plugins() -> (bevy_playtest::PlaytestPlugin,) {
+    (bevy_playtest::PlaytestPlugin,)
+}
+#[cfg(not(feature = "playtest"))]
+fn playtest_plugins() -> () {}
+'''
+# Place the helper just before `fn main`.
+if "fn playtest_plugins()" in out:
+    sys.exit("playtest_plugins helper already present")
+out = out.replace("fn main()", helper + "\nfn main()", 1)
 pat = re.compile(r"^([ \t]*)\.run\(\);$", re.M)
 matches = pat.findall(out)
 if len(matches) != 1:
     sys.exit(f"anchor '.run();' appears {len(matches)} times (need exactly 1)")
 indent = matches[0] or "    "
-out, n = pat.subn(lambda m: f"{m.group(1)}.add_plugins(bevy_playtest::PlaytestPlugin)\n{m.group(0)}", out, count=1)
+plugin_line = f"{indent}.add_plugins(playtest_plugins())\n"
+out, n = pat.subn(lambda m: plugin_line + m.group(0), out, count=1)
 assert n == 1
-open(out_path, "w").write(out)
+open(path, "w").write(out)
 PYEOF
 
     # Loud verification: both transformations MUST have landed exactly once.
-    grep -q 'bevy_playtest::PlaytestPlugin' "${target_dir}/src/main.rs.playtest" \
-        || die "fixture ${name}: plugin insertion did not apply"
-    [ "$(grep -c 'bevy_playtest::PlaytestPlugin' "${target_dir}/src/main.rs.playtest")" = "1" ] \
-        || die "fixture ${name}: plugin insertion applied more than once"
-    grep -q 'bevy_playtest::PlaytestDefaultPlugins' "${target_dir}/src/main.rs.playtest" \
+    [ "$(grep -c 'add_plugins(playtest_plugins())' "${target_dir}/src/main.rs")" = "1" ] \
+        || die "fixture ${name}: plugin insertion did not apply exactly once"
+    [ "$(grep -c 'fn playtest_plugins()' "${target_dir}/src/main.rs")" = "2" ] \
+        || die "fixture ${name}: playtest_plugins helper cfg pair incomplete (want 2 definitions)"
+    grep -q 'bevy_playtest::PlaytestDefaultPlugins' "${target_dir}/src/main.rs" \
         || die "fixture ${name}: PlaytestDefaultPlugins swap did not apply"
-    grep -q 'WinitPlugin' "${target_dir}/src/main.rs.playtest" \
+    grep -q 'WinitPlugin' "${target_dir}/src/main.rs" \
         && die "fixture ${name}: raw WinitPlugin reference remains in patched main"
 
     # Standalone-crate fixups for sibling modules
     for f in "${target_dir}/src/"*.rs; do
-        [ "$(basename "$f")" = "main.rs.playtest" ] && continue
         sed 's/bevy_ecs::/bevy::ecs::/g' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
     done
 
-    # 3. Cargo.toml (workspace member later)
+    # 3. Cargo.toml (workspace member later) — feature-gated
+    #    self-dev-dependency pattern: plain `cargo build` compiles the
+    #    game WITHOUT bevy_playtest; plain `cargo test` activates the
+    #    `playtest` feature (via the self-dev-dep) and runs the
+    #    battery from tests/playtest.rs.
     cat > "${target_dir}/Cargo.toml" << EOF
 # Auto-generated by scripts/fetch_bevy_examples.sh — do not edit by hand.
 [package]
@@ -162,42 +205,102 @@ publish = false
 # Upstream showcase code pokes these cfgs; expected, not an error.
 unexpected_cfgs = { level = "allow" }
 
+[features]
+playtest = [
+    "dep:bevy_playtest",
+    "bevy_playtest/takeover",
+    "bevy_playtest/brp-plugin",
+    "bevy_playtest/takeover-winit",
+]
+
 [dependencies]
 bevy = { version = "0.20.0", features = ["bevy_remote"] }
-bevy_playtest = { path = "../..", features = ["takeover", "brp-plugin"] }
+bevy_playtest = { path = "../..", optional = true }
 $(fixture_extra_deps "${target_dir}/src/main.rs")
 
-[[bin]]
-name = "fixture_${name//-/_}"
-path = "src/main.rs.playtest"
-
-[[bin]]
-name = "fixture_${name//-/_}_pristine"
-path = "src/main.rs"
+[dev-dependencies]
+# Self-dependency: activates OUR OWN \`playtest\` feature only for
+# test/example/bench builds. Normal & release builds stay clean.
+fixture_${name//-/_} = { path = ".", features = ["playtest"] }
 EOF
 
-    # 4. README
+    # 4. tests/playtest.rs — the per-game playtest assertions. This
+    #    file is COMMITTED (hand-editable): regeneration seeds it only
+    #    if missing, never overwrites, so per-game expectations (known
+    #    findings, TODOs) survive upstream refreshes. Scenario
+    #    selection lives HERE (Rust), not in env vars: the battery
+    #    helper forwards BEVY_PLAYTEST_SCENARIO to the spawned game
+    #    binary and isolates it from leaked shell vars.
+    mkdir -p "${target_dir}/tests"
+    if [[ ! -e "${target_dir}/tests/playtest.rs" ]]; then
+    cat > "${target_dir}/tests/playtest.rs" << 'EOF'
+//! Seeded by scripts/fetch_bevy_examples.sh — COMMITTED, edit freely.
+//! Plain `cargo test` runs the default playtest battery against the
+//! game binary (compiled with the playtest feature via the
+//! self-dev-dependency). Per-game assertions belong here.
+#[cfg(feature = "playtest")]
+#[test]
+fn playtest_battery() {
+    bevy_playtest::battery::run_and_expect_clean(
+        env!("CARGO_BIN_EXE_fixture_NAME"),
+        bevy_playtest::battery::BUILTIN_BATTERY,
+    );
+}
+
+// `cargo package` strips `[dev-dependencies]`, so the self-dev-dependency
+// that auto-activates `playtest` is gone in an unpacked archive. Rather
+// than fail to compile (missing `bevy_playtest`) or silently run zero
+// playtests, surface it as an ignored test pointing at the fix.
+#[cfg(not(feature = "playtest"))]
+#[test]
+#[ignore = "playtest feature inactive: self-dev-dependency stripped (e.g. cargo package). Run `cargo test --features playtest`."]
+fn playtest_battery() {}
+EOF
+    # Substitute the fixture name portably (GNU sed treats `sed -i ''`
+    # as a filename; python3 is available on macOS and Linux runners).
+    python3 - "$name" "${target_dir}/tests/playtest.rs" << 'PYEOF'
+import sys
+name, path = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    s = f.read()
+with open(path, "w") as f:
+    f.write(s.replace("fixture_NAME", "fixture_" + name.replace("-", "_")))
+PYEOF
+    fi
+
+    # 5. README
     cat > "${target_dir}/README.md" << 'EOF'
 # Fixture: NAME
 
 ## Zero-Contract Claim
 
-- **src/main.rs** — byte-identical to upstream.
-- **src/main.rs.playtest** — upstream + TWO mechanical edits:
-  1. `DefaultPlugins` → `bevy_playtest::PlaytestDefaultPlugins` (headless-safe
-     plugin group: drops `WinitPlugin` when a playtest env var is set).
-  2. `.add_plugins(bevy_playtest::PlaytestPlugin)` inserted before the final
-     `.run()`.
+- **src/main.rs** — upstream + TWO mechanical edits (both feature-gated
+  via cfg'd helper pairs):
+  1. `DefaultPlugins` rewritten to `default_plugins()` — returns
+     `bevy_playtest::PlaytestDefaultPlugins` under the feature
+     (headless-safe: drops `WinitPlugin` when a playtest env var is
+     set), plain `bevy::DefaultPlugins` otherwise.
+  2. `.add_plugins(playtest_plugins())` inserted before the final
+     `.run()` — the PlaytestPlugin under the feature, an empty tuple
+     otherwise.
+- **tests/playtest.rs** — one generated test running the battery.
+- **Cargo.toml** — optional `bevy_playtest` dep + `playtest` feature +
+  self-dev-dependency (activates the feature only for test builds).
 
-Audit: `diff src/main.rs src/main.rs.playtest` (two mechanical edits, no
-logic changes).
+Plain `cargo build` / `cargo build --release` compile the game WITHOUT
+any bevy_playtest code (the feature is off; the optional dep is not
+even linked). Plain `cargo test` activates the feature via the
+self-dev-dep and runs the default battery.
 
 ## Modes
 
-- In-process: `BEVY_PLAYTEST_SCENARIO=<scenario> cargo run --bin fixture_NAME`
-- External-BRP: `BRP_PORT=4570 cargo run --bin fixture_NAME`
-
-The game logic is unmodified; only the plugin line is added.
+- Battery (zero-config): `cargo test`
+- Authored scenario: `bevy_playtest::battery::run_and_expect_clean(
+  binary, "playtests/my_scenario.json")` in `tests/playtest.rs`
+- Debugging only (live logs, quick re-runs): `BEVY_PLAYTEST_SCENARIO=
+  <scenario> cargo run --features playtest` — the default build is
+  playtest-free
+- External-BRP: `BRP_PORT=4570 cargo run --features playtest`
 EOF
     sed "s/NAME/${name}/g" "${target_dir}/README.md" > "${target_dir}/README.md.tmp"
     mv "${target_dir}/README.md.tmp" "${target_dir}/README.md"
@@ -232,5 +335,4 @@ debug = 0
 WORKSPACE
 
 echo "Done. Fixtures generated under ${FIXTURES_DIR}/."
-echo "Build:  cargo build --manifest-path fixtures/Cargo.toml --bins"
-echo "Run:    BEVY_PLAYTEST_SCENARIO=smoke cargo run --manifest-path fixtures/<name>/Cargo.toml --bin fixture_<name>"
+echo "Test:  cargo test --manifest-path fixtures/<name>/Cargo.toml"

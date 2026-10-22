@@ -342,12 +342,6 @@ fn smoke_typo_is_treated_as_a_file_path() {
     }
 }
 
-// NOTE: a full e2e `bevy_playtest run` test would need to compile a temp
-// cargo project with bevy dependencies; that cost is disproportionate
-// for a thin wrapper that forwards env vars. The CLI contract is covered
-// by unit tests in src/bin/bevy_playtest.rs; the smoke/file-path boundary
-// is covered by the smoke_typo_is_treated_as_a_file_path test above.
-
 #[test]
 fn all_selector_runs_on_stock_game_without_annotations() {
     let stock = PathBuf::from(env!("CARGO_BIN_EXE_takeover_demo_stock"));

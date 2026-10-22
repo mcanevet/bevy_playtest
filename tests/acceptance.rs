@@ -174,6 +174,12 @@ fn fixtures_run_under_external_brp() {
 /// in ALL_FIXTURES must correspond to a source example the fetch
 /// script can find, so a renamed/removed Bevy example fails HERE
 /// (clearly) instead of inside CI's fixture-build step (cryptically).
+///
+/// Generation-aware: only fixtures GENERATED on this machine (detected
+/// via `src/main.rs`, which is never committed) must carry a manifest.
+/// CI legs download prebuilt binaries and only have the committed
+/// `tests/playtest.rs` — no generation happened there, so the guard
+/// must not demand manifests from them.
 #[test]
 fn fixture_manifest_is_consistent() {
     let script = repo_root().join("scripts/fetch_bevy_examples.sh");
@@ -183,12 +189,9 @@ fn fixture_manifest_is_consistent() {
         "fetch script should source showcase examples"
     );
 
-    // Every fixture must have a generated directory with a manifest,
-    // when fixtures are generated at all. When they aren't, the main
-    // test already fails loudly; this guard covers generated states.
     for name in ALL_FIXTURES {
         let dir = repo_root().join("fixtures").join(name);
-        if dir.exists() {
+        if dir.join("src").join("main.rs").exists() {
             let manifest = dir.join("Cargo.toml");
             assert!(
                 manifest.exists(),

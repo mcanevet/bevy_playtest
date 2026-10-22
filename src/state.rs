@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 // ---------------------------------------------------------------------------
 
 /// A single violation occurrence.
-#[derive(Clone, Debug, Default, Serialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct ViolationEntry {
     pub rule: String,
     pub target: String,
@@ -63,7 +63,7 @@ impl Violations {
 // ---------------------------------------------------------------------------
 
 /// Metrics exported in reports.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Metrics {
     pub input_count: u64,
     pub frame_count: u64,
@@ -100,7 +100,7 @@ pub struct ObservationRecord {
 }
 
 /// Playtest report.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PlaytestReport {
     pub schema_version: u32,
     pub status: crate::enums::PlaytestStatus,
@@ -116,8 +116,9 @@ pub struct PlaytestReport {
     pub choices: Vec<Choice>,
     /// Mode that produced this report.
     pub harness_mode: String,
-    /// Provenance of the executed scenario: "file" or "builtin_smoke".
-    /// Absent for non-takeover producers that never had a source path.
+    /// Provenance of the executed scenario: `"file"`, `"builtin_smoke"`, or
+    /// `"builtin_battery"` (the zero-config battery literal). Absent for
+    /// non-takeover producers that never had a source path.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scenario_source: Option<String>,
     /// Whether reset hooks were registered by the game for this run.
@@ -158,6 +159,37 @@ impl PlaytestReport {
         }
     }
 
+    /// Sorted, deduplicated list of violation rule names — for
+    /// `assert_eq!(report.violation_rules(), &["frozen_world"])` style
+    /// assertions in fixture tests.
+    pub fn violation_rules(&self) -> Vec<&str> {
+        let mut rules: Vec<&str> = self.violations.iter().map(|v| v.rule.as_str()).collect();
+        rules.sort_unstable();
+        rules.dedup();
+        rules
+    }
+
+    /// Sorted, deduplicated list of `(rule, target)` pairs — for
+    /// assertions like `assert!(report.has_violation("frozen_world", "world"))`.
+    pub fn violation_pairs(&self) -> Vec<(&str, &str)> {
+        let mut pairs: Vec<(&str, &str)> = self
+            .violations
+            .iter()
+            .map(|v| (v.rule.as_str(), v.target.as_str()))
+            .collect();
+        pairs.sort_unstable();
+        pairs.dedup();
+        pairs
+    }
+
+    /// True if the report contains at least one violation with this
+    /// exact `(rule, target)` pair.
+    pub fn has_violation(&self, rule: &str, target: &str) -> bool {
+        self.violations
+            .iter()
+            .any(|v| v.rule == rule && v.target == target)
+    }
+
     pub fn scenario_error(msg: &str) -> Self {
         let mut rep = Self::crashed_empty();
         rep.error = Some(msg.to_string());
@@ -171,5 +203,61 @@ impl PlaytestReport {
             last_detail: msg.to_string(),
         }];
         rep
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn report_with(entries: &[(&str, &str)]) -> PlaytestReport {
+        let mut rep = PlaytestReport::crashed_empty();
+        rep.violations = entries
+            .iter()
+            .map(|&(rule, target)| ViolationEntry {
+                rule: rule.to_string(),
+                target: target.to_string(),
+                first_frame: 0,
+                last_frame: 0,
+                count: 1,
+                detail: String::new(),
+                last_detail: String::new(),
+            })
+            .collect();
+        rep
+    }
+
+    #[test]
+    fn violation_pairs_is_exact_no_silent_extras() {
+        // A test asserting [("frozen_world", "world")] on a report that
+        // ALSO contains another violation must FAIL — extras never pass
+        // silently. Prove it by building both sides of the comparison.
+        let rep = report_with(&[("frozen_world", "world"), ("log_error", "server")]);
+        assert_ne!(rep.violation_pairs(), vec![("frozen_world", "world")]);
+        assert_eq!(
+            rep.violation_pairs(),
+            vec![("frozen_world", "world"), ("log_error", "server")]
+        );
+    }
+
+    #[test]
+    fn violation_pairs_sorted_and_deduped() {
+        let rep = report_with(&[
+            ("frozen_world", "world"),
+            ("panic", "game_system"),
+            ("frozen_world", "world"),
+        ]);
+        assert_eq!(
+            rep.violation_pairs(),
+            vec![("frozen_world", "world"), ("panic", "game_system")]
+        );
+    }
+
+    #[test]
+    fn has_violation_matches_rule_and_target() {
+        let rep = report_with(&[("frozen_world", "world")]);
+        assert!(rep.has_violation("frozen_world", "world"));
+        assert!(!rep.has_violation("frozen_world", "other_target"));
+        assert!(!rep.has_violation("other_rule", "world"));
     }
 }
