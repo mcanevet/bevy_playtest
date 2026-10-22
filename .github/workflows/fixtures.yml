@@ -83,16 +83,56 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-target-
 
-      # Build the whole fixture workspace (fills the cache with every
-      # fixture's exact fingerprints) plus the acceptance test binary.
+      # Build the whole fixture workspace WITH the playtest feature
+      # (activated by each fixture's self-dev-dependency) plus the
+      # acceptance test binary, and PROVE the user-facing UX: plain
+      # `cargo test` on one fixture runs the battery end-to-end.
+      # Note: plain `cargo build` bins are feature-OFF by design
+      # (zero playtest bytes) — the takeover/BRP tiers need the
+      # test-built, feature-on bins.
       - name: Build fixture workspace + acceptance tests
         run: |
-          cargo build --locked --manifest-path fixtures/Cargo.toml --workspace
+          cargo test --locked --manifest-path fixtures/Cargo.toml --workspace --no-run
           cargo test --locked --features brp --no-run
+          # Flagless run = UX + feature-activation pin: the
+          # self-dev-dependency must activate `playtest` on plain
+          # `cargo test` even though the fixture is bin-only (cargo
+          # prints a "missing a lib target" warning there; it is
+          # benign — see README "Bin-only games"). Assert the real
+          # battery ran: if activation regressed, the generated test
+          # would report as IGNORED and the step must fail.
+          set -o pipefail
+          timeout 300 cargo test --locked --manifest-path fixtures/breakout/Cargo.toml \
+            | tee /tmp/breakout_flagless.log
+          ! grep -Eq "[1-9][0-9]* ignored" /tmp/breakout_flagless.log
 
-      # Ship ONLY the 7 played fixture binaries + the acceptance test
-      # binary to the legs (tens of MB, seconds to download). The
-      # _pristine twins are never executed in CI — dead weight, skipped.
+      # Battery tier for ALL fixtures, via the same `cargo test` path
+      # developers use locally: the committed tests/playtest.rs is the
+      # single source of verdict (plain assertions on the report), so
+      # CI and local dev assert identically. Runs here (not in the legs)
+      # because compiling the test needs the toolchain; the legs keep
+      # runtime-only deps.
+      - name: Battery tier (cargo test, all fixtures)
+        run: |
+          timeout 480 cargo test --locked --manifest-path fixtures/Cargo.toml --workspace --features playtest --test playtest -- --test-threads=1
+
+      # Release-purity guard (epage's recommended hygiene for the
+      # self-dev-dep pattern): plain bin builds must NOT resolve
+      # bevy_playtest. The optional dep is absent from the normal
+      # dependency graph by construction — this guard makes that
+      # contract explicit so a future change can't break it silently.
+      - name: Release purity guard (feature-off bin build)
+        run: |
+          cargo check --locked --manifest-path fixtures/breakout/Cargo.toml
+          if cargo tree --manifest-path fixtures/breakout/Cargo.toml -e normal \
+              | grep -q 'bevy_playtest v'; then
+            echo "ERROR: bevy_playtest resolved in a plain bin build (feature leak)" >&2
+            exit 1
+          fi
+
+      # Ship the 7 played fixture binaries (feature-enabled, built by
+      # the cargo test --no-run above) + the acceptance test binary to
+      # the legs (tens of MB, seconds to download).
       - name: Upload fixture binaries
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -262,6 +302,8 @@ jobs:
 
   # Fixture matrix legs: no cache restore, no compilation — just
   # download the binaries the build job shipped and run them.
+  # NOTE: the battery tier runs in the build job (above) via
+  # `cargo test`; legs focus on the external-BRP tier.
   test:
     runs-on: ubuntu-26.04
     timeout-minutes: 10
@@ -307,16 +349,6 @@ jobs:
           ldd target/debug/fixture_${{ matrix.fixture }} | tee /tmp/ldd.txt
           grep -v "not found" /tmp/ldd.txt || true
 
-      # In-process tier (headless, real game logic). No cargo needed —
-      # run the shipped binary directly.
-      - name: In-process tier (headless, real game logic)
-        env:
-          WGPU_BACKEND: vulkan
-        run: >
-          printf '%s' '{"name":"ci","bot":{"type":"chaos","seed":42},"duration_s":2.0,"invariants":[],"setup":{}}' > /tmp/sc.json &&
-          BEVY_PLAYTEST_SCENARIO=/tmp/sc.json
-          timeout 300 ./target/debug/fixture_${{ matrix.fixture }}
-
       # External-BRP tier: the acceptance binary embeds CARGO_MANIFEST_DIR
       # (repo root) and looks for target/debug/fixture_<name> — both
       # satisfied by checkout + artifact placement. Running it directly
@@ -326,6 +358,6 @@ jobs:
           BEVY_PLAYTEST_FIXTURE: ${{ matrix.fixture }}
           WGPU_BACKEND: vulkan
         run: |
-          BIN=$(find target/debug/deps -maxdepth 1 -name 'acceptance-*' -perm -u+x | head -1)
+          BIN=$(find target/debug/deps -maxdepth 1 -type f -name 'acceptance-*' ! -name '*.*' -perm -u+x | head -1)
           test -n "$BIN"
           "$BIN" --nocapture

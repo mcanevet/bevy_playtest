@@ -1,5 +1,7 @@
 //! bevy_playtest: playtesting harness for Bevy games.
 
+#[cfg(feature = "takeover")]
+pub mod battery;
 pub mod brp;
 #[cfg(feature = "brp-plugin")]
 pub mod brp_plugin;
@@ -22,6 +24,9 @@ pub mod state;
 
 /// Convenience re-export: run a scenario, get a report.
 pub use driver::run_scenario;
+
+#[cfg(feature = "takeover")]
+pub use battery::BatteryConfig;
 #[cfg(feature = "takeover-winit")]
 pub use plugin::PlaytestDefaultPlugins;
 #[cfg(feature = "takeover")]
