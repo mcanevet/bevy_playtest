@@ -1,0 +1,24 @@
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -528,6 +528,13 @@
+ #[cfg(not(feature = "playtest"))]
+ fn playtest_plugins() -> () {}
+ 
++// BUG(nan): harness-adversarial fault
++fn bug_poison_nan(mut query: bevy::ecs::prelude::Query<&mut bevy::transform::prelude::Transform>) {
++    for mut transform in &mut query {
++        transform.translation.x = f32::NAN;
++    }
++}
++
+ fn main() {
+     App::new()
+         .add_plugins(default_plugins())
+@@ -542,6 +549,7 @@
+         .add_observer(on_tile_click)
+         .add_observer(on_tile_over)
+         .add_observer(on_tile_out)
++        .add_systems(bevy::app::Update, bug_poison_nan)
+         .add_plugins(playtest_plugins())
+         .run();
+ }

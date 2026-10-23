@@ -1,0 +1,22 @@
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -28,6 +28,11 @@
+ #[cfg(not(feature = "playtest"))]
+ fn playtest_plugins() -> () {}
+ 
++// BUG(log_error): harness-adversarial fault
++fn bug_error_log() {
++    tracing::error!("BUG(log_error): harness-adversarial fault");
++}
++
+ fn main() {
+     App::new()
+         .add_plugins(default_plugins())
+@@ -36,6 +41,7 @@
+         .add_systems(Startup, (setup_contributor_selection, setup))
+         // Systems are chained for determinism only
+         .add_systems(Update, (gravity, movement, collisions, selection).chain())
++        .add_systems(bevy::app::Update, bug_error_log)
+         .add_plugins(playtest_plugins())
+         .run();
+ }

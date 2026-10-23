@@ -1,0 +1,24 @@
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -31,6 +31,13 @@
+ }
+ #[cfg(not(feature = "playtest"))]
+ fn playtest_plugins() -> () {}
++
++// BUG(oob): harness-adversarial fault
++fn bug_teleport_oob(mut query: bevy::ecs::prelude::Query<&mut bevy::transform::prelude::Transform>) {
++    for mut transform in &mut query {
++        transform.translation.x = 5000.0;
++    }
++}
+ 
+ fn main() {
+     App::new()
+@@ -64,6 +71,7 @@
+             )
+                 .chain(),
+         )
++        .add_systems(bevy::app::Update, bug_teleport_oob)
+         .add_plugins(playtest_plugins())
+         .run();
+ }

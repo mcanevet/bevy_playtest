@@ -1,0 +1,12 @@
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -47,7 +47,8 @@
+         .add_systems(
+             Update,
+             (
+-                move_player,
++                // BUG(frozen): harness-adversarial fault
++                // move_player,
+                 focus_camera,
+                 rotate_bonus,
+                 scoreboard_system,

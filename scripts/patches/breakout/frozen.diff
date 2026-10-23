@@ -1,0 +1,12 @@
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -78,7 +78,8 @@
+         // which is called once per frame.
+         .add_systems(
+             Update,
+-            (apply_velocity, move_paddle, check_for_collisions)
++            // BUG(frozen): harness-adversarial fault
++            // (apply_velocity, move_paddle, check_for_collisions)
+                 // `chain`ing systems together runs them in order
+                 .chain(),
+         )
