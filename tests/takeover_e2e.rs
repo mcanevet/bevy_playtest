@@ -1,7 +1,7 @@
 //! End-to-end takeover tests for `PlaytestPlugin`.
 //!
 //! The "game" is `examples/takeover_demo.rs` (a tiny headless Bevy app
-//! with PlaytestPlugin and a moving Gameplay entity), spawned as a child
+//! with PlaytestPlugin and a moving entity), spawned as a child
 //! process per case.
 //!
 //! Cases:
@@ -395,9 +395,9 @@ fn all_selector_runs_on_stock_game_without_annotations() {
 }
 
 #[test]
-fn gameplay_selector_on_stock_game_fires_vacuous_invariant() {
-    let stock = PathBuf::from(env!("CARGO_BIN_EXE_takeover_demo_stock"));
-    let dir = unique_dir("stock_vacuous");
+fn invariant_with_zero_entities_fires_vacuous_invariant() {
+    let empty = PathBuf::from(env!("CARGO_BIN_EXE_takeover_demo_empty"));
+    let dir = unique_dir("empty_vacuous");
 
     let scenario_path = dir.join("scenario.json");
     let report_path = dir.join("report.json");
@@ -407,7 +407,7 @@ fn gameplay_selector_on_stock_game_fires_vacuous_invariant() {
             "invariants":[{"name":"bounds","rule":"nodes_in_bounds"}]}"#,
     )
     .unwrap();
-    let out = Command::new(&stock)
+    let out = Command::new(&empty)
         .env(ENV_SCENARIO, &scenario_path)
         .env(ENV_REPORT, &report_path)
         .output()
@@ -415,7 +415,7 @@ fn gameplay_selector_on_stock_game_fires_vacuous_invariant() {
     assert_eq!(
         out.status.code(),
         Some(exit_code::FAIL),
-        "gameplay selector with zero marked entities must Fail loudly"
+        "invariant matching zero entities must Fail loudly"
     );
     let report: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
@@ -423,16 +423,6 @@ fn gameplay_selector_on_stock_game_fires_vacuous_invariant() {
     assert!(
         violations.iter().any(|v| v["rule"] == "vacuous_invariant"),
         "must flag vacuous_invariant: {report}"
-    );
-    let detail = violations
-        .iter()
-        .find(|v| v["rule"] == "vacuous_invariant")
-        .unwrap()["detail"]
-        .as_str()
-        .unwrap();
-    assert!(
-        detail.contains("'all'"),
-        "violation must suggest the all selector: {detail}"
     );
 }
 

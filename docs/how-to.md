@@ -66,7 +66,7 @@ No harness imports in the game. Its binary must:
    `bevy::remote::http::RemoteHttpPlugin` — requires the `bevy_remote`
    cargo feature)
 2. Register the reflected types the harness inspects:
-   `.register_type::<Transform>()` plus your gameplay marker
+   `.register_type::<Transform>()`
 3. Read the listen port from the `BRP_PORT` env var (the harness sets it
    for the subprocess)
 

@@ -274,18 +274,6 @@ fn target_selector_all_parses() {
         s.invariants[0].target_selector,
         Some(bevy_playtest::enums::TargetSelector::All)
     );
-    let mut json = minimal_scenario("chaos");
-    json["invariants"] = serde_json::json!([
-        { "name": "bounds", "rule": "nodes_in_bounds", "target_selector": "gameplay" }
-    ]);
-    let s = parse(json);
-    assert_eq!(
-        s.invariants[0]
-            .target_selector
-            .as_ref()
-            .map(|x| x.to_owned()),
-        Some(bevy_playtest::enums::TargetSelector::Gameplay)
-    );
 }
 
 #[test]
@@ -296,6 +284,18 @@ fn target_selector_unknown_rejects() {
     ]);
     let err = serde_json::from_value::<Scenario>(json).unwrap_err();
     assert!(err.to_string().contains("al"), "{err}");
+}
+
+#[test]
+fn target_selector_gameplay_now_rejects() {
+    // The `gameplay` selector was removed with the Gameplay marker:
+    // scenarios using it must fail loudly rather than silently degrade.
+    let mut json = minimal_scenario("chaos");
+    json["invariants"] = serde_json::json!([
+        { "name": "b", "rule": "nodes_in_bounds", "target_selector": "gameplay" }
+    ]);
+    let err = serde_json::from_value::<Scenario>(json).unwrap_err();
+    assert!(err.to_string().contains("gameplay"), "{err}");
 }
 
 #[test]

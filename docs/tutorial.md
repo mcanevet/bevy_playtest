@@ -61,24 +61,12 @@ and swaps to a headless runner when `BEVY_PLAYTEST_SCENARIO` is set.
 Without the feature, plain `cargo build` compiles the ORIGINAL plugin
 graph unchanged — zero bevy_playtest code ships.
 
-## 3. Tag gameplay entities (optional but recommended)
+## 3. Write the scenario
 
-Entities the harness should treat as gameplay get one marker:
-
-```rust
-use bevy_playtest::contract::Gameplay;
-
-commands.entity(ball).insert(Gameplay);
-```
-
-The bounds invariant checks `Gameplay`-tagged entities. The NaN and
-liveness oracles watch every entity with a `Transform`, so they work
-whether or not you tag anything. There is also a hard-coded global
-bounds check (±1000 on all axes) that runs regardless of tagging or
-invariant declarations — untagged structural entities at the origin
-won't trip it, but stray geometry will.
-
-## 4. Write the scenario
+Zero-annotation: the oracles and bounds invariants watch every entity
+with a `Transform`, so no bevy_playtest-specific code in the game is
+needed. Structural entities at the origin won't trip them, but stray
+geometry will.
 
 ```json
 {
@@ -94,7 +82,7 @@ won't trip it, but stray geometry will.
 Every invariant needs a unique `name` and a `rule`. Bounds are per-axis
 (`min_x`/`max_x`/`min_y`/`max_y`), not a single box.
 
-## 5. Run it
+## 4. Run it
 
 From `cargo test` (the recommended integration — see the README's
 "Mode 1: In-process (takeover)" section for the Cargo.toml pattern):
@@ -136,12 +124,12 @@ fn smoke() {
 Failures print the violation list — NaN transform, out-of-bounds entity,
 crash, or ERROR log, each with the tick and entities involved.
 
-## 6. Make it repeat
+## 5. Make it repeat
 
 Same `seed` → same key sequence → same result. Put the failing seed in the
 scenario file and re-run until the invariant passes.
 
-## 7. Go further
+## 6. Go further
 
 - **Replay divergence** (`"verify_replay": true`) proves determinism by
   running the scenario twice and comparing per-frame fingerprints.

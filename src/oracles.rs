@@ -2,7 +2,7 @@
 //!
 //! Each oracle is a Bevy system reporting into the run's violations
 //! resource. The driver registers them; scenario configuration gates
-//! which families run (bounds/NaN run when any Gameplay entity
+//! which families run (bounds/NaN run over all entities with a
 
 use bevy_ecs::prelude::*;
 use bevy_transform::prelude::Transform;
@@ -15,11 +15,10 @@ use crate::rules::Rule;
 pub const DEFAULT_BOUNDS_EXTENT: f32 = 1000.0;
 
 /// Bounds oracle: all entities with `Transform` must stay inside the play space.
-/// Queries ALL entities (no `Gameplay` marker requirement): static
-/// UI/structural entities sit at or near the origin, which is within
-/// bounds, so no false positives; games that adopt the marker can rely on
-/// it later for narrowing. This keeps the oracle non-vacuous on showcase
-/// games that never insert `Gameplay`.
+/// Queries ALL entities (zero-annotation): static UI/structural entities
+/// sit at or near the origin, which is within bounds, so no false
+/// positives. This keeps the oracle non-vacuous even on games that use
+/// no bevy_playtest-specific code.
 pub fn bounds_oracle_system(
     state: Res<RunState>,
     mut violations: ResMut<RunViolations>,
@@ -48,8 +47,8 @@ pub fn bounds_oracle_system(
 }
 
 /// NaN oracle: all `Transform`s must hold finite values.
-/// Queries ALL entities (no `Gameplay` marker requirement) so the
-/// oracle is never vacuous on games that haven't adopted the contract.
+/// Queries ALL entities (zero-annotation) so the oracle is never
+/// vacuous on games that use no bevy_playtest-specific code.
 pub fn nan_oracle_system(
     state: Res<RunState>,
     mut violations: ResMut<RunViolations>,

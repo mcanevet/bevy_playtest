@@ -21,24 +21,19 @@ fn minimal_app() -> App {
     App::new()
 }
 
-/// A moving Gameplay entity keeps the runs observable for the oracles
+/// A moving entity keeps the runs observable for the oracles
 /// without asserting anything about it.
 fn spawn_observable_entity(app: &mut App) {
     app.add_systems(
         bevy_app::Update,
-        |mut q: bevy_ecs::prelude::Query<
-            &mut bevy_transform::prelude::Transform,
-            bevy_ecs::prelude::With<bevy_playtest::contract::Gameplay>,
-        >| {
+        |mut q: bevy_ecs::prelude::Query<&mut bevy_transform::prelude::Transform>| {
             for mut t in &mut q {
                 t.translation.x += 1.0;
             }
         },
     );
-    app.world_mut().spawn((
-        bevy_playtest::contract::Gameplay,
-        bevy_transform::prelude::Transform::from_xyz(0.0, 0.0, 0.0),
-    ));
+    app.world_mut()
+        .spawn(bevy_transform::prelude::Transform::from_xyz(0.0, 0.0, 0.0));
 }
 
 fn chaos_scenario(duration_s: f32) -> Scenario {

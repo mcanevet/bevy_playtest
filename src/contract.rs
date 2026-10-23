@@ -1,7 +1,9 @@
-//! Game-side hooks and markers for the harness.
+//! Game-side hooks for the harness.
 //!
-//! Games register typed reset/cheat hooks here; the `Gameplay` marker
-//! scopes oracle queries.
+//! Games register typed reset/cheat hooks here. Oracles and invariants
+//! are zero-annotation: they apply to every entity with a `Transform`,
+//! with no game-side markers required (name-based targeting of specific
+//! entities is roadmap, not yet implemented).
 
 use bevy_ecs::prelude::*;
 use std::collections::HashMap;
@@ -36,11 +38,3 @@ impl CheatHooks {
         self.0.keys().map(|s| s.as_str()).collect()
     }
 }
-
-/// Entities that can leave the play area — bounds/NaN invariants check
-/// these; structural/UI entities (legitimately at origin) are excluded.
-///
-/// `Reflect` so external-BRP mode can query it (`world.query`).
-#[derive(Component, bevy_reflect::Reflect)]
-#[reflect(Component)]
-pub struct Gameplay;

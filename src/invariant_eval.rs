@@ -10,31 +10,22 @@ use crate::scenario::Invariant;
 
 /// Evaluate all scenario invariants each frame (only `nodes_in_bounds`
 /// is wired; others panic — they should have been rejected at load time).
+///
+/// Vacuity is NOT checked here: like the run-level `vacuous_run` rule,
+/// it must be judged with any-frame observability (a game whose
+/// entities spawn after frame 0 — loading screens — is NOT vacuous),
+/// so the driver reports it after the run ends.
 pub fn evaluate_invariants_system(
     state: Res<RunState>,
     mut violations: ResMut<RunViolations>,
     invariants: Res<ScenarioInvariants>,
-    q_gameplay: Query<(Entity, &Transform), With<crate::contract::Gameplay>>,
     q_all: Query<(Entity, &Transform)>,
 ) {
     for inv in &invariants.0 {
-        let default_selector = crate::enums::TargetSelector::default();
-        let selector = inv.target_selector.as_ref().unwrap_or(&default_selector);
+        let selector = inv.target_selector.clone().unwrap_or_default();
         match selector {
             crate::enums::TargetSelector::All => {
                 evaluate_bounds(inv, state.frame, &mut violations, &mut q_all.iter());
-            }
-            crate::enums::TargetSelector::Gameplay => {
-                if q_gameplay.is_empty() && state.frame == 0 {
-                    violations.0.report(
-                        "vacuous_invariant",
-                        &inv.name,
-                        "gameplay-targeted invariant matched zero entities; mark entities with contract::Gameplay or use the 'all' target selector"
-                            .to_string(),
-                        state.frame,
-                    );
-                }
-                evaluate_bounds(inv, state.frame, &mut violations, &mut q_gameplay.iter());
             }
         }
     }

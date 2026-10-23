@@ -1,6 +1,6 @@
 //! Zero-annotation demo "game": NO bevy_playtest-specific code except
-//! the plugin line — no Gameplay marker, no hooks. Used by e2e tests
-//! to prove the `all` target selector works on a stock game.
+//! the plugin line — no hooks, no markers. Used by e2e tests to prove
+//! the harness works on a stock game.
 fn main() {
     use bevy_app::prelude::*;
     use bevy_ecs::prelude::*;

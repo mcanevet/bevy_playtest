@@ -793,11 +793,35 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             last_frame: state.frame,
             count: 1,
             detail: "no entities to observe — the run is vacuous; spawn \
-                     Gameplay entities so oracles have something to check"
+                     entities with a Transform so oracles have something to check"
                 .to_string(),
             last_detail: "no entities to observe — the run is vacuous".to_string(),
         });
         status = PlaytestStatus::Fail;
+    }
+
+    // Per-invariant vacuity guard: an invariant that never had a single
+    // entity to check proves nothing. Same any-frame criterion as
+    // vacuous_run; reported per invariant name so the offender is named.
+    if !entities_observable {
+        for inv in &scenario.invariants {
+            snap.push(crate::state::ViolationEntry {
+                rule: Rule::VacuousInvariant.name().to_string(),
+                target: inv.name.clone(),
+                first_frame: 0,
+                last_frame: state.frame,
+                count: 1,
+                detail: format!(
+                    "invariant '{}' matched zero entities over the whole run; \
+                     the check proves nothing until there is something to check",
+                    inv.name
+                ),
+                last_detail: format!("invariant '{}' matched zero entities", inv.name),
+            });
+        }
+        if !scenario.invariants.is_empty() && status == PlaytestStatus::Pass {
+            status = PlaytestStatus::Fail;
+        }
     }
 
     // Action log: one entry per emitted input press, so a report's claim

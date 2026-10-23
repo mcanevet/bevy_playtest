@@ -17,7 +17,7 @@ machine-readable report.
 
 - Runs a Bevy game headless, in-process, or as a subprocess over BRP
 - Drives it with a seeded chaos bot or a scripted key schedule
-- Watches for: NaN/finite transforms, gameplay entities leaving bounds,
+- Watches for: NaN/finite transforms, entities leaving bounds,
   a frozen world, panics, ERROR logs
 - Emits JSON and JUnit XML reports
 - Fails loudly on anything it doesn't support — never a vacuous pass

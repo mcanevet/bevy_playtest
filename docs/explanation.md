@@ -18,7 +18,7 @@ waits a grace window (default 2 s) before declaring the world frozen.
 The timeout is configurable via `liveness.timeout_s` in the scenario;
 disabling liveness entirely is not yet implemented — widen the timeout
 to accommodate quiet phases. It watches `Transform` changes on any
-entity, so it fires even in games that never adopt the `Gameplay` marker.
+entity, so it needs no game-side annotations.
 
 ## Why never a vacuous pass
 
@@ -41,14 +41,6 @@ with explicit errors. A passing report means the oracles genuinely ran.
 Chaos without reproducibility is just flakiness. Every bot run carries a
 seed; the same seed replays the identical key sequence. A bug report that
 includes the seed is a reproducer anyone can run.
-
-## Why `Gameplay` tags instead of tracking everything
-
-Tracking every entity makes bounds checks noisy (UI, cameras, effects).
-A single marker component lets the game author declare what "gameplay"
-means — the harness stays generic, the game stays in control of
-semantics. The NaN and liveness oracles still watch every entity with
-a `Transform`, so untagged games aren't given a vacuous pass.
 
 ## Why disable winit
 
