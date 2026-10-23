@@ -89,13 +89,7 @@ fn rejects_path_traversal_in_name() {
 fn rejects_removed_bot_types_loudly() {
     // Unimplemented bot types are removed from the enum: they fail
     // deserialization with an unknown-variant error naming the type.
-    for bot in [
-        "pursuit",
-        "planner",
-        "custom",
-        "synthetic_pointer",
-        "replay",
-    ] {
+    for bot in ["pursuit", "planner", "custom", "replay"] {
         let err = serde_json::from_value::<Scenario>(minimal_scenario(bot))
             .expect_err("removed bot type must not parse");
         assert!(

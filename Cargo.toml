@@ -28,6 +28,13 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 bevy_winit = { version = "0.20.0", optional = true, default-features = false }
 bevy = { version = "0.20.0", optional = true }
 
+# Pointer input bot (synthetic_pointer)
+bevy_picking = { version = "0.20.0", optional = true, default-features = false }
+bevy_math = { version = "0.20.0", optional = true, default-features = false }
+bevy_camera = { version = "0.20.0", optional = true, default-features = false }
+bevy_window = { version = "0.20.0", optional = true, default-features = false }
+bevy_ui = { version = "0.20.0", optional = true, default-features = false }
+
 # BRP client (brp feature)
 async-io = { version = "2.6.0", optional = true }
 http-body-util = { version = "0.1.5", optional = true }
@@ -74,6 +81,14 @@ brp = [
     "dep:futures-lite",
 ]
 brp-plugin = ["dep:bevy_remote"]
+pointer-input = [
+    "in-process",
+    "dep:bevy_picking",
+    "dep:bevy_math",
+    "dep:bevy_camera",
+    "dep:bevy_window",
+    "dep:bevy_ui",
+]
 
 # Local dev speedup: line-tables-only debuginfo (fast link, much
 # smaller target/ — full debuginfo made each Bevy rlib 190-370 MB).

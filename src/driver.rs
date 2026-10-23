@@ -1,7 +1,8 @@
 //! In-process driver: runs a scenario against an already-built Bevy App.
 //!
 //! Panic/log hooks, single-threaded setup, chaos bot,
-//! synthetic_keyboard bot, frame-timing oracle, frozen_world stub.
+//! synthetic_keyboard bot, synthetic_pointer bot (feature-gated),
+//! frame-timing oracle, frozen_world stub.
 //! The full oracle suite (liveness, bounds, NaN, pass_through) ports
 //! incrementally.
 
@@ -13,6 +14,14 @@ use bevy_input::{prelude::ButtonInput, ButtonState};
 use bevy_time::{Time, TimeUpdateStrategy};
 use bevy_transform::prelude::Transform;
 use std::sync::Arc;
+
+#[cfg(feature = "pointer-input")]
+use bevy_picking::pointer::{
+    PointerAction, PointerButton as BevyPointerButton, PointerId, PointerInput,
+};
+
+#[cfg(feature = "pointer-input")]
+use bevy_transform::components::GlobalTransform;
 
 use crate::contract::{CheatHooks, ResetHooks};
 use crate::enums::{BotType, PlaytestStatus};
@@ -293,6 +302,318 @@ fn synthetic_keyboard_bot_system(
 }
 
 // ---------------------------------------------------------------------------
+// synthetic_pointer bot (feature: pointer-input)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "pointer-input")]
+mod pointer_bot {
+    use super::*;
+
+    /// One in-flight click gesture: press and release frames scheduled
+    /// relative to the initiating move.
+    #[derive(Clone)]
+    pub(super) struct PendingGesture {
+        press_at: u64,
+        release_at: u64,
+        location: bevy_picking::pointer::Location,
+        button: BevyPointerButton,
+        press_delivered: bool,
+    }
+
+    /// In-flight gestures (front = oldest).
+    #[derive(Resource, Default)]
+    pub(super) struct PendingGestures {
+        queue: std::collections::VecDeque<PendingGesture>,
+    }
+
+    fn to_bevy_button(button: crate::enums::PointerButton) -> BevyPointerButton {
+        match button {
+            crate::enums::PointerButton::Primary => BevyPointerButton::Primary,
+            crate::enums::PointerButton::Secondary => BevyPointerButton::Secondary,
+            crate::enums::PointerButton::Middle => BevyPointerButton::Middle,
+        }
+    }
+
+    /// synthetic_pointer: emits RAW `PointerInput` events (Move → Press
+    /// → Release) at a named entity's projected viewport position.
+    /// Unlike intent-injection bots (chaos), this drives the game
+    /// through its real input chain: pointer input → picking backend
+    /// raycast → `PointerClick` message → the game's own handlers.
+    /// A game whose picking wiring is broken produces clicks that hit
+    /// nothing — caught by the scenario's invariants, not silently
+    /// skipped.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn synthetic_pointer_bot_system(
+        mut state: ResMut<RunState>,
+        mut violations: ResMut<RunViolations>,
+        mut gestures: ResMut<PendingGestures>,
+        mut pointer_inputs: MessageWriter<PointerInput>,
+        // Target resolution is Name-first, zero-annotation: any named
+        // entity is clickable (matches the ecosystem convention — Name
+        // is the Bevy lingua franca for addressing entities). The
+        // `Gameplay` marker remains available for invariant scoping,
+        // but pointer clicks do not require it.
+        q_named: Query<(&Name, &GlobalTransform)>,
+        q_ui_named: Query<(
+            &Name,
+            &bevy_ui::prelude::UiGlobalTransform,
+            &bevy_ui::prelude::ComputedNode,
+        )>,
+        q_camera: Query<(&bevy_camera::Camera, &GlobalTransform)>,
+        primary_window: Query<Entity, With<bevy_window::PrimaryWindow>>,
+        scenario: Res<ScenarioResource>,
+    ) {
+        // Deliver pending gesture halves scheduled for this frame.
+        deliver_pending_gestures(
+            &mut state,
+            &mut violations,
+            &mut gestures,
+            &mut pointer_inputs,
+        );
+        for click in &scenario.0.bot.pointer_clicks {
+            if click.frame != state.frame {
+                continue;
+            }
+            let button = to_bevy_button(click.button);
+            // Resolve the target to viewport coordinates. Two spaces:
+            // world-space meshes (GlobalTransform + camera projection)
+            // and UI nodes (UiGlobalTransform + ComputedNode, already
+            // in physical pixels). Try world-space first.
+            let mut viewport_pos = None;
+            if let Some((_, transform)) = q_named
+                .iter()
+                .find(|(name, _)| name.as_str() == click.target)
+            {
+                for (camera, cam_transform) in q_camera.iter() {
+                    if let Ok(p) = camera.world_to_viewport(cam_transform, transform.translation())
+                    {
+                        viewport_pos = Some(p);
+                        break;
+                    }
+                }
+            } else if let Some((_, ui_transform, node)) = q_ui_named
+                .iter()
+                .find(|(name, _, _)| name.as_str() == click.target)
+            {
+                // UI nodes hit-test in physical pixels; the picking
+                // backend multiplies Location.position by the camera's
+                // target scaling factor, so divide back out to logical.
+                let center_phys = ui_transform.translation;
+                let scale = node.inverse_scale_factor;
+                viewport_pos = Some(bevy_math::Vec2::new(
+                    center_phys.x * scale,
+                    center_phys.y * scale,
+                ));
+            }
+            let Some(position) = viewport_pos else {
+                violations.0.report(
+                    Rule::BotConfig.name(),
+                    &click.target,
+                    format!(
+                        "click target '{}' not found among named entities \
+                         (world-space or UI)",
+                        click.target
+                    ),
+                    state.frame,
+                );
+                continue;
+            };
+            let Ok(window_entity) = primary_window.single() else {
+                violations.0.report(
+                    Rule::BotConfig.name(),
+                    &click.target,
+                    "no primary window entity — cannot synthesize pointer events".into(),
+                    state.frame,
+                );
+                continue;
+            };
+            let Some(target) =
+                bevy_camera::RenderTarget::Window(bevy_window::WindowRef::Entity(window_entity))
+                    .normalize(Some(window_entity))
+            else {
+                violations.0.report(
+                    Rule::BotConfig.name(),
+                    &click.target,
+                    "primary window render-target normalization failed".into(),
+                    state.frame,
+                );
+                continue;
+            };
+            let location = bevy_picking::pointer::Location { target, position };
+            // A click is a THREE-FRAME gesture: Move, then Press, then
+            // Release. Rationale: bevy_picking's release/click dispatch
+            // reads the PREVIOUS frame's hover map (previous_hover_map),
+            // so a press and release in the same frame as the move
+            // finds no prior hover and silently drops the click.
+            // Spreading the gesture across frames mirrors real mouse
+            // timing.
+            pointer_inputs.write(PointerInput::new(
+                PointerId::Mouse,
+                location.clone(),
+                PointerAction::Move {
+                    delta: bevy_math::Vec2::ZERO,
+                },
+            ));
+            // Pending press/release delivered on subsequent frames.
+            let f = state.frame;
+            gestures.queue.push_back(PendingGesture {
+                press_at: f + 1,
+                release_at: f + 1 + click.hold_frames.max(1),
+                location,
+                button,
+                press_delivered: false,
+            });
+            state.metrics.input_count += 1;
+        }
+    }
+
+    /// Chaos bot's pointer half: at the scenario's input rate, click the
+    /// center of a SEEDED-RANDOM UI node. Zero-annotation: any UI node
+    /// is a candidate (clicks bubble up the hierarchy, so hitting a
+    /// button's child text or a container still reaches interactive
+    /// widgets). Drives menu-style games the keyboard surface can't,
+    /// through the real picking chain.
+    pub(super) fn chaos_pointer_click_system(
+        mut state: ResMut<RunState>,
+        mut violations: ResMut<RunViolations>,
+        mut choices: ResMut<RunChoices>,
+        mut gestures: ResMut<PendingGestures>,
+        mut pointer_inputs: MessageWriter<PointerInput>,
+        q_ui: Query<(
+            &bevy_ui::prelude::UiGlobalTransform,
+            &bevy_ui::prelude::ComputedNode,
+        )>,
+        primary_window: Query<Entity, With<bevy_window::PrimaryWindow>>,
+        scenario: Res<ScenarioResource>,
+    ) {
+        // Deliver pending gesture halves scheduled for this frame.
+        deliver_pending_gestures(
+            &mut state,
+            &mut violations,
+            &mut gestures,
+            &mut pointer_inputs,
+        );
+
+        // One click per input-rate interval, mirroring the keyboard
+        // half's pacing.
+        let rate = scenario.0.bot.input_rate_hz.max(1);
+        let interval = (state.tps / rate as u64).max(1);
+        if state.frame == 0 || !state.frame.is_multiple_of(interval) {
+            return;
+        }
+
+        let nodes: Vec<_> = q_ui.iter().collect();
+        if nodes.is_empty() {
+            return;
+        }
+        let idx = choices.0.below(state.frame, nodes.len() as u64) as usize;
+        let (ui_transform, node) = nodes[idx];
+        // UI nodes hit-test in physical pixels; the picking backend
+        // multiplies Location.position by the camera's target scaling
+        // factor, so divide back out to logical (same conversion as
+        // the synthetic_pointer bot's named-target path).
+        let center_phys = ui_transform.translation;
+        let scale = node.inverse_scale_factor;
+        let position = bevy_math::Vec2::new(center_phys.x * scale, center_phys.y * scale);
+
+        let Ok(window_entity) = primary_window.single() else {
+            return;
+        };
+        let Some(target) =
+            bevy_camera::RenderTarget::Window(bevy_window::WindowRef::Entity(window_entity))
+                .normalize(Some(window_entity))
+        else {
+            return;
+        };
+        let location = bevy_picking::pointer::Location { target, position };
+        // Three-frame gesture (Move, then Press, then Release): the
+        // picking backend reads the PREVIOUS frame's hover map on
+        // release, so same-frame moves would be dropped.
+        pointer_inputs.write(PointerInput::new(
+            PointerId::Mouse,
+            location.clone(),
+            PointerAction::Move {
+                delta: bevy_math::Vec2::ZERO,
+            },
+        ));
+        let f = state.frame;
+        gestures.queue.push_back(PendingGesture {
+            press_at: f + 1,
+            release_at: f + 2,
+            location,
+            button: BevyPointerButton::Primary,
+            press_delivered: false,
+        });
+        state.metrics.input_count += 1;
+    }
+
+    /// Deliver pending gesture halves scheduled for this (or a past)
+    /// frame. Split out for direct testability.
+    pub(super) fn deliver_pending_gestures(
+        state: &mut RunState,
+        violations: &mut RunViolations,
+        gestures: &mut PendingGestures,
+        pointer_inputs: &mut MessageWriter<PointerInput>,
+    ) {
+        let frame = state.frame;
+        let _ = violations;
+        let mut still_pending = std::collections::VecDeque::new();
+        while let Some(mut g) = gestures.queue.pop_front() {
+            // Deliver as soon as we're at or past the scheduled frame —
+            // exact equality loses the press half when the frame jumps
+            // by more than 1 (pause, startup jitter, frame drop).
+            // press_delivered guarantees at-most-once delivery.
+            if !g.press_delivered && g.press_at <= frame {
+                pointer_inputs.write(PointerInput::new(
+                    PointerId::Mouse,
+                    g.location.clone(),
+                    PointerAction::Press(g.button),
+                ));
+                g.press_delivered = true;
+            }
+            if g.release_at <= frame {
+                pointer_inputs.write(PointerInput::new(
+                    PointerId::Mouse,
+                    g.location.clone(),
+                    PointerAction::Release(g.button),
+                ));
+                // Gesture complete.
+                continue;
+            }
+            // Not yet fully delivered — keep waiting.
+            still_pending.push_back(g);
+        }
+        gestures.queue = still_pending;
+    }
+
+    /// Fill `Camera.computed.target_info` from the primary window
+    /// when bevy_render's camera_system is absent (headless runs
+    /// with RenderPlugin disabled). Without target_info, pointer
+    /// picking and viewport projection fail with
+    /// NoViewportSize.
+    pub(super) fn headless_camera_target_info_system(
+        primary_window: Query<&bevy_window::Window, With<bevy_window::PrimaryWindow>>,
+        mut cameras: Query<&mut bevy_camera::Camera>,
+    ) {
+        let Some(window) = primary_window.iter().next() else {
+            return;
+        };
+        let info = bevy_camera::RenderTargetInfo {
+            physical_size: window.physical_size(),
+            scale_factor: window.resolution.scale_factor(),
+        };
+        for mut camera in &mut cameras {
+            // Only fill when bevy_render's camera_system hasn't
+            // already (it sets target_info when RenderPlugin is
+            // present).
+            if camera.computed.target_info.is_none() {
+                camera.computed.target_info = Some(info.clone());
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Oracles (frame timing, frozen_world)
 // ---------------------------------------------------------------------------
 
@@ -314,14 +635,26 @@ fn frozen_world_oracle_system(
     mut violations: ResMut<RunViolations>,
     q: Query<(), Changed<Transform>>,
     q_all: Query<(), With<Transform>>,
+    q_entities: Query<Entity>,
 ) {
     if !q_all.is_empty() {
         state.saw_transform_entity = true;
     }
-    if q.is_empty() {
-        state.frozen_frames += 1;
-    } else {
+    // Liveness evidence, in order of strength:
+    // 1. A Transform changed somewhere (motion, animation, physics).
+    // 2. The world POPULATION changed (entities spawned/despawned).
+    //    Covers UI-driven games whose screens are `Node` trees with no
+    //    `Transform` at all: a menu transition despawns/respawns the UI
+    //    without touching a single Transform, which motion-only
+    //    liveness would misreport as a soft-lock. A dead game spawns
+    //    and despawns nothing, so the oracle still fires there.
+    let population = q_entities.iter().count() as u64;
+    let world_changed = !q.is_empty() || population != state.last_population;
+    state.last_population = population;
+    if world_changed {
         state.frozen_frames = 0;
+    } else {
+        state.frozen_frames += 1;
     }
     // Report once per crossing (guard so we don't spam every frame).
     if state.frozen_frames == state.frozen_grace_frames + 1 {
@@ -329,7 +662,7 @@ fn frozen_world_oracle_system(
             Rule::FrozenWorld.name(),
             "world",
             format!(
-                "no Transform changed for {} frames — soft-lock?",
+                "no world activity (Transform change, spawn/despawn) for {} frames — soft-lock?",
                 state.frozen_frames
             ),
             state.frame,
@@ -356,6 +689,9 @@ pub struct RunState {
     /// a game whose entities all despawn before the end is NOT vacuous
     /// (the oracles observed them while they lived).
     saw_transform_entity: bool,
+    /// Last-frame entity population for detecting spawn/despawn as
+    /// liveness evidence. Initialized on first run.
+    last_population: u64,
 }
 
 impl Default for RunState {
@@ -371,6 +707,7 @@ impl Default for RunState {
             // loop runs.
             frozen_grace_frames: 180,
             saw_transform_entity: false,
+            last_population: 0,
         }
     }
 }
@@ -673,6 +1010,8 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     // never observed by ButtonInput-based games (silent vacuous pass).
     app.add_message::<KeyboardInput>();
     app.add_message::<KeyboardFocusLost>();
+    #[cfg(feature = "pointer-input")]
+    app.add_message::<PointerInput>();
     app.init_resource::<ButtonInput<KeyCode>>();
     app.init_resource::<ButtonInput<bevy_input::keyboard::Key>>();
     // Order: translate BEFORE game systems in Update so games observe the
@@ -689,6 +1028,8 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     // Register bot + oracle systems once.
     app.init_resource::<ChaosHoldState>();
     app.init_resource::<ScheduledHoldState>();
+    #[cfg(feature = "pointer-input")]
+    app.init_resource::<pointer_bot::PendingGestures>();
 
     app.insert_resource(crate::invariant_eval::ScenarioInvariants(
         scenario.invariants.clone(),
@@ -702,6 +1043,15 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         (
             chaos_bot_system.run_if(is_chaos_bot),
             synthetic_keyboard_bot_system.run_if(is_synthetic_keyboard_bot),
+            #[cfg(feature = "pointer-input")]
+            pointer_bot::synthetic_pointer_bot_system.run_if(is_synthetic_pointer_bot),
+            // Chaos bot's pointer half: seeded UI-node clicks so the
+            // battery exercises menu-style games the keyboard surface
+            // cannot drive.
+            #[cfg(feature = "pointer-input")]
+            pointer_bot::chaos_pointer_click_system.run_if(is_chaos_bot),
+            #[cfg(feature = "pointer-input")]
+            pointer_bot::headless_camera_target_info_system.run_if(pointer_bot_needs_camera_info),
             frame_timing_oracle_system,
             frozen_world_oracle_system,
             crate::invariant_eval::evaluate_invariants_system,
@@ -969,6 +1319,19 @@ fn is_chaos_bot(scenario: Option<Res<ScenarioResource>>) -> bool {
 
 fn is_synthetic_keyboard_bot(scenario: Option<Res<ScenarioResource>>) -> bool {
     scenario.is_some_and(|s| s.0.bot.bot_type == BotType::SyntheticKeyboard)
+}
+
+#[cfg(feature = "pointer-input")]
+fn is_synthetic_pointer_bot(scenario: Option<Res<ScenarioResource>>) -> bool {
+    scenario.is_some_and(|s| s.0.bot.bot_type == BotType::SyntheticPointer)
+}
+
+/// The pointer bot needs `Camera.target_info` filled when bevy_render's
+/// camera system is absent (headless runs). Runs for any bot that emits
+/// pointer input: synthetic_pointer and the chaos bot's pointer half.
+#[cfg(feature = "pointer-input")]
+fn pointer_bot_needs_camera_info(scenario: Option<Res<ScenarioResource>>) -> bool {
+    scenario.is_some_and(|s| matches!(s.0.bot.bot_type, BotType::SyntheticPointer | BotType::Chaos))
 }
 
 /// Whether a rule is informational (non-gating). When the scenario sets
