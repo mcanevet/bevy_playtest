@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/mcanevet/bevy_playtest/compare/v0.2.0...v0.3.0) - 2026-10-23
+
+### Added
+
+- close the log_error oracle gap — cross-thread capture with honest loss reporting
+
+### Fixed
+
+- *(fetch)* fetch fixture runtime assets to silence bevy_asset Path-not-found
+- avoid rustdoc private-intra-doc-link warning in try_acquire_run docs
+- mock-game source write raced rustc in brp_robustness
+
+### Other
+
+- single-job PR gate + nightly, mirror workaround, build-once-test-many
+- ci Update release-plz/action action to v0.5.145
+- [**breaking**] remove contract::Gameplay marker — zero-annotation invariants
+- drop --locked from fixtures workspace commands
+
 ## [0.2.0](https://github.com/mcanevet/bevy_playtest/compare/v0.1.0...v0.2.0) - 2026-10-23
 
 ### Added
