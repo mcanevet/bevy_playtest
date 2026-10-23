@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/mcanevet/bevy_playtest/compare/v0.1.0...v0.2.0) - 2026-10-23
+
+### Added
+
+- [**breaking**] run playtests via plain `cargo test` (self-dev-dependency pattern)
+
+### Other
+
+- ci Update taiki-e/install-action digest to a4d3f3f
+- fix unit job — skip acceptance test (needs fixture binaries) ([#21](https://github.com/mcanevet/bevy_playtest/pull/21))
+- fix release-plz workflow (add Linux deps + pin toolchain)
+- minimize wall-clock via parallel jobs + binary artifacts
+- ci Update actions/checkout action to v7
+- add release-plz workflow and config
+
 ### Added
 - In-process playtest takeover: `BEVY_PLAYTEST_SCENARIO` turns the game
   binary into its own headless runner (exit codes 0 Pass / 1 Fail / 2
