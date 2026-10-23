@@ -71,9 +71,10 @@ static ACTIVE_RUN: Mutex<Option<ActiveRun>> = Mutex::new(None);
 static RUN_SERIAL: Mutex<()> = Mutex::new(());
 
 /// Acquire the active run for a new `run_scenario`. Concurrent or
-/// nested calls are REJECTED (never blocked — see [`RUN_SERIAL`]).
-/// Must be the FIRST thing `run_scenario` does: everything afterwards
-/// (setup included) is then attributable to this run.
+/// nested calls are REJECTED (never blocked — see the module-level
+/// docs on exclusivity). Must be the FIRST thing `run_scenario` does:
+/// everything afterwards (setup included) is then attributable to
+/// this run.
 pub fn try_acquire_run() -> Result<RunGuard, String> {
     // Non-blocking: rejection over serialization. Poison recovery is
     // REQUIRED here, not optional: a setup-phase panic unwinds through
