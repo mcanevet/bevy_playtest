@@ -1,0 +1,22 @@
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -31,6 +31,11 @@
+ }
+ #[cfg(not(feature = "playtest"))]
+ fn playtest_plugins() -> () {}
++
++// BUG(log_error): harness-adversarial fault
++fn bug_error_log() {
++    tracing::error!("BUG(log_error): harness-adversarial fault");
++}
+ 
+ fn main() {
+     App::new()
+@@ -64,6 +69,7 @@
+             )
+                 .chain(),
+         )
++        .add_systems(bevy::app::Update, bug_error_log)
+         .add_plugins(playtest_plugins())
+         .run();
+ }

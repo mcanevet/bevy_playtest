@@ -1,0 +1,12 @@
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -59,7 +59,8 @@
+                     drag.run_if(resource_exists::<DragOperation>),
+                     quit.run_if(input_just_pressed(MouseButton::Right)),
+                     toggle_transparency.run_if(input_just_pressed(KeyCode::Space)),
+-                    move_pupils.after(drag),
++                    // BUG(frozen): harness-adversarial fault
++                    // move_pupils.after(drag),
+                 ),
+             )
+                 .chain(),

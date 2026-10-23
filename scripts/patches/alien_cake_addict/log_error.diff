@@ -1,0 +1,22 @@
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -32,6 +32,11 @@
+ }
+ #[cfg(not(feature = "playtest"))]
+ fn playtest_plugins() -> () {}
++
++// BUG(log_error): harness-adversarial fault
++fn bug_error_log() {
++    tracing::error!("BUG(log_error): harness-adversarial fault");
++}
+ 
+ fn main() {
+     App::new()
+@@ -60,6 +65,7 @@
+             Update,
+             game_over_keyboard.run_if(in_state(GameState::GameOver)),
+         )
++        .add_systems(bevy::app::Update, bug_error_log)
+         .add_plugins(playtest_plugins())
+         .run();
+ }

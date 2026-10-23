@@ -1,0 +1,12 @@
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -35,7 +35,8 @@
+         .init_resource::<SharedRng>()
+         .add_systems(Startup, (setup_contributor_selection, setup))
+         // Systems are chained for determinism only
+-        .add_systems(Update, (gravity, movement, collisions, selection).chain())
++        // BUG(frozen): harness-adversarial fault
++        .add_systems(Update, (gravity, collisions, selection).chain())
+         .add_plugins(playtest_plugins())
+         .run();
+ }

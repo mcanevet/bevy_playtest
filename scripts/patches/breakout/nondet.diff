@@ -1,0 +1,31 @@
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -62,6 +62,20 @@
+ }
+ #[cfg(not(feature = "playtest"))]
+ fn playtest_plugins() -> () {}
++
++// BUG(nondet): harness-adversarial fault
++fn bug_wall_clock_jitter(
++    mut query: bevy::ecs::prelude::Query<&mut bevy::transform::prelude::Transform>,
++) {
++    let jitter = std::time::SystemTime::now()
++        .duration_since(std::time::UNIX_EPOCH)
++        .unwrap()
++        .subsec_nanos() as f32
++        * 1e-6;
++    for mut transform in &mut query {
++        transform.translation.x += jitter;
++    }
++}
+ 
+ fn main() {
+     App::new()
+@@ -84,6 +98,7 @@
+         )
+         .add_systems(Update, update_scoreboard)
+         .add_observer(play_collision_sound)
++        .add_systems(bevy::app::Update, bug_wall_clock_jitter)
+         .add_plugins(playtest_plugins())
+         .run();
+ }

@@ -31,6 +31,8 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 # mutable refs and can be deleted/recreated; commit SHAs cannot).
 BEVY_REV="b3bdd75becaffe9a16677cf5bae5bd6d198f052b" # = tag v0.20.0
 FIXTURES_DIR="fixtures"
+# Absolute repo root (patches are applied from inside fixture dirs).
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 # Local Bevy checkout override — OPT-IN. The default is always the
 # immutable pinned revision fetched from GitHub; a local checkout at a
 # different rev would silently produce different fixtures than CI.
@@ -361,8 +363,156 @@ EOF
     echo "  Created: $target_dir/"
 done
 
+# ---------------------------------------------------------------------------
+# Bug variants: apply each committed patch in scripts/patches/<game>/ to a
+# CLONE of the clean fixture, producing a sibling <game>_bug_<kind> crate.
+# Patches are authored against the TRANSFORMED main.rs (post feature-gated
+# edits) and carry a `// BUG(<kind>): harness-adversarial fault` marker.
+# Generation is loud: a patch that fails to apply (Bevy upgrade broke it)
+# kills the script — bug variants are never silently skipped.
+# tests/playtest.rs for bug variants is SEEDED IF MISSING (committed,
+# hand-editable): it pins the exact expected violations, so hand-tuned
+# expectations survive upstream refreshes.
+# ---------------------------------------------------------------------------
+PATCHES_DIR="$(dirname "$0")/patches"
+
+bug_variants=""
+
+for name in "${SHOWCASE_GAMES[@]}"; do
+    clean_dir="${FIXTURES_DIR}/${name}"
+    game_patches_dir="${PATCHES_DIR}/${name}"
+    [ -d "${game_patches_dir}" ] || continue
+
+    for patch_file in "${game_patches_dir}"/*.diff; do
+        [ -e "${patch_file}" ] || continue
+        kind="$(basename "${patch_file}" .diff)"
+        variant_dir="${FIXTURES_DIR}/${name}_bug_${kind}"
+        variant_pkg="fixture_${name//-/_}_bug_${kind}"
+
+        echo "Bug variant: ${name} / ${kind}"
+
+        # Fresh clone of the clean fixture (source + assets + sibling mods).
+        rm -rf "${variant_dir}"
+        cp -R "${clean_dir}" "${variant_dir}"
+        rm -f "${variant_dir}/bevy_playtest-"*.report.json
+
+        # Apply the patch (git apply handles unified diffs; anchors are
+        # relative to the crate root, a/src/main.rs).
+        if ! (cd "${variant_dir}" && git apply --verbose "${ROOT_DIR}/${patch_file}"); then
+            die "patch ${patch_file} does not apply to ${name} — Bevy upgrade broke it? Re-author the diff."
+        fi
+
+        # Loud verification: the bug marker must appear exactly once.
+        marker_count="$(grep -c "BUG(${kind}):" "${variant_dir}/src/main.rs" || true)"
+        if [ "${marker_count}" != "1" ]; then
+            die "patch ${patch_file} marker count is ${marker_count} (need exactly 1) in ${variant_dir}/src/main.rs"
+        fi
+
+        # Rewrite the package name in Cargo.toml (and the self-dev-dep).
+        python3 - "${variant_dir}/Cargo.toml" "${name}" "${kind}" << 'PYEOF'
+import sys, re
+path, name, kind = sys.argv[1], sys.argv[2], sys.argv[3]
+old_pkg = f"fixture_{name.replace('-', '_')}"
+new_pkg = f"{old_pkg}_bug_{kind}"
+src = open(path).read()
+src = src.replace(old_pkg, new_pkg, 1)                      # [package] name
+src = src.replace(f"{old_pkg} = {{ path = \".\"", f"{new_pkg} = {{ path = \".\"")  # self-dev-dep key
+open(path, "w").write(src)
+PYEOF
+        grep -q "^name = \"${variant_pkg}\"" "${variant_dir}/Cargo.toml" \
+            || die "package rename failed for ${variant_dir}"
+
+        # Seed the bug-mode test file (never overwrite hand-tuned pins).
+        # Per-kind expectations are embedded here: the planted bug's
+        # expected violation rule. Targets (entity ids) differ per game
+        # and Bevy revision, so only the RULE is pinned tightly; extra
+        # gating rules fail the test (negative control).
+        mkdir -p "${variant_dir}/tests"
+        if [[ ! -e "${variant_dir}/tests/playtest.rs" ]]; then
+            case "${kind}" in
+                nan)       expected_rule="finite_transforms" ;;
+                oob)       expected_rule="nodes_in_bounds" ;;
+                frozen)    expected_rule="frozen_world" ;;
+                nondet)    expected_rule="replay_divergence" ;;
+                log_error) expected_rule="log_error" ;;
+                *)         die "unknown bug kind: ${kind}" ;;
+            esac
+        cat > "${variant_dir}/tests/playtest.rs" << EOF
+//! Seeded by scripts/fetch_bevy_examples.sh — COMMITTED, edit freely.
+//! Runs the playtest battery against the BUGGED binary and pins the
+//! expected violation: the planted bug must be detected (positive
+//! control) and no other gating rule may fire (negative control —
+//! catches harness false positives).
+//!
+//! Re-pin after intentional harness/oracle changes by printing the
+//! observed pairs: eprintln!("{:?}", report.violation_pairs());
+#[cfg(feature = "playtest")]
+#[test]
+fn playtest_battery_pins_planted_bug() {
+    let scenario = SCENARIO_EXPR;
+    let report = bevy_playtest::battery::run(
+        env!("CARGO_BIN_EXE_${variant_pkg}"),
+        scenario,
+    )
+    .expect("battery run completes");
+
+    let gating: Vec<(&str, &str)> = report
+        .violation_pairs()
+        .into_iter()
+        .filter(|(rule, _)| rule != "log_warn" && rule != "log_capture_lost")
+        .collect();
+    let expected = "${expected_rule}";
+    assert!(
+        gating.iter().any(|(rule, _)| *rule == expected),
+        "planted bug (${kind}) must be detected: expected \\"{expected}\\" among {:?}",
+        gating
+    );
+    assert_ne!(
+        report.status,
+        bevy_playtest::enums::PlaytestStatus::Pass,
+        "the planted bug must gate the run"
+    );
+}
+
+#[cfg(not(feature = "playtest"))]
+#[test]
+#[ignore = "playtest feature inactive: self-dev-dependency stripped (e.g. cargo package). Run \`cargo test --features playtest\`."]
+fn playtest_battery_pins_planted_bug() {}
+EOF
+        # The nondet bug needs verify_replay, which the built-in battery
+        # does not enable: use an authored scenario inline on disk.
+        if [ "${kind}" = "nondet" ]; then
+            mkdir -p "${variant_dir}/playtests"
+            cat > "${variant_dir}/playtests/nondet.json" << 'SCEN'
+{
+    "name": "bug-nondet-replay",
+    "bot": { "type": "chaos", "seed": 42 },
+    "duration_s": 2.0,
+    "tps": 60,
+    "verify_replay": true
+}
+SCEN
+            scenario_expr='"playtests/nondet.json"'
+        else
+            scenario_expr="bevy_playtest::battery::BUILTIN_BATTERY"
+        fi
+        python3 - "${variant_dir}/tests/playtest.rs" "${scenario_expr}" << 'PYEOF'
+import sys
+expr, path = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    s = f.read()
+with open(path, "w") as f:
+    f.write(s.replace("SCENARIO_EXPR", expr))
+PYEOF
+        fi
+
+        bug_variants="${bug_variants} \"${name}_bug_${kind}\","
+        echo "  Created: $variant_dir"
+    done
+done
+
 # 5. Create fixtures workspace
-cat > "${FIXTURES_DIR}/Cargo.toml" << 'WORKSPACE'
+cat > "${FIXTURES_DIR}/Cargo.toml" << WORKSPACE
 [workspace]
 resolver = "2"
 members = [
@@ -373,6 +523,7 @@ members = [
     "game_menu",
     "loading_screen",
     "mines",
+    ${bug_variants}
 ]
 
 [workspace.dependencies]
