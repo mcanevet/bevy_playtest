@@ -130,6 +130,15 @@ pub struct PlaytestReport {
     /// in-process runs (inherently full parity).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub brp_parity: Option<String>,
+    /// Whether log capture was active for the producing process.
+    /// `Some(false)` = another tracing subscriber won the write-once
+    /// global default (typically DefaultPlugins' LogPlugin), so
+    /// log_error/log_warn findings are under-reported. The run also
+    /// carries an informational `log_capture_lost` violation. Absent
+    /// for producers where the concept does not apply (BRP children
+    /// never capture logs by design).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_capture_available: Option<bool>,
     /// Behavioral coverage. Absent when the scenario declared neither
     /// observations nor a chaos surface to exercise.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -155,6 +164,7 @@ impl PlaytestReport {
             scenario_source: None,
             reset_hooks_registered: None,
             brp_parity: None,
+            log_capture_available: None,
             coverage: None,
         }
     }

@@ -50,6 +50,7 @@ impl Rule {
             Self::Panic => "A system panicked during the run (caught by the panic hook).",
             Self::LogError => "Game code logged at error level.",
             Self::LogWarn => "Game code logged at warn level; informational by default, escalate with scenario strict_warnings.",
+            Self::LogCaptureLost => "Log capture was OFF for this process (another tracing subscriber, typically DefaultPlugins' LogPlugin, installed first): log_error/log_warn findings are under-reported for every run in this process.",
             Self::NodesInBounds => "Entity positions stay inside declared play-space bounds.",
             Self::FiniteTransforms => "Every entity's Transform holds finite values (no NaN/inf).",
             Self::ResetHookPanicked => "The game's ResetHooks handler panicked.",
@@ -68,7 +69,7 @@ impl Rule {
     /// never gating the run status. Derived from the enum so the
     /// registry cannot drift.
     pub fn is_informational(self) -> bool {
-        matches!(self, Self::LogWarn)
+        matches!(self, Self::LogWarn | Self::LogCaptureLost)
     }
 }
 
@@ -78,6 +79,7 @@ declare_rules! {
     Panic => "panic",
     LogError => "log_error",
     LogWarn => "log_warn",
+    LogCaptureLost => "log_capture_lost",
     NodesInBounds => "nodes_in_bounds",
     FiniteTransforms => "finite_transforms",
 

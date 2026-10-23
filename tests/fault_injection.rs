@@ -11,6 +11,10 @@
 //! - `panic`              (system panics mid-run)
 //! - `log_error`           (error-level log emitted)
 
+// Shared test harness (run-slot serialization)
+#[path = "common/mod.rs"]
+mod common;
+
 use bevy_app::App;
 use bevy_ecs::prelude::*;
 use bevy_playtest::enums::PlaytestStatus;
@@ -58,6 +62,7 @@ fn violated_with(status: PlaytestStatus, rules: &[String], rule: &str) -> bool {
 
 #[test]
 fn detects_nan_transform() {
+    let _slot = common::run_slot();
     let mut app = App::new();
     app.init_resource::<bevy_playtest::driver::RunViolations>();
     // A static NaN transform, mutated every frame (so it counts as
@@ -80,6 +85,7 @@ fn detects_nan_transform() {
 
 #[test]
 fn detects_out_of_bounds() {
+    let _slot = common::run_slot();
     let mut app = App::new();
     app.add_systems(bevy_app::Update, |mut q: Query<&mut Transform>| {
         for mut t in q.iter_mut() {
@@ -99,6 +105,7 @@ fn detects_out_of_bounds() {
 
 #[test]
 fn detects_frozen_world() {
+    let _slot = common::run_slot();
     let mut app = App::new();
     // Static transform, nothing ever changes it: the world freezes.
     app.world_mut().spawn(Transform::from_xyz(1.0, 2.0, 3.0));
@@ -129,6 +136,7 @@ fn warn_log_system() {
 
 #[test]
 fn detects_warning_log() {
+    let _slot = common::run_slot();
     let mut app = App::new();
     app.add_systems(bevy_app::Update, warn_log_system);
 
@@ -158,6 +166,7 @@ fn detects_warning_log() {
 
 #[test]
 fn detects_reset_hook_panic() {
+    let _slot = common::run_slot();
     use bevy_playtest::contract::ResetHooks;
     let mut app = App::new();
     let mut hooks = ResetHooks::default();
@@ -189,6 +198,7 @@ fn detects_reset_hook_panic() {
 
 #[test]
 fn detects_cheat_hook_panic() {
+    let _slot = common::run_slot();
     use bevy_playtest::contract::CheatHooks;
     let mut app = App::new();
     let mut hooks = CheatHooks::default();
@@ -220,6 +230,7 @@ fn detects_cheat_hook_panic() {
 
 #[test]
 fn detects_panic() {
+    let _slot = common::run_slot();
     let mut app = App::new();
     app.add_systems(bevy_app::Update, panic_system);
 
@@ -235,6 +246,7 @@ fn detects_panic() {
 
 #[test]
 fn detects_error_log() {
+    let _slot = common::run_slot();
     let mut app = App::new();
     app.add_systems(bevy_app::Update, error_log_system);
 
@@ -250,4 +262,107 @@ fn detects_error_log() {
 /// Extract just the rule names from a report (helper).
 fn rule_names(report: &bevy_playtest::state::PlaytestReport) -> Vec<String> {
     report.violations.iter().map(|v| v.rule.clone()).collect()
+}
+
+/// THE GAP-FIX PIN: an error logged from a NON-main thread (an
+/// IoTaskPool worker, exactly where bevy_asset logs "Path not found"
+/// failures) must reach the run's report. The pre-fix thread-local
+/// sink dropped these silently.
+///
+/// Synchronization: the waiter system blocks (bounded) inside the run
+/// loop until the worker signals AFTER its error log — the run cannot
+/// reach drain() before the error is in the buffer. A fire-and-forget
+/// task could execute post-run (stragglers are dropped by design),
+/// which would make this test flake even with correct capture.
+#[test]
+fn detects_error_log_from_worker_thread() {
+    let _slot = common::run_slot();
+    // Initialize the pool before the run (bevy initializes task pools
+    // at plugin-build in real games; this minimal app has none).
+    bevy_tasks::IoTaskPool::get_or_init(|| bevy_tasks::TaskPoolBuilder::default().build());
+
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let rx = std::sync::Arc::new(std::sync::Mutex::new(rx));
+    let tx = std::sync::Arc::new(std::sync::Mutex::new(tx));
+
+    let mut app = App::new();
+    // Observable entity so the vacuity guard does not fire (the point
+    // of this test is log capture, not vacuity).
+    app.world_mut().spawn(Transform::from_xyz(0.0, 0.0, 0.0));
+    app.add_systems(
+        bevy_app::Update,
+        (
+            // Frame 0 only: spawn the erroring task.
+            move |mut spawned: bevy_ecs::prelude::Local<bool>| {
+                if *spawned {
+                    return;
+                }
+                *spawned = true;
+                // detach(): a dropped Task cancels its future — the
+                // erroring future must actually RUN on the worker.
+                let tx = tx.lock().unwrap().clone();
+                bevy_tasks::IoTaskPool::get()
+                    .spawn(async move {
+                        tracing::error!("worker thread asset failure");
+                        tx.send(()).ok();
+                    })
+                    .detach();
+            },
+            // Blocks (bounded) until the worker logged; after that a
+            // no-op. Forces the error into the run window.
+            move |mut waited: bevy_ecs::prelude::Local<bool>| {
+                if *waited {
+                    return;
+                }
+                if rx
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .is_ok()
+                {
+                    *waited = true;
+                }
+            },
+        ),
+    );
+
+    let report = run_scenario(&mut app, &short_scenario()).expect("run completes");
+    assert!(
+        violated_with(report.status, &rule_names(&report), "log_error"),
+        "worker-thread log_error must be captured, got {:?}: {:?}",
+        report.status,
+        report.violations
+    );
+}
+
+/// The same pin for a multi-threaded schedule (single_threaded
+/// unset): system code runs on executor worker threads.
+#[test]
+fn detects_error_log_multithreaded_schedule() {
+    let _slot = common::run_slot();
+    let scenario: Scenario = serde_json::from_str(
+        r#"{
+            "name": "fault-injection-mt",
+            "bot": { "type": "chaos", "seed": 42 },
+            "duration_s": 1.0,
+            "tps": 60,
+            "single_threaded": false
+        }"#,
+    )
+    .expect("scenario parses");
+
+    fn noisy_system() {
+        tracing::error!("multithreaded schedule failure");
+    }
+
+    let mut app = App::new();
+    app.add_systems(bevy_app::Update, noisy_system);
+
+    let report = run_scenario(&mut app, &scenario).expect("run completes");
+    assert!(
+        violated_with(report.status, &rule_names(&report), "log_error"),
+        "multi-threaded log_error must be captured, got {:?}: {:?}",
+        report.status,
+        report.violations
+    );
 }

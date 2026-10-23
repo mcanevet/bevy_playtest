@@ -166,6 +166,40 @@ Known limitations: games whose first state is a menu may need a reset hook
 before the scenario is meaningful; rendering is unavailable (software-only) so
 visual assertions do not apply.
 
+### Log capture (the `log_error`/`log_warn` oracles)
+
+Errors logged via `tracing` from ANY thread — including IoTaskPool
+workers (where bevy_asset reports load failures) and multi-threaded
+schedule executors — are captured into the run's report. Capturing is
+process-global and exclusive: exactly one `run_scenario` may be active
+per process; concurrent or nested calls are REJECTED immediately
+(`ScenarioError::Rejected`) — never blocked. Parallel callers (e.g. a
+test battery) must serialize runs themselves.
+
+Capture depends on the harness's tracing subscriber winning the
+write-once global default. Two consequences:
+
+- Use `PlaytestDefaultPlugins` (or any setup where `PlaytestPlugin` is
+  added before the game's `LogPlugin`): under `BEVY_PLAYTEST_SCENARIO`
+  it drops `LogPlugin` and installs its own subscriber with identical
+  console behavior (honors `RUST_LOG`).
+- If the game's `LogPlugin` is added first (plain `DefaultPlugins` plus
+  `PlaytestPlugin` after it), its subscriber wins the race and log
+  capture is OFF. The plugin warns loudly at build time, the report
+  says so (`log_capture_available: false` plus an informational,
+  non-gating `log_capture_lost` entry), and setting
+  `BEVY_PLAYTEST_ALLOW_MISSING_LOG_CAPTURE=1` acknowledges the loss
+  deliberately. A green report under a lost race never implies "no
+  errors were logged".
+
+Mode 2 (external BRP) does not capture logs — the game is a separate
+process whose logs go to pipes; the parity matrix above reflects this.
+
+Panics are captured independently of tracing: a panic during the run's
+loop lands in the run's report; a panic in the setup window (before the
+run starts) propagates out of `run_scenario` to the caller — the
+harness does not swallow it, but produces no report for it.
+
 ### Verification depth (what is proven vs. what is asserted)
 
 Three mechanisms take a run from "asserted" to "proven":

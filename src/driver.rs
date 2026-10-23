@@ -467,6 +467,17 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     sinks::ensure_global_subscriber();
     install_panic_hook();
 
+    // Acquire the exclusive run buffer FIRST: everything after this
+    // point (setup included — plugin finishing, hook invocation, system
+    // registration) is attributable to this run. Concurrent or nested
+    // run_scenario calls are rejected here, not blocked: a blocked
+    // second caller would emit setup-phase events into OUR buffer
+    // (misattribution), and a nested call from a worker thread of this
+    // very app would deadlock the loop waiting for that worker. The
+    // guard must outlive the catch_unwind so the unwinding loop's own
+    // panic is captured before the run ends.
+    let _run_guard = sinks::try_acquire_run().map_err(ScenarioError::Rejected)?;
+
     // Finish plugin building exactly like App::run would.
     while matches!(app.plugins_state(), PluginsState::Adding) {
         bevy_tasks::tick_global_task_pools_on_main_thread();
@@ -703,7 +714,6 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     let total_ticks = (scenario.duration_s * tps as f32).ceil() as u64;
     let start = std::time::Instant::now();
 
-    sinks::set_capture_active(true);
     let loop_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         for i in 0..total_ticks {
             sinks::set_current_frame(i);
@@ -713,7 +723,6 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             }
         }
     }));
-    sinks::set_capture_active(false);
     let crash_detected = loop_result.is_err();
 
     let wall_time_s = start.elapsed().as_secs_f64();
@@ -906,6 +915,32 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         None
     };
 
+    // Log-capture honesty: if the harness's capture subscriber lost the
+    // write-once global default (typically DefaultPlugins' LogPlugin
+    // installed first), log_error/log_warn findings are under-reported
+    // for this process. Surface it as an informational violation +
+    // report field rather than letting a green report imply "no errors
+    // were logged". Non-gating by design (see Rule::is_informational):
+    // the condition is environmental, not a game bug. The report FIELD
+    // always records the truth (machine-readable); the VIOLATION entry
+    // is additionally silenced by the acknowledgment env var (human-
+    // facing noise).
+    let log_capture_available = sinks::subscriber_won();
+    if !log_capture_available && std::env::var_os(sinks::ENV_ALLOW_MISSING_LOG_CAPTURE).is_none() {
+        snap.push(crate::state::ViolationEntry {
+            rule: Rule::LogCaptureLost.name().to_string(),
+            target: "world".to_string(),
+            first_frame: 0,
+            last_frame: 0,
+            count: 1,
+            detail: "log capture was OFF for this process (another tracing \
+                     subscriber won the global default): log_error/log_warn \
+                     findings are under-reported"
+                .to_string(),
+            last_detail: "log capture OFF".to_string(),
+        });
+    }
+
     Ok(PlaytestReport {
         schema_version: 1,
         status,
@@ -924,6 +959,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         scenario_source: None,
         reset_hooks_registered,
         brp_parity: None,
+        log_capture_available: Some(log_capture_available),
     })
 }
 

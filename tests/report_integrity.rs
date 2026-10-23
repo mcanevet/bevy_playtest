@@ -4,6 +4,10 @@
 //! PlaytestReport. All encode the "never a vacuous pass" doctrine.
 //!
 
+// Shared test harness (run-slot serialization)
+#[path = "common/mod.rs"]
+mod common;
+
 use bevy_app::App;
 use bevy_playtest::run_scenario;
 use bevy_playtest::scenario::Scenario;
@@ -28,6 +32,7 @@ fn scenario_json(bot: &str) -> String {
 /// in-process driver must have one too (undocumented contract).
 #[test]
 fn zero_entity_game_must_not_pass_vacuously() {
+    let _slot = common::run_slot();
     let scenario: Scenario = serde_json::from_str(&scenario_json("chaos")).unwrap();
     let mut app = minimal_app();
     let report = run_scenario(&mut app, &scenario).unwrap();
@@ -50,6 +55,7 @@ fn zero_entity_game_must_not_pass_vacuously() {
 /// entries.
 #[test]
 fn frozen_world_reports_exactly_one_violation() {
+    let _slot = common::run_slot();
     // Grace derives from liveness.timeout_s (default 2s = 120 frames
     // at 60 TPS): the run must outlive the grace window.
     let scenario: Scenario =
@@ -84,6 +90,7 @@ fn frozen_world_reports_exactly_one_violation() {
 /// grace, tracked by the duplicate-oracle test above).
 #[test]
 fn liveness_timeout_config_must_be_honored() {
+    let _slot = common::run_slot();
     let short: Scenario = serde_json::from_str(
         r#"{"bot":{"type":"chaos","seed":7},"duration_s":0.5,"tps":60,"liveness":{"mode":"real_time","timeout_s":0.05}}"#,
     )
@@ -128,6 +135,7 @@ fn liveness_timeout_config_must_be_honored() {
 /// action_log are currently hardcoded empty/0).
 #[test]
 fn bot_activity_must_be_visible_in_telemetry() {
+    let _slot = common::run_slot();
     let scenario: Scenario = serde_json::from_str(&scenario_json("chaos")).unwrap();
     let mut app = minimal_app();
     // Give the bot something to affect so effects are observable.
@@ -144,6 +152,7 @@ fn bot_activity_must_be_visible_in_telemetry() {
 /// A scheduled cheat must bump cheat_count (currently always 0 — C5).
 #[test]
 fn fired_cheat_must_bump_cheat_count() {
+    let _slot = common::run_slot();
     use bevy_playtest::contract::CheatHooks;
 
     let mut hooks = CheatHooks::default();
@@ -174,6 +183,7 @@ fn fired_cheat_must_bump_cheat_count() {
 /// (never set today).
 #[test]
 fn crash_status_implies_crash_detected_metric() {
+    let _slot = common::run_slot();
     // A panicking game system aborts the run loop; the harness must
     // classify it as Crash AND set the metric consistently.
     let scenario: Scenario = serde_json::from_str(&scenario_json("chaos")).unwrap();
@@ -188,5 +198,36 @@ fn crash_status_implies_crash_detected_metric() {
     assert!(
         report.metrics.crash_detected,
         "status==Crash must be reflected in metrics.crash_detected"
+    );
+}
+
+/// When the harness's capture subscriber won the global default (the
+/// normal in-process case), the report must SAY so: the
+/// `log_capture_available` field is present and true, and there is no
+/// `log_capture_lost` informational violation. (The lost-capture case
+/// needs a competing subscriber installed first — covered by the
+/// LogPlugin-race test in the mode-parity battery.)
+#[test]
+fn report_declares_log_capture_when_won() {
+    let _slot = common::run_slot();
+    bevy_playtest::sinks::ensure_global_subscriber();
+    let mut app = minimal_app();
+    app.world_mut()
+        .spawn(bevy_transform::prelude::Transform::from_xyz(0.0, 0.0, 0.0));
+    let scenario: bevy_playtest::scenario::Scenario =
+        serde_json::from_str(&scenario_json("chaos")).unwrap();
+    let report = bevy_playtest::run_scenario(&mut app, &scenario).unwrap();
+    assert_eq!(
+        report.log_capture_available,
+        Some(true),
+        "capture-won runs must declare log_capture_available=true"
+    );
+    assert!(
+        !report
+            .violations
+            .iter()
+            .any(|v| v.rule == "log_capture_lost"),
+        "log_capture_lost must not fire when capture won: {:?}",
+        report.violations
     );
 }
