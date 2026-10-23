@@ -91,8 +91,11 @@ for name in "${SHOWCASE_GAMES[@]}"; do
         if [ "${USE_LOCAL_BEVY}" = "1" ] && [ -f "${LOCAL_BEVY}/${1}" ]; then
             cp "${LOCAL_BEVY}/${1}" "$2"
         else
+            # Percent-encode the path: raw.githubusercontent.com rejects
+            # unencoded spaces (e.g. "textures/Game Icons/right.png").
+            url_path=$(python3 -c 'import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1]))' "$1")
             curl -sfL --retry 3 --retry-delay 2 \
-                "https://raw.githubusercontent.com/bevyengine/bevy/${BEVY_REV}/${1}" -o "$2"
+                "https://raw.githubusercontent.com/bevyengine/bevy/${BEVY_REV}/${url_path}" -o "$2"
         fi
     }
     fetch_raw "${rel}" "${target_dir}/src/main.rs"
@@ -187,6 +190,56 @@ PYEOF
     for f in "${target_dir}/src/"*.rs; do
         sed 's/bevy_ecs::/bevy::ecs::/g' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
     done
+
+    # 2b. Collect referenced assets (generic scan): every string the
+    #     game loads at runtime must exist under the fixture's assets/
+    #     dir or bevy_asset logs ERROR Path-not-found in CI. Scan:
+    #     - direct literals in `.load("...")`
+    #     - `&str` consts referenced by `.load(CONST)`
+    #     - `.from_asset("...")` for self-contained .glb files.
+    #     .gltf is SKIPPED on purpose: it references sibling .bin /
+    #     texture files, so a single-file fetch would still be broken;
+    #     the battery tolerates the missing handle (asset loads fail
+    #     asynchronously, they do not crash the app).
+    python3 - "${target_dir}/src" > "${target_dir}/.assets.list" << 'PYEOF'
+import re, sys, pathlib
+
+consts = {}
+loads = set()
+for f in pathlib.Path(sys.argv[1]).glob("*.rs"):
+    src = f.read_text()
+    # &str consts usable as .load(CONST)
+    for name, val in re.findall(r'const\s+(\w+)\s*:\s*&str\s*=\s*"([^"]+)"', src):
+        consts[name] = val
+    # .load(<arg>) up to the matching close paren on the same call
+    for m in re.finditer(r'\.load\(([^)]*)\)', src):
+        arg = m.group(1).strip()
+        lit = re.match(r'^"([^"]+)"$', arg)
+        if lit:
+            loads.add(lit.group(1))
+        elif arg in consts:
+            loads.add(consts[arg])
+    # self-contained glb scenes from GltfAssetLabel::...().from_asset("...")
+    for m in re.finditer(r'from_asset\("([^"]+\.glb)"\)', src):
+        loads.add(m.group(1))
+
+for p in sorted(loads):
+    print(p)
+PYEOF
+
+    # Fetch each referenced asset from the Bevy repo's assets/ root.
+    while read -r asset; do
+        [ -n "$asset" ] || continue
+        dest="${target_dir}/assets/${asset}"
+        mkdir -p "$(dirname "$dest")"
+        if fetch_raw "assets/${asset}" "$dest"; then
+            echo "    (asset: ${asset})"
+        else
+            echo "    WARNING: asset ${asset} not found at pinned Bevy rev; skipping"
+            rm -f "$dest"
+        fi
+    done < "${target_dir}/.assets.list"
+    rm -f "${target_dir}/.assets.list"
 
     # 3. Cargo.toml (workspace member later) — feature-gated
     #    self-dev-dependency pattern: plain `cargo build` compiles the
