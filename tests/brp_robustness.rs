@@ -192,7 +192,6 @@ fn compile_mock(name: &str) -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
     std::fs::create_dir_all(&dir).unwrap();
     let src = dir.join(format!("{name}.rs"));
-    std::fs::write(&src, MOCK_SRC).unwrap();
     let bin = dir.join(name);
     // Lock file: tests run in parallel within one binary, and rustc
     // linking to the same output path races (errno 17 File exists).
@@ -207,6 +206,13 @@ fn compile_mock(name: &str) -> PathBuf {
     use std::os::unix::io::AsRawFd;
     let ret = unsafe { libc_flock(lock_file.as_raw_fd()) };
     assert_eq!(ret, 0, "flock on mock lock failed");
+    // Write the source INSIDE the lock, atomically: writing in place
+    // (truncate + write) while another test's rustc reads the file
+    // yields a truncated source and an "E0601: `main` function not
+    // found" compile failure.
+    let tmp = dir.join(format!("{name}.rs.tmp"));
+    std::fs::write(&tmp, MOCK_SRC).unwrap();
+    std::fs::rename(&tmp, &src).unwrap();
     if bin.exists()
         && bin.metadata().unwrap().modified().unwrap()
             >= src.metadata().unwrap().modified().unwrap()
