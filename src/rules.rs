@@ -62,6 +62,7 @@ impl Rule {
             Self::CoverageHole => "A declared observation was never observed by any mechanism this run.",
             Self::OracleError => "An oracle itself errored while evaluating (infrastructure failure, not a game bug).",
             Self::ScenarioError => "The scenario itself failed (rejected config) rather than the game misbehaving.",
+            Self::BotConfig => "A bot's configured target (entity Name, window, camera) could not be resolved; the bot cannot act as declared.",
         }
     }
 
@@ -101,6 +102,9 @@ declare_rules! {
     // Infrastructure errors (producible; oracle_error only in BRP tier)
     OracleError => "oracle_error",
     ScenarioError => "scenario_error",
+
+    // Bot configuration errors (target missing, no window/camera).
+    BotConfig => "bot_config",
 }
 
 #[cfg(test)]

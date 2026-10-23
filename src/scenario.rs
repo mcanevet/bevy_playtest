@@ -107,6 +107,9 @@ pub struct BotConfig {
     /// synthetic_keyboard: frame-indexed raw key presses.
     #[serde(default)]
     pub key_presses: Vec<KeyPressInput>,
+    /// synthetic_pointer: frame-indexed clicks at named entity positions.
+    #[serde(default)]
+    pub pointer_clicks: Vec<PointerClick>,
     /// Input surface for the chaos bot: which keys it may press.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_surface: Option<RawSurface>,
@@ -184,6 +187,24 @@ pub struct KeyPressInput {
     /// "up"/"down"/"left"/"right", single letters a-z, digits 0-9.
     pub key: String,
     /// Hold the key for N frames (default 1).
+    #[serde(default = "default_hold_frames")]
+    pub hold_frames: u64,
+}
+
+/// synthetic_pointer: click at a named entity's projected viewport
+/// position at a given frame, through the real picking input chain.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct PointerClick {
+    pub frame: u64,
+    /// Entity Name to click (any named entity: world-space or UI; no
+    /// marker required — zero-annotation, Name is the addressing
+    /// convention).
+    pub target: String,
+    /// Mouse button (default primary/left).
+    #[serde(default)]
+    pub button: crate::enums::PointerButton,
+    /// Hold the button for N frames (default 1).
     #[serde(default = "default_hold_frames")]
     pub hold_frames: u64,
 }
@@ -663,6 +684,28 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                 return Err(ScenarioError::Rejected(unknown_key_error(
                     &kp.key,
                     Some(kp.frame),
+                )));
+            }
+        }
+    }
+    // synthetic_pointer: a bot with no clicks can do nothing (vacuous
+    // run); every click needs a non-empty target Name.
+    if scenario.bot.bot_type == BotType::SyntheticPointer {
+        if scenario.bot.pointer_clicks.is_empty() {
+            return Err(ScenarioError::Rejected(
+                "synthetic_pointer bot requires a non-empty pointer_clicks list".into(),
+            ));
+        }
+        for (idx, click) in scenario.bot.pointer_clicks.iter().enumerate() {
+            if click.target.trim().is_empty() {
+                return Err(ScenarioError::Rejected(format!(
+                    "pointer_clicks[{idx}].target must be a non-empty entity Name"
+                )));
+            }
+            if click.hold_frames == 0 {
+                return Err(ScenarioError::Rejected(format!(
+                    "pointer_clicks[{idx}].hold_frames must be >= 1 \
+                     (a zero-frame hold cannot deliver a press+release)"
                 )));
             }
         }
