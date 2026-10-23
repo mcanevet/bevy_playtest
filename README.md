@@ -148,12 +148,9 @@ transforms, soft-locks, panics, nondeterminism, ERROR spam — not
 gameplay-correctness. See "Verification depth" below for exactly what
 each oracle catches.
 
-With `"target_selector": "all"` in a scenario, bounds invariants check
-every entity with a `Transform` — zero bevy_playtest-specific code in
-the game. The default selector `gameplay` checks only
-`contract::Gameplay`-marked entities and **fails loudly (not
-vacuously)** when it matches zero entities, suggesting the `all`
-selector.
+Bounds invariants check every entity with a `Transform` — zero
+bevy_playtest-specific code in the game — and **fail loudly (not
+vacuously)** when there are no entities to check.
 
 ### How mode 1 works
 
@@ -168,21 +165,6 @@ playtest`); the default and release builds contain zero bevy_playtest code.
 Known limitations: games whose first state is a menu may need a reset hook
 before the scenario is meaningful; rendering is unavailable (software-only) so
 visual assertions do not apply.
-
-### Optional: tag gameplay entities
-
-Tag gameplay-relevant entities with `bevy_playtest::contract::Gameplay` to use
-the tighter default selector instead of `"target_selector": "all"`:
-
-```rust
-use bevy::prelude::*;
-
-fn tag_gameplay(mut commands: Commands, ball: Query<Entity, With<Ball>>) {
-    for e in ball.iter() {
-        commands.entity(e).insert(bevy_playtest::contract::Gameplay);
-    }
-}
-```
 
 ### Verification depth (what is proven vs. what is asserted)
 

@@ -275,10 +275,8 @@ async fn run_brp_inner(
         }
 
         // --- Poll transforms and evaluate bounds/NaN (same semantics
-        // as in-process oracles). Query Transform only: the Gameplay
-        // marker is never inserted by zero-contract fixtures, and BRP
-        // queries AND their required components, so including it here
-        // would match zero entities and silently vacuously pass.
+        // as in-process oracles). Query Transform only: matching the oracles'
+        // zero-annotation semantics (every entity with a Transform).
         match client
             .call(
                 "world.query",

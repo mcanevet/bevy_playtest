@@ -33,7 +33,7 @@ Public API surface for integrators.
       "max_y": number,
       "min_z": number,
       "max_z": number,
-      "targets": ["string"]       // empty = all Gameplay entities
+      "target_selector": "all"   // optional; only "all" exists
     }
   ],
   "setup": {
@@ -62,7 +62,8 @@ with a serde unknown-field error naming the offender.
 
 ## Invariants
 
-- `nodes_in_bounds`: per-entity AABB check on `Gameplay`-tagged entities;
+- `nodes_in_bounds`: per-entity AABB check on every entity with a
+  `Transform` (zero-annotation);
   bounds are per-axis (`min_x`/`max_x`/`min_y`/`max_y`/`min_z`/`max_z`),
   each defaulting
   to ±1000 when unset. Additionally, a hard-coded global bounds check

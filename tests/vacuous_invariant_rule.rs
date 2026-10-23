@@ -1,6 +1,6 @@
-//! Behavioral test for the vacuous_invariant rule: a Gameplay-targeted
-//! invariant that matches zero entities must produce a violation, and
-//! the rule must classify as gating (not informational).
+//! Behavioral test for the vacuous_invariant rule: an invariant that
+//! matches zero entities must produce a violation, and the rule must
+//! classify as gating (not informational).
 
 use bevy_app::prelude::*;
 use bevy_playtest::driver::run_scenario;
@@ -14,10 +14,9 @@ fn scenario() -> bevy_playtest::scenario::Scenario {
 }
 
 #[test]
-fn gameplay_targeted_invariant_with_zero_marked_entities_is_vacuous() {
-    // No Gameplay-marked entities: the default `gameplay` target
-    // selector matches nothing and the invariant must be flagged as
-    // vacuous rather than silently passing.
+fn invariant_with_zero_entities_is_vacuous() {
+    // No entities at all: the invariant matches nothing and must be
+    // flagged as vacuous rather than silently passing.
     let mut app = App::new();
     let report = run_scenario(&mut app, &scenario()).unwrap();
     let rules: Vec<&str> = report.violations.iter().map(|v| v.rule.as_str()).collect();
@@ -31,4 +30,32 @@ fn gameplay_targeted_invariant_with_zero_marked_entities_is_vacuous() {
     assert!(!Rule::from_name("vacuous_invariant")
         .unwrap()
         .is_informational());
+}
+
+/// Regression guard (Copilot review, PR #27): a game that panics before
+/// any Transform entity exists, with a declared invariant, must remain
+/// `Crash` — the vacuous-invariant reporting must not demote a crash to
+/// a plain failure (exit codes and JUnit classification depend on it).
+#[test]
+fn startup_panic_with_declared_invariant_stays_crash_not_fail() {
+    fn exploding_startup() {
+        panic!("boom at startup!");
+    }
+
+    let mut app = App::new();
+    app.add_systems(bevy_app::Startup, exploding_startup);
+    let report = run_scenario(&mut app, &scenario()).unwrap();
+    assert_eq!(
+        report.status,
+        bevy_playtest::enums::PlaytestStatus::Crash,
+        "status: {:?}",
+        report.status
+    );
+    // The vacuity violation is still recorded alongside the crash.
+    let rules: Vec<&str> = report.violations.iter().map(|v| v.rule.as_str()).collect();
+    assert!(rules.contains(&"panic"), "expected panic among {rules:?}");
+    assert!(
+        rules.contains(&"vacuous_invariant"),
+        "expected vacuous_invariant among {rules:?}"
+    );
 }

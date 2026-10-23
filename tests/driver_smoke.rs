@@ -10,25 +10,19 @@ fn minimal_app() -> App {
     App::new()
 }
 
-/// A moving Gameplay entity: keeps the run observable for the oracles
+/// A moving entity: keeps the run observable for the oracles
 /// (vacuity guard, frozen-world) without asserting anything about it.
 fn spawn_observable_entity(app: &mut App) {
-    use bevy_playtest::contract::Gameplay;
     app.add_systems(
         bevy_app::Update,
-        |mut q: bevy_ecs::prelude::Query<
-            &mut bevy_transform::prelude::Transform,
-            bevy_ecs::prelude::With<Gameplay>,
-        >| {
+        |mut q: bevy_ecs::prelude::Query<&mut bevy_transform::prelude::Transform>| {
             for (i, mut t) in q.iter_mut().enumerate() {
                 t.translation.x = (i as f32) + 1.0;
             }
         },
     );
-    app.world_mut().spawn((
-        bevy_playtest::contract::Gameplay,
-        bevy_transform::prelude::Transform::from_xyz(0.0, 0.0, 0.0),
-    ));
+    app.world_mut()
+        .spawn(bevy_transform::prelude::Transform::from_xyz(0.0, 0.0, 0.0));
 }
 
 #[test]
@@ -189,12 +183,9 @@ fn log_warn_is_informational_by_default() {
 fn nan_transform_yields_finite_transforms_violation() {
     use bevy_ecs::prelude::*;
 
-    // Spawn a Gameplay entity with a NaN transform via a system.
+    // Spawn an entity with a NaN transform via a system.
     fn spawn_nan_entity(mut commands: Commands) {
-        commands.spawn((
-            bevy_playtest::contract::Gameplay,
-            Transform::from_xyz(f32::NAN, 0.0, 0.0),
-        ));
+        commands.spawn(Transform::from_xyz(f32::NAN, 0.0, 0.0));
     }
 
     let scenario: Scenario =
@@ -219,10 +210,7 @@ fn out_of_bounds_entity_yields_nodes_in_bounds_violation() {
     use bevy_ecs::prelude::*;
 
     fn spawn_far_entity(mut commands: Commands) {
-        commands.spawn((
-            bevy_playtest::contract::Gameplay,
-            Transform::from_xyz(5000.0, 0.0, 0.0),
-        ));
+        commands.spawn(Transform::from_xyz(5000.0, 0.0, 0.0));
     }
 
     let scenario: Scenario = serde_json::from_str(
@@ -311,10 +299,8 @@ fn custom_invariant_is_rejected_at_parse_time() {
 
 #[test]
 fn scenario_bounds_are_enforced_per_axis() {
-    use bevy_playtest::contract::Gameplay;
-
     fn spawn_far_entity(mut commands: bevy_ecs::prelude::Commands) {
-        commands.spawn((Gameplay, Transform::from_xyz(50.0, 9000.0, 0.0)));
+        commands.spawn(Transform::from_xyz(50.0, 9000.0, 0.0));
     }
 
     // Y breach only: x within [-100, 100], y limited to [-100, 100].
@@ -341,10 +327,8 @@ fn scenario_bounds_are_enforced_per_axis() {
 /// this test is a regression guard that the oracle remains wired.
 #[test]
 fn z_axis_escape_is_caught_by_nodes_in_bounds() {
-    use bevy_playtest::contract::Gameplay;
-
     fn spawn_high_entity(mut commands: bevy_ecs::prelude::Commands) {
-        commands.spawn((Gameplay, Transform::from_xyz(0.0, 0.0, 1e9)));
+        commands.spawn(Transform::from_xyz(0.0, 0.0, 1e9));
     }
 
     let scenario: Scenario = serde_json::from_str(

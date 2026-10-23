@@ -207,7 +207,8 @@ pub struct Invariant {
     pub min_z: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_z: Option<f32>,
-    /// Entity Names. Empty = all Gameplay entities.
+    /// Target selector. Currently only `all` (zero-annotation): the
+    /// invariant applies to every entity with a Transform.
     #[serde(default)]
     pub target_selector: Option<crate::enums::TargetSelector>,
     /// custom thresholds.
