@@ -92,7 +92,12 @@ jobs:
       # test-built, feature-on bins.
       - name: Build fixture workspace + acceptance tests
         run: |
-          cargo test --locked --manifest-path fixtures/Cargo.toml --workspace --no-run
+          # No --locked on fixtures commands: fixtures/ is a separate
+          # workspace pinned to the crate via a path dep, and
+          # release-plz release commits bump only the root lockfile —
+          # --locked would break main on every release. The root
+          # workspace commands below keep --locked.
+          cargo test --manifest-path fixtures/Cargo.toml --workspace --no-run
           cargo test --locked --features brp --no-run
           # Flagless run = UX + feature-activation pin: the
           # self-dev-dependency must activate `playtest` on plain
@@ -102,7 +107,7 @@ jobs:
           # battery ran: if activation regressed, the generated test
           # would report as IGNORED and the step must fail.
           set -o pipefail
-          timeout 300 cargo test --locked --manifest-path fixtures/breakout/Cargo.toml \
+          timeout 300 cargo test --manifest-path fixtures/breakout/Cargo.toml \
             | tee /tmp/breakout_flagless.log
           ! grep -Eq "[1-9][0-9]* ignored" /tmp/breakout_flagless.log
 
@@ -114,7 +119,7 @@ jobs:
       # runtime-only deps.
       - name: Battery tier (cargo test, all fixtures)
         run: |
-          timeout 480 cargo test --locked --manifest-path fixtures/Cargo.toml --workspace --features playtest --test playtest -- --test-threads=1
+          timeout 480 cargo test --manifest-path fixtures/Cargo.toml --workspace --features playtest --test playtest -- --test-threads=1
 
       # Release-purity guard (epage's recommended hygiene for the
       # self-dev-dep pattern): plain bin builds must NOT resolve
@@ -123,7 +128,7 @@ jobs:
       # contract explicit so a future change can't break it silently.
       - name: Release purity guard (feature-off bin build)
         run: |
-          cargo check --locked --manifest-path fixtures/breakout/Cargo.toml
+          cargo check --manifest-path fixtures/breakout/Cargo.toml
           if cargo tree --manifest-path fixtures/breakout/Cargo.toml -e normal \
               | grep -q 'bevy_playtest v'; then
             echo "ERROR: bevy_playtest resolved in a plain bin build (feature leak)" >&2
