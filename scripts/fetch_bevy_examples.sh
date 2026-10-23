@@ -264,6 +264,7 @@ playtest = [
     "bevy_playtest/takeover",
     "bevy_playtest/brp-plugin",
     "bevy_playtest/takeover-winit",
+    "bevy_playtest/pointer-input",
 ]
 
 [dependencies]

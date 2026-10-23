@@ -10,10 +10,10 @@ fn playtest_battery() {
         bevy_playtest::battery::BUILTIN_BATTERY,
     )
     .expect("battery infrastructure failure");
-    // Known finding: static game menu screens trip the liveness oracle.
-    // Once PR #23 (synthetic_pointer bot) drives pointer input through
-    // the UI, this should assert empty instead.
-    assert_eq!(report.violation_pairs(), [("frozen_world", "world")]);
+    // The chaos bot's pointer half clicks seeded-random UI nodes, which
+    // drives the game's menus through the real picking chain; screen
+    // transitions (despawn/respawn) count as liveness evidence.
+    assert_eq!(report.violation_pairs(), []);
 }
 
 // `cargo package` strips `[dev-dependencies]`, so the self-dev-dependency

@@ -5,12 +5,13 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Bot types (chaos and synthetic_keyboard only).
+/// Bot types (chaos, synthetic_keyboard, synthetic_pointer).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BotType {
     Chaos,
     SyntheticKeyboard,
+    SyntheticPointer,
 }
 
 impl std::fmt::Display for BotType {
@@ -18,6 +19,7 @@ impl std::fmt::Display for BotType {
         let s = match self {
             Self::Chaos => "chaos",
             Self::SyntheticKeyboard => "synthetic_keyboard",
+            Self::SyntheticPointer => "synthetic_pointer",
         };
         f.write_str(s)
     }
@@ -114,6 +116,27 @@ impl std::fmt::Display for PlaytestStatus {
 impl From<PlaytestStatus> for String {
     fn from(s: PlaytestStatus) -> Self {
         s.to_string()
+    }
+}
+
+/// Mouse button for synthetic_pointer clicks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PointerButton {
+    #[default]
+    Primary,
+    Secondary,
+    Middle,
+}
+
+impl std::fmt::Display for PointerButton {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Primary => "primary",
+            Self::Secondary => "secondary",
+            Self::Middle => "middle",
+        };
+        f.write_str(s)
     }
 }
 
