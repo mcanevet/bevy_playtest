@@ -479,7 +479,10 @@ mod pointer_bot {
         mut choices: ResMut<RunChoices>,
         mut gestures: ResMut<PendingGestures>,
         mut pointer_inputs: MessageWriter<PointerInput>,
-        q_ui: Query<(&bevy_ui::prelude::UiGlobalTransform, &bevy_ui::prelude::ComputedNode)>,
+        q_ui: Query<(
+            &bevy_ui::prelude::UiGlobalTransform,
+            &bevy_ui::prelude::ComputedNode,
+        )>,
         primary_window: Query<Entity, With<bevy_window::PrimaryWindow>>,
         scenario: Res<ScenarioResource>,
     ) {
@@ -1048,8 +1051,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             #[cfg(feature = "pointer-input")]
             pointer_bot::chaos_pointer_click_system.run_if(is_chaos_bot),
             #[cfg(feature = "pointer-input")]
-            pointer_bot::headless_camera_target_info_system
-                .run_if(pointer_bot_needs_camera_info),
+            pointer_bot::headless_camera_target_info_system.run_if(pointer_bot_needs_camera_info),
             frame_timing_oracle_system,
             frozen_world_oracle_system,
             crate::invariant_eval::evaluate_invariants_system,
@@ -1329,12 +1331,7 @@ fn is_synthetic_pointer_bot(scenario: Option<Res<ScenarioResource>>) -> bool {
 /// pointer input: synthetic_pointer and the chaos bot's pointer half.
 #[cfg(feature = "pointer-input")]
 fn pointer_bot_needs_camera_info(scenario: Option<Res<ScenarioResource>>) -> bool {
-    scenario.is_some_and(|s| {
-        matches!(
-            s.0.bot.bot_type,
-            BotType::SyntheticPointer | BotType::Chaos
-        )
-    })
+    scenario.is_some_and(|s| matches!(s.0.bot.bot_type, BotType::SyntheticPointer | BotType::Chaos))
 }
 
 /// Whether a rule is informational (non-gating). When the scenario sets

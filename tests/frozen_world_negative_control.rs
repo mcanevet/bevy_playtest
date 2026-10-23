@@ -21,8 +21,7 @@ fn minimal_app() -> App {
 /// Transform never changes and nothing ever spawns or despawns —
 /// the world is genuinely frozen.
 fn spawn_static_entity(app: &mut App) {
-    app.world_mut()
-        .spawn(Transform::from_xyz(1.0, 2.0, 3.0));
+    app.world_mut().spawn(Transform::from_xyz(1.0, 2.0, 3.0));
 }
 
 #[test]
