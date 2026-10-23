@@ -1,5 +1,9 @@
 //! End-to-end smoke: run_scenario against a minimal headless app.
 
+// Shared test harness (run-slot serialization)
+#[path = "common/mod.rs"]
+mod common;
+
 use bevy_app::App;
 use bevy_playtest::run_scenario;
 use bevy_playtest::scenario::Scenario;
@@ -27,6 +31,7 @@ fn spawn_observable_entity(app: &mut App) {
 
 #[test]
 fn chaos_run_passes_on_minimal_app() {
+    let _slot = common::run_slot();
     let scenario: Scenario =
         serde_json::from_str(r#"{"bot":{"type":"chaos","seed":7},"duration_s":0.1,"tps":60}"#)
             .unwrap();
@@ -42,6 +47,7 @@ fn chaos_run_passes_on_minimal_app() {
 
 #[test]
 fn key_presses_drive_a_real_system() {
+    let _slot = common::run_slot();
     use bevy_ecs::prelude::*;
     // A game system that flips a resource when W is pressed.
     #[derive(Resource, Default)]
@@ -80,6 +86,7 @@ fn key_presses_drive_a_real_system() {
 
 #[test]
 fn rejected_scenario_returns_error_not_report() {
+    let _slot = common::run_slot();
     let scenario: Scenario =
         serde_json::from_str(r#"{"bot":{"type":"chaos","seed":7},"duration_s":-1.0,"tps":60}"#)
             .unwrap();
@@ -93,6 +100,7 @@ fn rejected_scenario_returns_error_not_report() {
 
 #[test]
 fn panicking_game_system_yields_crash_status_with_violation() {
+    let _slot = common::run_slot();
     fn exploding_system() {
         panic!("grenade!");
     }
@@ -120,6 +128,7 @@ fn panicking_game_system_yields_crash_status_with_violation() {
 
 #[test]
 fn chaos_bot_records_choices() {
+    let _slot = common::run_slot();
     let scenario: Scenario =
         serde_json::from_str(r#"{"bot":{"type":"chaos","seed":42},"duration_s":0.2,"tps":60}"#)
             .unwrap();
@@ -134,6 +143,7 @@ fn chaos_bot_records_choices() {
 
 #[test]
 fn game_log_error_yields_log_error_violation() {
+    let _slot = common::run_slot();
     fn noisy_system() {
         tracing::error!("score went negative: {}", -5);
     }
@@ -160,6 +170,7 @@ fn game_log_error_yields_log_error_violation() {
 
 #[test]
 fn log_warn_is_informational_by_default() {
+    let _slot = common::run_slot();
     fn nagging_system() {
         tracing::warn!("fps is low: {}", 12);
     }
@@ -181,6 +192,7 @@ fn log_warn_is_informational_by_default() {
 
 #[test]
 fn nan_transform_yields_finite_transforms_violation() {
+    let _slot = common::run_slot();
     use bevy_ecs::prelude::*;
 
     // Spawn an entity with a NaN transform via a system.
@@ -207,6 +219,7 @@ fn nan_transform_yields_finite_transforms_violation() {
 
 #[test]
 fn out_of_bounds_entity_yields_nodes_in_bounds_violation() {
+    let _slot = common::run_slot();
     use bevy_ecs::prelude::*;
 
     fn spawn_far_entity(mut commands: Commands) {
@@ -232,6 +245,7 @@ fn out_of_bounds_entity_yields_nodes_in_bounds_violation() {
 
 #[test]
 fn unknown_reset_kind_is_rejected_at_load_time() {
+    let _slot = common::run_slot();
     let scenario: Scenario = serde_json::from_str(
         r#"{"bot":{"type":"chaos","seed":7},"duration_s":0.1,"tps":60,"setup":{"resets":[{"kind":"hard_reset"}]}}"#,
     )
@@ -258,6 +272,7 @@ fn unknown_reset_kind_is_rejected_at_load_time() {
 
 #[test]
 fn registered_reset_hook_is_invoked_and_counts() {
+    let _slot = common::run_slot();
     use bevy_ecs::prelude::*;
 
     #[derive(Resource, Default)]
@@ -286,6 +301,7 @@ fn registered_reset_hook_is_invoked_and_counts() {
 
 #[test]
 fn custom_invariant_is_rejected_at_parse_time() {
+    let _slot = common::run_slot();
     // "custom" is not a known InvariantRule variant anymore; it fails
     // serde deserialization with an unknown-variant error.
     let err = serde_json::from_str::<Scenario>(
@@ -299,6 +315,7 @@ fn custom_invariant_is_rejected_at_parse_time() {
 
 #[test]
 fn scenario_bounds_are_enforced_per_axis() {
+    let _slot = common::run_slot();
     fn spawn_far_entity(mut commands: bevy_ecs::prelude::Commands) {
         commands.spawn(Transform::from_xyz(50.0, 9000.0, 0.0));
     }
@@ -327,6 +344,7 @@ fn scenario_bounds_are_enforced_per_axis() {
 /// this test is a regression guard that the oracle remains wired.
 #[test]
 fn z_axis_escape_is_caught_by_nodes_in_bounds() {
+    let _slot = common::run_slot();
     fn spawn_high_entity(mut commands: bevy_ecs::prelude::Commands) {
         commands.spawn(Transform::from_xyz(0.0, 0.0, 1e9));
     }
@@ -350,6 +368,7 @@ fn z_axis_escape_is_caught_by_nodes_in_bounds() {
 
 #[test]
 fn reset_missing_fires_for_reset_dependent_scenario_without_hooks() {
+    let _slot = common::run_slot();
     let scenario: Scenario = serde_json::from_str(
         r#"{"bot":{"type":"chaos","seed":7},"duration_s":0.1,"tps":60,"setup":{"resets":[{"kind":"anything"}]}}"#,
     )
@@ -364,6 +383,7 @@ fn reset_missing_fires_for_reset_dependent_scenario_without_hooks() {
 
 #[test]
 fn report_distinguishes_reset_hook_presence() {
+    let _slot = common::run_slot();
     use bevy_playtest::contract::ResetHooks;
     let scenario: Scenario =
         serde_json::from_str(r#"{"bot":{"type":"chaos","seed":7},"duration_s":0.1,"tps":60}"#)

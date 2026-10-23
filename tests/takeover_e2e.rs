@@ -12,7 +12,12 @@
 //! - inert: no env var -> normal exit 0, no report written
 //! - hard-fail: winit present alongside takeover -> exit 3 (covered by
 //!   `takeover_demo_winit` when the takeover-winit feature is on)
+
 #![cfg(feature = "takeover")]
+
+// Shared test harness (run-slot serialization)
+#[path = "common/mod.rs"]
+mod common;
 
 use bevy_playtest::plugin::{exit_code, ENV_REPORT, ENV_SCENARIO};
 use std::io::Write;
@@ -67,6 +72,7 @@ fn assert_stderr_contains(out: &std::process::Output, needle: &str) {
 
 #[test]
 fn takeover_end_to_end_pass_and_fail() {
+    let _slot = common::run_slot();
     let dir = unique_dir("outcome");
 
     let scenario_path = dir.join("scenario.json");
@@ -128,6 +134,7 @@ fn takeover_end_to_end_pass_and_fail() {
 
 #[test]
 fn takeover_config_errors() {
+    let _slot = common::run_slot();
     let dir = unique_dir("errors");
 
     let out = spawn_game(Some("/nonexistent/scenario.json"), None, &[]);
@@ -162,6 +169,7 @@ fn takeover_config_errors() {
 
 #[test]
 fn takeover_inert_without_env() {
+    let _slot = common::run_slot();
     let dir = unique_dir("inert");
     let sentinel = dir.join("sentinel");
     std::fs::write(&sentinel, b"x").unwrap();
@@ -176,6 +184,7 @@ fn takeover_inert_without_env() {
 
 #[test]
 fn takeover_default_plugins_headless_succeeds() {
+    let _slot = common::run_slot();
     if !cfg!(feature = "takeover-winit") {
         return;
     }
@@ -201,6 +210,7 @@ fn takeover_default_plugins_headless_succeeds() {
 
 #[test]
 fn headless_env_with_winit_hard_fails() {
+    let _slot = common::run_slot();
     // Doc contract: BEVY_PLAYTEST_HEADLESS alone (no scenario, so no
     // runner swap) must refuse loudly if WinitPlugin is present —
     // a window would open otherwise. Uses the RAW-winit demo (stock
@@ -251,6 +261,7 @@ fn headless_env_with_winit_hard_fails() {
 
 #[test]
 fn headless_env_alone_asserts_and_exits_normally() {
+    let _slot = common::run_slot();
     let dir = unique_dir("headless");
     let out = Command::new(game_binary())
         .env_remove(ENV_SCENARIO)
@@ -269,6 +280,7 @@ fn headless_env_alone_asserts_and_exits_normally() {
 
 #[test]
 fn headless_env_with_winit_works() {
+    let _slot = common::run_slot();
     let path = PathBuf::from(env!("CARGO_BIN_EXE_takeover_demo_winit"));
     let dir = unique_dir("headless_winit");
     let report_path = dir.join("report.json");
@@ -291,6 +303,7 @@ fn headless_env_with_winit_works() {
 
 #[test]
 fn smoke_literal_runs_builtin_and_marks_provenance() {
+    let _slot = common::run_slot();
     let dir = unique_dir("smoke");
     let report_path = dir.join("smoke.report.json");
     let out = Command::new(game_binary())
@@ -315,6 +328,7 @@ stderr: {}",
 
 #[test]
 fn smoke_report_defaults_to_cwd() {
+    let _slot = common::run_slot();
     let dir = unique_dir("smoke_cwd");
     let out = Command::new(game_binary())
         .env(ENV_SCENARIO, "smoke")
@@ -328,6 +342,7 @@ fn smoke_report_defaults_to_cwd() {
 
 #[test]
 fn smoke_typo_is_treated_as_a_file_path() {
+    let _slot = common::run_slot();
     for wrong in ["SMOKE", "Smoke"] {
         let out = Command::new(game_binary())
             .env(ENV_SCENARIO, wrong)
@@ -344,6 +359,7 @@ fn smoke_typo_is_treated_as_a_file_path() {
 
 #[test]
 fn all_selector_runs_on_stock_game_without_annotations() {
+    let _slot = common::run_slot();
     let stock = PathBuf::from(env!("CARGO_BIN_EXE_takeover_demo_stock"));
     let dir = unique_dir("stock");
 
@@ -396,6 +412,7 @@ fn all_selector_runs_on_stock_game_without_annotations() {
 
 #[test]
 fn invariant_with_zero_entities_fires_vacuous_invariant() {
+    let _slot = common::run_slot();
     let empty = PathBuf::from(env!("CARGO_BIN_EXE_takeover_demo_empty"));
     let dir = unique_dir("empty_vacuous");
 
@@ -428,6 +445,7 @@ fn invariant_with_zero_entities_fires_vacuous_invariant() {
 
 #[test]
 fn replay_verification_passes_on_deterministic_stock_game() {
+    let _slot = common::run_slot();
     let stock = PathBuf::from(env!("CARGO_BIN_EXE_takeover_demo_stock"));
     let dir = unique_dir("replay_ok");
     let scenario_path = dir.join("scenario.json");
@@ -457,6 +475,7 @@ fn replay_verification_passes_on_deterministic_stock_game() {
 
 #[test]
 fn replay_divergence_fails_on_nondeterministic_stock_game() {
+    let _slot = common::run_slot();
     let nondet = PathBuf::from(env!("CARGO_BIN_EXE_takeover_demo_nondet"));
     let dir = unique_dir("replay_div");
     let scenario_path = dir.join("scenario.json");
@@ -499,6 +518,7 @@ fn replay_divergence_fails_on_nondeterministic_stock_game() {
 /// for the post-hoc world-query vacuity guard (false positive).
 #[test]
 fn transient_entities_are_not_vacuous() {
+    let _slot = common::run_slot();
     let dir = unique_dir("transient");
     let report_path = dir.join("report.json");
     let out = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_takeover_demo_transient")))
@@ -533,6 +553,7 @@ fn transient_entities_are_not_vacuous() {
 /// proves nothing. The vacuity guard must turn it into a loud failure.
 #[test]
 fn empty_world_game_is_flagged_vacuous() {
+    let _slot = common::run_slot();
     let dir = unique_dir("empty");
     let report_path = dir.join("report.json");
     let out = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_takeover_demo_empty")))

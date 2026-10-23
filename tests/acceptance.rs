@@ -29,6 +29,10 @@
 
 #![cfg(feature = "brp")]
 
+// Shared test harness (run-slot serialization)
+#[path = "common/mod.rs"]
+mod common;
+
 use bevy_playtest::brp_runner::{run_scenario_brp, BrpRunConfig};
 use bevy_playtest::scenario::Scenario;
 use std::path::PathBuf;
@@ -119,6 +123,7 @@ fn chaos_scenario() -> Scenario {
 /// BEVY_PLAYTEST_FIXTURE.
 #[test]
 fn fixtures_run_under_external_brp() {
+    let _slot = common::run_slot();
     let fixtures = selected_fixtures();
     assert!(
         !fixtures.is_empty(),
@@ -181,6 +186,7 @@ fn fixtures_run_under_external_brp() {
 /// must not demand manifests from them.
 #[test]
 fn fixture_manifest_is_consistent() {
+    let _slot = common::run_slot();
     let script = repo_root().join("scripts/fetch_bevy_examples.sh");
     let body = std::fs::read_to_string(&script).expect("fetch script exists");
     assert!(

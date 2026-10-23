@@ -1,5 +1,9 @@
 //! Replay-divergence, cheat postcondition contracts, coverage.
 
+// Shared test harness (run-slot serialization)
+#[path = "common/mod.rs"]
+mod common;
+
 use bevy_app::App;
 use bevy_playtest::run_scenario;
 use bevy_playtest::scenario::Scenario;
@@ -33,6 +37,7 @@ fn moving_cube_app() -> App {
 
 #[test]
 fn replay_verification_passes_on_deterministic_app() {
+    let _slot = common::run_slot();
     let scenario = scenario_json(r#","verify_replay":true"#);
     let report = bevy_playtest::replay::run_scenario_verified(moving_cube_app, &scenario).unwrap();
     assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
@@ -44,6 +49,7 @@ fn replay_verification_passes_on_deterministic_app() {
 
 #[test]
 fn replay_divergence_fires_on_nondeterministic_app() {
+    let _slot = common::run_slot();
     use std::sync::atomic::{AtomicU64, Ordering};
     static CALLS: AtomicU64 = AtomicU64::new(0);
     let scenario = scenario_json(r#","verify_replay":true"#);
@@ -88,6 +94,7 @@ fn replay_divergence_fires_on_nondeterministic_app() {
 
 #[test]
 fn replay_fingerprint_is_stable_across_identical_constructions() {
+    let _slot = common::run_slot();
     let scenario = scenario_json(r#","verify_replay":true"#);
     let mut app_a = moving_cube_app();
     let mut app_b = moving_cube_app();
@@ -114,6 +121,7 @@ fn replay_fingerprint_is_stable_across_identical_constructions() {
 
 #[test]
 fn cheating_hook_satisfying_lt_contract_proves_action() {
+    let _slot = common::run_slot();
     use bevy_playtest::contract::CheatHooks;
     use std::collections::HashMap;
     let mut hooks = CheatHooks(HashMap::new());
@@ -148,6 +156,7 @@ fn cheating_hook_satisfying_lt_contract_proves_action() {
 
 #[test]
 fn noop_cheat_hook_fails_lt_contract_negative_control() {
+    let _slot = common::run_slot();
     use bevy_playtest::contract::CheatHooks;
     use std::collections::HashMap;
     let mut hooks = CheatHooks(HashMap::new());
@@ -180,6 +189,7 @@ fn noop_cheat_hook_fails_lt_contract_negative_control() {
 
 #[test]
 fn cheating_hook_eq_contract_asserts_stability() {
+    let _slot = common::run_slot();
     use bevy_playtest::contract::CheatHooks;
     use std::collections::HashMap;
     let mut hooks = CheatHooks(HashMap::new());
@@ -206,6 +216,7 @@ fn cheating_hook_eq_contract_asserts_stability() {
 
 #[test]
 fn declared_observation_matched_by_log_message_is_observed() {
+    let _slot = common::run_slot();
     let mut app = App::new();
     app.add_systems(bevy_app::Update, || {
         tracing::info!("enemy_killed at range 42");
@@ -224,6 +235,7 @@ fn declared_observation_matched_by_log_message_is_observed() {
 
 #[test]
 fn declared_observation_never_logged_is_a_hole_not_a_fail() {
+    let _slot = common::run_slot();
     let mut app = App::new();
     app.world_mut().spawn(Transform::default());
     app.add_systems(
@@ -249,6 +261,7 @@ fn declared_observation_never_logged_is_a_hole_not_a_fail() {
 
 #[test]
 fn strict_coverage_makes_holes_fail() {
+    let _slot = common::run_slot();
     let mut app = App::new();
     app.world_mut().spawn(Transform::default());
     app.add_systems(
@@ -276,6 +289,7 @@ fn strict_coverage_makes_holes_fail() {
 
 #[test]
 fn chaos_surface_coverage_reports_unexercised_keys() {
+    let _slot = common::run_slot();
     let scenario: Scenario = serde_json::from_str(
         r#"{"bot":{"type":"chaos","seed":1,"raw_surface":{"keys":["KeyW","Space","Escape"]}},
             "duration_s":0.1,"tps":60}"#,
@@ -303,6 +317,7 @@ fn chaos_surface_coverage_reports_unexercised_keys() {
 
 #[test]
 fn no_declarations_means_no_coverage_field() {
+    let _slot = common::run_slot();
     let mut app = moving_cube_app();
     let scenario = scenario_json("");
     let report = run_scenario(&mut app, &scenario).unwrap();

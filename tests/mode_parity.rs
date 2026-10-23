@@ -12,6 +12,10 @@
 //!
 //! Expected-fail tests are #[ignore]d with the reason.
 
+// Shared test harness (run-slot serialization)
+#[path = "common/mod.rs"]
+mod common;
+
 use bevy_playtest::choice::{Choice, ChoiceStream, Continuation};
 
 /// The same seed and bound must produce the identical choice sequence
@@ -21,6 +25,7 @@ use bevy_playtest::choice::{Choice, ChoiceStream, Continuation};
 /// draws, replay diverges.
 #[test]
 fn same_seed_same_bound_same_choice_sequence() {
+    let _slot = common::run_slot();
     let mut a = ChoiceStream::from_seed(7);
     let mut b = ChoiceStream::from_seed(7);
     for frame in 0..120 {
@@ -34,6 +39,7 @@ fn same_seed_same_bound_same_choice_sequence() {
 /// remap like seed 0 -> 42 producing collisions).
 #[test]
 fn different_seeds_diverge() {
+    let _slot = common::run_slot();
     let mut a = ChoiceStream::from_seed(1);
     let mut b = ChoiceStream::from_seed(2);
     let seq_a: Vec<u64> = (0..30).map(|f| a.below(f, 8)).collect();
@@ -60,6 +66,7 @@ fn different_seeds_diverge() {
 /// brp_runner.rs against driver.rs.
 #[test]
 fn custom_surface_interval_matches_brp_contract() {
+    let _slot = common::run_slot();
     let tps = 60u64;
     let rate_hz = 5u64; // NON-default input rate
     let surface_len = 3u64; // NON-default key surface
@@ -89,6 +96,7 @@ fn custom_surface_interval_matches_brp_contract() {
 /// replay and failure reproduction).
 #[test]
 fn recorded_choices_are_seed_reproducible() {
+    let _slot = common::run_slot();
     use bevy_app::App;
     use bevy_playtest::run_scenario;
     use bevy_playtest::scenario::Scenario;
@@ -123,6 +131,7 @@ fn recorded_choices_are_seed_reproducible() {
 /// produce plausible-but-wrong input.
 #[test]
 fn misaligned_replay_must_fail_loudly_not_shift_silently() {
+    let _slot = common::run_slot();
     // Record a live stream, then attempt to replay it starting one
     // frame later (as if one earlier draw were inserted/removed).
     let mut live = ChoiceStream::from_seed(7);
@@ -168,6 +177,7 @@ fn misaligned_replay_must_fail_loudly_not_shift_silently() {
 /// choice logs diverge.
 #[test]
 fn implicit_surface_matches_explicit_schema_default() {
+    let _slot = common::run_slot();
     use bevy_app::App;
     use bevy_playtest::run_scenario;
     use bevy_playtest::scenario::Scenario;

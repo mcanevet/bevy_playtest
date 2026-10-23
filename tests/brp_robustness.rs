@@ -12,7 +12,12 @@
 //! the target dir, so no fixture infrastructure is needed. Each test
 //! picks its own free port (argv + cfg.port) so parallel runs never
 //! collide.
+
 #![cfg(feature = "brp")]
+
+// Shared test harness (run-slot serialization)
+#[path = "common/mod.rs"]
+mod common;
 
 use bevy_playtest::brp_runner::{run_scenario_brp, BrpRunConfig};
 use bevy_playtest::scenario::Scenario;
@@ -283,6 +288,7 @@ fn cfg(binary: &std::path::Path, mode: &str, port: u16, startup_timeout: Duratio
 /// game blocks on write, which is what this test detects.
 #[test]
 fn stdout_flood_does_not_deadlock_the_run() {
+    let _slot = common::run_slot();
     let bin = compile_mock("brp_mock_game");
     let port = free_port();
     let start = Instant::now();
@@ -308,6 +314,7 @@ fn stdout_flood_does_not_deadlock_the_run() {
 /// never hang until startup_timeout.
 #[test]
 fn crashed_at_startup_game_fails_fast_with_detail() {
+    let _slot = common::run_slot();
     let bin = compile_mock("brp_mock_game");
     let port = free_port();
     let start = Instant::now();
@@ -328,6 +335,7 @@ fn crashed_at_startup_game_fails_fast_with_detail() {
 /// configured startup_timeout, not hang forever.
 #[test]
 fn never_binding_game_times_out_bounded() {
+    let _slot = common::run_slot();
     let bin = compile_mock("brp_mock_game");
     let port = free_port();
     let start = Instant::now();
@@ -348,6 +356,7 @@ fn never_binding_game_times_out_bounded() {
 /// failure (violations from failed queries), never a silent Pass.
 #[test]
 fn game_death_mid_run_is_not_a_silent_pass() {
+    let _slot = common::run_slot();
     let bin = compile_mock("brp_mock_game");
     let port = free_port();
     let report = run_scenario_brp(
@@ -370,6 +379,7 @@ fn game_death_mid_run_is_not_a_silent_pass() {
 /// without a trace (violations empty).
 #[test]
 fn poisoned_translation_is_flagged_over_the_wire() {
+    let _slot = common::run_slot();
     let bin = compile_mock("brp_mock_game");
     let port = free_port();
     let report = run_scenario_brp(
@@ -395,6 +405,7 @@ fn poisoned_translation_is_flagged_over_the_wire() {
 /// the runner sets it whenever stderr is non-empty.
 #[test]
 fn healthy_stderr_chatter_must_not_populate_error_field() {
+    let _slot = common::run_slot();
     let bin = compile_mock("brp_mock_game");
     let port = free_port();
     let report = run_scenario_brp(
@@ -415,6 +426,7 @@ fn healthy_stderr_chatter_must_not_populate_error_field() {
 /// liveness coverage at all: it evaluates bounds/NaN only.
 #[test]
 fn static_world_over_brp_is_not_a_silent_pass() {
+    let _slot = common::run_slot();
     let bin = compile_mock("brp_mock_game");
     let port = free_port();
     let report = run_scenario_brp(
@@ -436,6 +448,7 @@ fn static_world_over_brp_is_not_a_silent_pass() {
 /// detail in every report starts with the literal garbage "[intent: ]".
 #[test]
 fn brp_violation_details_carry_no_stale_prefix() {
+    let _slot = common::run_slot();
     let bin = compile_mock("brp_mock_game");
     let port = free_port();
     // poisoned row guarantees at least one violation (query fails to
@@ -460,6 +473,7 @@ fn brp_violation_details_carry_no_stale_prefix() {
 
 #[test]
 fn brp_parity_flips_with_plugin_presence() {
+    let _slot = common::run_slot();
     let bin = compile_mock("brp_mock_game");
     let port = free_port();
     let report = run_scenario_brp(
@@ -480,6 +494,7 @@ fn brp_parity_flips_with_plugin_presence() {
 
 #[test]
 fn brp_mode_rejects_verify_replay_loudly() {
+    let _slot = common::run_slot();
     let bin = compile_mock("brp_mock_game");
     let port = free_port();
     let mut s = quick_scenario();

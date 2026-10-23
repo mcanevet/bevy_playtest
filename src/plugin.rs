@@ -56,13 +56,14 @@ pub const ENV_HEADLESS: &str = "BEVY_PLAYTEST_HEADLESS";
 /// External-BRP port. When set, PlaytestPlugin adds RemotePlugin +
 /// RemoteHttpPlugin and registers types for reflection queries.
 pub const ENV_BRP_PORT: &str = "BRP_PORT";
-
-const KNOWN_ENV_VARS: [&str; 6] = [
+pub use crate::sinks::ENV_ALLOW_MISSING_LOG_CAPTURE;
+const KNOWN_ENV_VARS: [&str; 7] = [
     ENV_SCENARIO,
     ENV_REPORT,
     ENV_HEADLESS,
     ENV_REPLAY_PASS_B,
     ENV_BRP_PORT,
+    ENV_ALLOW_MISSING_LOG_CAPTURE,
     // Test-selection var (set by the acceptance suite / CI matrix to
     // pick one fixture); inherited by the game process harmlessly.
     "BEVY_PLAYTEST_FIXTURE",
@@ -134,6 +135,29 @@ impl Plugin for PlaytestPlugin {
                     ));
                 }
             }
+        }
+
+        // Log-capture preflight: this plugin is contracted to be added
+        // AFTER DefaultPlugins, so if the game uses DefaultPlugins its
+        // LogPlugin has already claimed the write-once global tracing
+        // default — log_error/log_warn findings would be silently
+        // under-reported for the whole process. Detect NOW (plugin
+        // presence is reliably queryable at this point) and warn with
+        // remediation. Not fatal: BRP/headless games never capture
+        // logs anyway, and ENV_ALLOW_MISSING_LOG_CAPTURE acknowledges
+        // the loss deliberately.
+        if std::env::var_os(ENV_SCENARIO).is_some()
+            && app.is_plugin_added::<bevy::log::LogPlugin>()
+            && std::env::var_os(ENV_ALLOW_MISSING_LOG_CAPTURE).is_none()
+        {
+            eprintln!(
+                "bevy_playtest: LogPlugin was added before PlaytestPlugin — its \
+                 tracing subscriber wins the global default and log capture will \
+                 be OFF for this process. Use PlaytestDefaultPlugins (drops \
+                 LogPlugin under a scenario run) or acknowledge with \
+                 {}=1.",
+                ENV_ALLOW_MISSING_LOG_CAPTURE
+            );
         }
 
         match read_env_config() {
@@ -485,6 +509,16 @@ fn write_report(path: &str, report: &crate::state::PlaytestReport) -> Result<(),
 ///   `WinitPlugin::build` — a display-less host panics before any
 ///   runner swap could intervene, so removing the plugin is the only
 ///   reliable headless path.)
+/// - [`ENV_SCENARIO`] only (a playtest run will drive this app via
+///   `run_scenario`): additionally drops `LogPlugin` so the harness's
+///   capture subscriber can install as the global tracing default —
+///   `LogPlugin` would install its own at plugin-build time and the
+///   global default is write-once per process, permanently blinding
+///   log capture. The harness's fmt layer replaces LogPlugin's
+///   console output (RUST_LOG honored, default INFO). Deliberately
+///   NOT applied under [`ENV_HEADLESS`]/[`ENV_BRP_PORT`]: those run
+///   the game normally (or as a BRP child whose piped output is read
+///   post-mortem) and keep the game's own logging.
 ///
 /// Requires the `takeover-winit` feature (adds the `bevy_winit` and
 /// `bevy` (DefaultPlugins) dependencies).
@@ -499,11 +533,22 @@ impl bevy_app::prelude::PluginGroup for PlaytestDefaultPlugins {
             || std::env::var_os(ENV_HEADLESS).is_some()
             || std::env::var_os(ENV_BRP_PORT).is_some()
         {
-            builder.disable::<bevy_winit::WinitPlugin>().add(
+            let builder = builder.disable::<bevy_winit::WinitPlugin>().add(
                 bevy_app::ScheduleRunnerPlugin::run_loop(std::time::Duration::from_secs_f64(
                     1.0 / 60.0,
                 )),
-            )
+            );
+            // Only a scenario run installs the harness's capture
+            // subscriber (run_scenario); headless-assert and BRP
+            // children never do, so dropping LogPlugin there would
+            // leave them with NO logging at all. Note: unconditional
+            // `bevy::log::LogPlugin` reference relies on bevy's
+            // default features including `bevy_log`.
+            if std::env::var_os(ENV_SCENARIO).is_some() {
+                builder.disable::<bevy::log::LogPlugin>()
+            } else {
+                builder
+            }
         } else {
             builder
         }

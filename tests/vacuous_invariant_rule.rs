@@ -2,6 +2,10 @@
 //! matches zero entities must produce a violation, and the rule must
 //! classify as gating (not informational).
 
+// Shared test harness (run-slot serialization)
+#[path = "common/mod.rs"]
+mod common;
+
 use bevy_app::prelude::*;
 use bevy_playtest::driver::run_scenario;
 use bevy_playtest::rules::Rule;
@@ -15,6 +19,7 @@ fn scenario() -> bevy_playtest::scenario::Scenario {
 
 #[test]
 fn invariant_with_zero_entities_is_vacuous() {
+    let _slot = common::run_slot();
     // No entities at all: the invariant matches nothing and must be
     // flagged as vacuous rather than silently passing.
     let mut app = App::new();
@@ -38,6 +43,7 @@ fn invariant_with_zero_entities_is_vacuous() {
 /// a plain failure (exit codes and JUnit classification depend on it).
 #[test]
 fn startup_panic_with_declared_invariant_stays_crash_not_fail() {
+    let _slot = common::run_slot();
     fn exploding_startup() {
         panic!("boom at startup!");
     }
