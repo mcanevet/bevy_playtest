@@ -186,6 +186,78 @@ PYEOF
     grep -q 'WinitPlugin' "${target_dir}/src/main.rs" \
         && die "fixture ${name}: raw WinitPlugin reference remains in patched main"
 
+    # 2b. POINTER-TIER transform (game_menu only): makes the main-menu
+    #     Play button a synthetic_pointer target. Three auditable edits:
+    #     i)  Insert `Name::new("menu_play_button")` into the Play
+    #         button's spawn bundle (upstream buttons are unnamed).
+    #     ii) Append a self-contained audit module: a world-level
+    #         Activate observer that logs `menu play button activated`
+    #         (the scenario's `observes` target) when the named button
+    #         fires.
+    #     iii) Wire the observer with `.add_observer(...)` beside the
+    #         PlaytestPlugin insertion.
+    if [ "${name}" = "game_menu" ]; then
+        python3 - "${target_dir}/src/main.rs" << 'GAME_MENU_PYEOF'
+import sys
+path = sys.argv[1]
+src = open(path).read()
+
+# (i) Name two buttons: the Play button (instrumented below — the
+# pointer tier's positive target) and the Settings button (left
+# uninstrumented: it works — transitions to the settings screen — but
+# emits no log, exercising the coverage-miss failure mode with ZERO
+# fault injection; upstream behavior is healthy, just silent).
+play_anchor = "                        MenuButtonAction::Play,\n"
+play_repl = play_anchor + "                        Name::new(\"menu_play_button\"),\n"
+if src.count(play_anchor) != 1:
+    sys.exit(f"game_menu: Play-button anchor appears {src.count(play_anchor)} times (need exactly 1)")
+src = src.replace(play_anchor, play_repl, 1)
+settings_anchor = "                        MenuButtonAction::Settings,\n"
+settings_repl = settings_anchor + "                        Name::new(\"menu_settings_button\"),\n"
+if src.count(settings_anchor) != 1:
+    sys.exit(f"game_menu: Settings-button anchor appears {src.count(settings_anchor)} times (need exactly 1)")
+src = src.replace(settings_anchor, settings_repl, 1)
+
+# (iii) Wire the observer beside the playtest plugin insertion.
+# Compiles in both cfgs (plain builds keep upstream behavior: the
+# handler early-returns via compile-time cfg!), so no cfg gymnastics
+# are needed on the wiring site itself.
+plug_anchor = ".add_plugins(playtest_plugins())\n"
+wire = plug_anchor + "        .add_observer(bevy_playtest_pointer_audit::on_button_activate)\n"
+if src.count(plug_anchor) != 1:
+    sys.exit(f"game_menu: PlaytestPlugin anchor appears {src.count(plug_anchor)} times (need exactly 1)")
+src = src.replace(plug_anchor, wire, 1)
+
+# (ii) Append the audit module (activation logging).
+audit = '''
+// --- bevy_playtest pointer-tier addition (appended, not modifying upstream) ---
+/// World-level observer for the pointer acceptance tier: logs when the
+/// named Play button activates, so a synthetic_pointer scenario can
+/// `observe` the click landing through the real picking chain. The
+/// sibling Settings button (also named) intentionally has NO observer:
+/// clicking it is healthy upstream behavior that emits nothing — the
+/// natural negative case for observation coverage.
+mod bevy_playtest_pointer_audit {
+    use bevy::prelude::*;
+    use bevy::ui_widgets::Activate;
+
+    pub fn on_button_activate(event: On<Activate>, named: Query<&Name>) {
+        #[cfg(feature = "playtest")]
+        if let Ok(name) = named.get(event.entity) {
+            if name.as_str() == "menu_play_button" {
+                info!("menu play button activated");
+            }
+        }
+        let _ = (&event, &named);
+    }
+}
+'''
+src += audit
+open(path, "w").write(src)
+GAME_MENU_PYEOF
+        echo "    (pointer-tier edits applied: menu_play_button + audit observer)"
+    fi
+
     # Standalone-crate fixups for sibling modules
     for f in "${target_dir}/src/"*.rs; do
         sed 's/bevy_ecs::/bevy::ecs::/g' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
@@ -264,6 +336,7 @@ playtest = [
     "bevy_playtest/takeover",
     "bevy_playtest/brp-plugin",
     "bevy_playtest/takeover-winit",
+    "bevy_playtest/pointer-input",
 ]
 
 [dependencies]

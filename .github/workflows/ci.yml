@@ -164,6 +164,17 @@ jobs:
               timeout 120 cargo test --locked --test acceptance -- --exact fixtures_run_under_external_brp --nocapture
           done
 
+      # Pointer tier: the synthetic_pointer bot clicks the real
+      # game_menu UI through the picking chain. The fixture bin must
+      # be built WITH the playtest feature (the self-dev-dependency
+      # only activates it for test builds, not bins).
+      - name: Pointer acceptance (synthetic_pointer bot)
+        env:
+          WGPU_BACKEND: vulkan
+        run: |
+          cargo build --manifest-path fixtures/game_menu/Cargo.toml --bin fixture_game_menu --features playtest
+          cargo test --locked --all-features --test pointer_acceptance -- --test-threads=1
+
       # Clippy reuses the artifacts compiled above.
       - name: Clippy (deny warnings)
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
