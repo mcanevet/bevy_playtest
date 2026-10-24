@@ -19,6 +19,21 @@ pub enum Continuation {
     Reseed(u64),
 }
 
+/// What a recorded draw was for. Downstream report consumers (action
+/// log, key-surface coverage) must not conflate mouse draws with key
+/// draws — a mouse button-index draw would masquerade as a key press.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChoiceKind {
+    /// A chaos-bot key-index draw.
+    #[default]
+    Key,
+    /// A chaos-bot cursor-position draw.
+    MousePosition,
+    /// A chaos-bot mouse button-index draw.
+    MouseButton,
+}
+
 /// One recorded random draw.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Choice {
@@ -27,6 +42,10 @@ pub struct Choice {
     pub value: u64,
     /// 0 = raw u64 draw (no reduction).
     pub bound: u64,
+    /// What the draw selected — lets report consumers separate key
+    /// draws (action log, surface coverage) from mouse draws.
+    #[serde(default)]
+    pub kind: ChoiceKind,
 }
 
 /// Source of bot randomness (plain struct, no Bevy Resource derive).
@@ -82,6 +101,13 @@ impl ChoiceStream {
     /// were skipped (never drawn) are consumed without effect — they
     /// can no longer shift later draws onto the wrong values.
     pub fn below(&mut self, frame: u64, bound: u64) -> u64 {
+        self.below_kind(frame, bound, ChoiceKind::Key)
+    }
+
+    /// Like [`below`](Self::below), but tags the recorded draw with the
+    /// given kind so report consumers can tell key draws from mouse
+    /// draws.
+    pub fn below_kind(&mut self, frame: u64, bound: u64, kind: ChoiceKind) -> u64 {
         // Consume replay entries older than the requested frame.
         while self.replay.front().is_some_and(|c| c.frame < frame) {
             self.replay.pop_front();
@@ -117,6 +143,7 @@ impl ChoiceStream {
             frame,
             value,
             bound,
+            kind,
         });
         value
     }
@@ -145,16 +172,19 @@ mod tests {
                     frame: 1,
                     value: 0,
                     bound: 1,
+                    kind: ChoiceKind::Key,
                 },
                 Choice {
                     frame: 2,
                     value: 5,
                     bound: 10,
+                    kind: ChoiceKind::Key,
                 },
                 Choice {
                     frame: 3,
                     value: 3,
                     bound: 4,
+                    kind: ChoiceKind::Key,
                 },
             ],
             Continuation::Prng,

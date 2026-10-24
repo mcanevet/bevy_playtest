@@ -407,3 +407,283 @@ fn report_distinguishes_reset_hook_presence() {
     let report = run_scenario(&mut app, &scenario).unwrap();
     assert_eq!(report.reset_hooks_registered, Some(true));
 }
+
+// ---------------------------------------------------------------------------
+// Mouse input
+// ---------------------------------------------------------------------------
+
+/// A game system observing raw MouseButtonInput messages.
+#[test]
+fn chaos_mouse_clicks_reach_button_input() {
+    let _slot = common::run_slot();
+    use bevy_ecs::prelude::*;
+    // A game system that counts ButtonInput<MouseButton> presses —
+    // the standard way games read mouse clicks.
+    #[derive(Resource, Default)]
+    struct ObservedClicks(u32);
+
+    fn observe_clicks(
+        buttons: Res<bevy_input::prelude::ButtonInput<bevy_input::mouse::MouseButton>>,
+        mut clicks: ResMut<ObservedClicks>,
+    ) {
+        if buttons.just_pressed(bevy_input::mouse::MouseButton::Left) {
+            clicks.0 += 1;
+        }
+    }
+
+    // Default surface (no raw_surface): chaos mouse is DEFAULT-ON —
+    // the zero-config path.
+    let scenario: Scenario =
+        serde_json::from_str(r#"{"bot":{"type":"chaos","seed":7},"duration_s":0.5,"tps":60}"#)
+            .unwrap();
+    let mut app = minimal_app();
+    spawn_observable_entity(&mut app);
+    app.add_message::<bevy_input::mouse::MouseButtonInput>();
+    app.insert_resource(ObservedClicks::default());
+    app.add_systems(bevy_app::Update, observe_clicks);
+    run_scenario(&mut app, &scenario).unwrap();
+    let clicks = app.world().get_resource::<ObservedClicks>().unwrap().0;
+    assert!(
+        clicks > 0,
+        "the chaos mouse bot must click by default (got {clicks} clicks in 30 frames)"
+    );
+}
+
+/// Chaos clicks must be deterministic: same seed → same click count and
+/// same cursor trajectory.
+#[test]
+fn chaos_mouse_deterministic_per_seed() {
+    let _slot = common::run_slot();
+    use bevy_ecs::prelude::*;
+
+    fn run_once() -> (u32, Vec<(f32, f32)>) {
+        let scenario: Scenario = serde_json::from_str(
+            r#"{"bot":{"type":"chaos","seed":123,"input_rate_hz":20},"duration_s":0.5,"tps":60}"#,
+        )
+        .unwrap();
+        let mut app = App::new();
+        bevy_playtest::sinks::ensure_global_subscriber();
+        // Observed click cursor positions from the harness cursor resource.
+        fn collect_positions(
+            cursor: Res<bevy_playtest::driver::CursorInputResource>,
+            mut sink: ResMut<PositionSink>,
+        ) {
+            if let Some(p) = cursor.position() {
+                sink.0.push((p.x, p.y));
+            }
+        }
+        #[derive(Resource, Default)]
+        struct PositionSink(Vec<(f32, f32)>);
+        app.init_resource::<PositionSink>();
+        // Force cursor position sampling every frame.
+        app.add_systems(bevy_app::Update, collect_positions);
+        run_scenario(&mut app, &scenario).unwrap();
+        let sink = app.world_mut().remove_resource::<PositionSink>().unwrap();
+        let clicks = app
+            .world()
+            .get_resource::<bevy_input::prelude::ButtonInput<bevy_input::mouse::MouseButton>>()
+            .map(|b| b.get_just_pressed().count())
+            .unwrap_or(0);
+        (clicks as u32, sink.0)
+    }
+
+    let (clicks_a, pos_a) = run_once();
+    let (clicks_b, pos_b) = run_once();
+    assert_eq!(clicks_a, clicks_b, "same seed must yield same click count");
+    assert_eq!(pos_a, pos_b, "same seed must yield same cursor trajectory");
+}
+
+/// Scripted clicks: `mouse_clicks` entries drive ButtonInput at the
+/// scheduled frame, for any bot type.
+#[test]
+fn scripted_mouse_clicks_fire_on_schedule() {
+    let _slot = common::run_slot();
+    use bevy_ecs::prelude::*;
+    #[derive(Resource, Default)]
+    struct ObservedClicks(Vec<(bevy_input::mouse::MouseButton, bevy_input::ButtonState)>);
+
+    fn observe_messages(
+        mut events: bevy_ecs::prelude::MessageReader<bevy_input::mouse::MouseButtonInput>,
+        mut clicks: ResMut<ObservedClicks>,
+    ) {
+        for e in events.read() {
+            clicks.0.push((e.button, e.state));
+        }
+    }
+
+    // Empty keyboard surface disables chaos keyboard; empty mouse surface
+    // disables chaos mouse. Only the scripted clicks fire.
+    let scenario: Scenario = serde_json::from_str(
+        r#"{"bot":{"type":"chaos","seed":7,"mouse_clicks":[{"frame":5,"button":"right","x":100.0,"y":200.0,"hold_frames":3}],"raw_surface":{"keys":["w"],"mouse_buttons":[]}},"duration_s":0.2,"tps":60}"#,
+    )
+    .unwrap();
+    let mut app = minimal_app();
+    spawn_observable_entity(&mut app);
+    app.add_message::<bevy_input::mouse::MouseButtonInput>();
+    app.insert_resource(ObservedClicks::default());
+    app.add_systems(bevy_app::Update, observe_messages);
+    run_scenario(&mut app, &scenario).unwrap();
+    let clicks = app.world().get_resource::<ObservedClicks>().unwrap();
+    // Press + release of the right button, hold 3 frames.
+    let right_clicks: Vec<_> = clicks
+        .0
+        .iter()
+        .filter(|(b, _)| *b == bevy_input::mouse::MouseButton::Right)
+        .collect();
+    assert!(
+        right_clicks
+            .iter()
+            .any(|(_, s)| *s == bevy_input::ButtonState::Pressed),
+        "scripted right-click press must fire"
+    );
+    assert!(
+        right_clicks
+            .iter()
+            .any(|(_, s)| *s == bevy_input::ButtonState::Released),
+        "scripted right-click release must fire after hold_frames"
+    );
+    // No other buttons fired (both surfaces emptied in the scenario).
+    assert!(
+        clicks
+            .0
+            .iter()
+            .all(|(b, _)| *b == bevy_input::mouse::MouseButton::Right),
+        "chaos mouse must respect an emptied mouse surface"
+    );
+}
+
+/// Multiple scripted clicks must all fire — same-frame entries AND
+/// entries scheduled while another scripted hold is active. Every
+/// declared click gets a matching press+release pair; nothing is
+/// dropped or stuck held.
+#[test]
+fn multiple_scripted_clicks_queue_without_dropping() {
+    let _slot = common::run_slot();
+    use bevy_ecs::prelude::*;
+    use bevy_input::mouse::MouseButton;
+    use bevy_input::ButtonState;
+
+    #[derive(Resource, Default)]
+    struct ObservedClicks(Vec<(MouseButton, ButtonState)>);
+
+    fn observe_messages(
+        mut events: bevy_ecs::prelude::MessageReader<bevy_input::mouse::MouseButtonInput>,
+        mut clicks: ResMut<ObservedClicks>,
+    ) {
+        for e in events.read() {
+            clicks.0.push((e.button, e.state));
+        }
+    }
+
+    // Three clicks: two on the SAME frame (different buttons), one
+    // scheduled mid-hold (while the frame-5 right hold is still
+    // active). Both chaos surfaces emptied so only scripted clicks fire.
+    let scenario: Scenario = serde_json::from_str(
+        r#"{"bot":{"type":"chaos","seed":7,"mouse_clicks":[{"frame":5,"button":"right","hold_frames":10},{"frame":5,"button":"left","hold_frames":2},{"frame":8,"button":"middle","hold_frames":2}],"raw_surface":{"keys":["w"],"mouse_buttons":[]}},"duration_s":0.3,"tps":60}"#,
+    )
+    .unwrap();
+    let mut app = minimal_app();
+    spawn_observable_entity(&mut app);
+    app.add_message::<bevy_input::mouse::MouseButtonInput>();
+    app.insert_resource(ObservedClicks::default());
+    app.add_systems(bevy_app::Update, observe_messages);
+    run_scenario(&mut app, &scenario).unwrap();
+    let clicks = app.world().get_resource::<ObservedClicks>().unwrap();
+
+    for button in [MouseButton::Left, MouseButton::Right, MouseButton::Middle] {
+        let presses = clicks
+            .0
+            .iter()
+            .filter(|(b, s)| *b == button && *s == ButtonState::Pressed)
+            .count();
+        let releases = clicks
+            .0
+            .iter()
+            .filter(|(b, s)| *b == button && *s == ButtonState::Released)
+            .count();
+        assert_eq!(
+            presses, 1,
+            "{button:?} must press exactly once (got {presses})"
+        );
+        assert_eq!(
+            releases, 1,
+            "{button:?} must release exactly once (got {releases}) — dropped \
+             or stuck holds are both failures"
+        );
+    }
+}
+
+/// Overlapping holds on the same physical button must refcount: chaos
+/// and a scripted click can hold `Left` at the same time, and neither's
+/// release may clear the other's hold prematurely. Observable
+/// consequence: from the scripted press until its release, the button
+/// must stay CONTINUOUSLY pressed in `ButtonInput` — no gap where
+/// chaos's shorter hold cleared it early.
+#[test]
+fn overlapping_mouse_holds_refcount_per_button() {
+    let _slot = common::run_slot();
+    use bevy_ecs::prelude::*;
+
+    #[derive(Resource, Default)]
+    struct ObservedFrames(Vec<bool>);
+
+    fn observe_pressed(
+        buttons: Res<bevy_input::prelude::ButtonInput<bevy_input::mouse::MouseButton>>,
+        mut obs: ResMut<ObservedFrames>,
+    ) {
+        obs.0
+            .push(buttons.pressed(bevy_input::mouse::MouseButton::Left));
+    }
+
+    // Chaos mouse (default surface includes Left) fires at up to 60 Hz
+    // with 2-frame holds; a scripted left click at frame 2 holds for 20
+    // frames. Their windows overlap heavily, so chaos WILL grab Left
+    // while the scripted hold is active (seed-deterministic).
+    let scenario: Scenario = serde_json::from_str(
+        r#"{"bot":{"type":"chaos","seed":7,"input_rate_hz":60,"mouse_clicks":[{"frame":2,"button":"left","x":50.0,"y":50.0,"hold_frames":20}]},"duration_s":0.5,"tps":60}"#,
+    )
+    .unwrap();
+    let mut app = minimal_app();
+    spawn_observable_entity(&mut app);
+    app.insert_resource(ObservedFrames::default());
+    app.add_systems(bevy_app::Update, observe_pressed);
+    run_scenario(&mut app, &scenario).unwrap();
+
+    let frames = app.world().get_resource::<ObservedFrames>().unwrap();
+    // Scripted press fires at frame 2 and releases at frame 22.
+    assert!(
+        frames.0.len() > 22,
+        "run must cover the scripted hold window (got {} frames)",
+        frames.0.len()
+    );
+    // The press must actually reach ButtonInput (polling observer runs
+    // in Update, so the press written during frame 2 is first visible
+    // at frame 3 — search rather than index).
+    let first_pressed = frames
+        .0
+        .iter()
+        .position(|&p| p)
+        .expect("some frame must observe Left pressed");
+    assert!(
+        first_pressed <= 4,
+        "scripted press at frame 2 must be observed promptly (first pressed at \
+         frame {first_pressed}): {:?}",
+        frames.0
+    );
+    // Core property: from the FIRST observed press until the scripted
+    // release (frame 22), the button never goes un-pressed. A chaos
+    // release on the same button clearing the hold would show up as a
+    // `false` in that window.
+    let mut went_unpressed = false;
+    for (f, &pressed) in frames.0.iter().enumerate().take(22) {
+        if f >= first_pressed && !pressed {
+            went_unpressed = true;
+        }
+    }
+    assert!(
+        !went_unpressed,
+        "overlapping holds must refcount: Left went un-pressed while the \
+         scripted hold was active (sequence: {:?})",
+        frames.0
+    );
+}

@@ -142,6 +142,7 @@ fn misaligned_replay_must_fail_loudly_not_shift_silently() {
             frame,
             value: v,
             bound: 8,
+            kind: bevy_playtest::choice::ChoiceKind::Key,
         });
     }
 

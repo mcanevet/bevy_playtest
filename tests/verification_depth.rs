@@ -323,3 +323,51 @@ fn no_declarations_means_no_coverage_field() {
     let report = run_scenario(&mut app, &scenario).unwrap();
     assert!(report.coverage.is_none());
 }
+
+/// Mouse draws must not pollute key telemetry: a mouse-only chaos
+/// surface must leave the action log free of fake key presses, and
+/// mouse button-index draws must not be counted as exercised keys.
+#[test]
+fn mouse_only_chaos_does_not_fabricate_key_activity() {
+    let _slot = common::run_slot();
+    // Mouse-only surface (keys explicitly emptied) exercising clicks.
+    let scenario: Scenario = serde_json::from_str(
+        r#"{"bot":{"type":"chaos","seed":7,"raw_surface":{"keys":[],"mouse_buttons":["left","right","middle"]}},
+            "duration_s":0.2,"tps":60}"#,
+    )
+    .unwrap();
+    let mut app = App::new();
+    app.world_mut().spawn(Transform::default());
+    app.add_systems(
+        bevy_app::Update,
+        |mut q: bevy_ecs::prelude::Query<&mut Transform>| {
+            for mut t in q.iter_mut() {
+                t.translation.x += 0.1;
+            }
+        },
+    );
+    let report = run_scenario(&mut app, &scenario).unwrap();
+    // No key draws occurred: no fake key_press action-log entries, even
+    // though the mouse bot clicked (input_count > 0).
+    assert!(
+        report
+            .action_log
+            .iter()
+            .all(|a| !a.action.starts_with("key_press:")),
+        "mouse-only chaos must not fabricate key_press action-log entries: {:?}",
+        report.action_log
+    );
+    assert!(
+        report.metrics.input_count > 0,
+        "the mouse bot must have clicked"
+    );
+    // Every recorded choice must be a mouse draw, never a key draw.
+    assert!(
+        report
+            .choices
+            .iter()
+            .all(|c| c.kind != bevy_playtest::choice::ChoiceKind::Key),
+        "mouse-only chaos must record no key draws: {:?}",
+        report.choices
+    );
+}

@@ -49,6 +49,13 @@ playtests, and `cargo build --release` contains zero bevy_playtest code.
 The [tutorial](docs/tutorial/) walks through every line; this section is
 the same integration as a quick reference.
 
+The built-in battery scenario (`BEVY_PLAYTEST_SCENARIO=battery`) is
+zero-config: the chaos bot both types (WASD/arrows or your declared
+`raw_surface.keys`) and clicks (all mouse buttons by default), at 10 Hz,
+holding each input 2 frames so `ButtonInput`-based games observe it.
+No scenario, no contract — declare `mouse_buttons: []` in
+`raw_surface` to opt out of clicks.
+
 **Cargo.toml:**
 ```toml
 [dependencies]

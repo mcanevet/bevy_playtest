@@ -1428,12 +1428,13 @@ dependencies = [
 
 [[package]]
 name = "bevy_playtest"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bevy",
  "bevy_app",
  "bevy_ecs",
  "bevy_input",
+ "bevy_math",
  "bevy_reflect",
  "bevy_remote",
  "bevy_tasks",

@@ -107,9 +107,41 @@ pub struct BotConfig {
     /// synthetic_keyboard: frame-indexed raw key presses.
     #[serde(default)]
     pub key_presses: Vec<KeyPressInput>,
+    /// synthetic_mouse (any bot): frame-indexed mouse clicks. Unlike
+    /// keys, clicks work for both bot types — they are injected at the
+    /// same layer the chaos bot samples.
+    #[serde(default)]
+    pub mouse_clicks: Vec<MouseClickInput>,
     /// Input surface for the chaos bot: which keys it may press.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_surface: Option<RawSurface>,
+}
+
+/// A scripted mouse click: position + button + hold, frame-indexed.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct MouseClickInput {
+    pub frame: u64,
+    /// Window-space cursor position in logical pixels.
+    #[serde(default = "default_click_position")]
+    pub x: f32,
+    #[serde(default = "default_click_position")]
+    pub y: f32,
+    /// Button name: "left", "right", "middle", "back", "forward".
+    #[serde(default = "default_click_button")]
+    pub button: String,
+    /// Hold the button for N frames (default 1, mirroring key_presses;
+    /// chaos holds 2 to avoid same-frame press+release cancellation).
+    #[serde(default = "default_hold_frames")]
+    pub hold_frames: u64,
+}
+
+fn default_click_position() -> f32 {
+    0.0
+}
+
+fn default_click_button() -> String {
+    "left".into()
 }
 
 /// Liveness configuration.
@@ -151,25 +183,41 @@ pub enum LivenessMode {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RawSurface {
-    #[serde(default)]
+    /// Keys for chaos sampling. Default: the standard WASD+arrows
+    /// surface — an explicitly empty list opts out of chaos keys
+    /// (mouse-only chaos).
+    #[serde(default = "default_surface_keys")]
     pub keys: Vec<String>,
+    /// Mouse buttons for chaos sampling. Default: all three primary
+    /// buttons; an explicitly empty list opts out of chaos clicks.
+    #[serde(default = "default_mouse_buttons")]
+    pub mouse_buttons: Vec<String>,
+}
+
+fn default_mouse_buttons() -> Vec<String> {
+    vec!["Left".into(), "Right".into(), "Middle".into()]
+}
+
+/// Default chaos keyboard surface: WASD + arrows (kept in lockstep with
+/// the runtime default and the BRP runner's CHAOS_KEYS).
+fn default_surface_keys() -> Vec<String> {
+    vec![
+        "KeyW".into(),
+        "KeyA".into(),
+        "KeyS".into(),
+        "KeyD".into(),
+        "ArrowUp".into(),
+        "ArrowDown".into(),
+        "ArrowLeft".into(),
+        "ArrowRight".into(),
+    ]
 }
 
 impl Default for RawSurface {
     fn default() -> Self {
-        // Non-empty default surface for zero-contract chaos. Standard set:
-        // arrows + WASD (keyboard only).
         Self {
-            keys: vec![
-                "KeyW".into(),
-                "KeyA".into(),
-                "KeyS".into(),
-                "KeyD".into(),
-                "ArrowUp".into(),
-                "ArrowDown".into(),
-                "ArrowLeft".into(),
-                "ArrowRight".into(),
-            ],
+            keys: default_surface_keys(),
+            mouse_buttons: default_mouse_buttons(),
         }
     }
 }
@@ -459,6 +507,38 @@ fn key_format_help() -> String {
         .to_string()
 }
 
+/// Normalize a mouse-button name to its canonical spelling
+/// (e.g. "left" -> "Left"). Returns `None` for unknown names.
+pub fn normalize_mouse_button_name(name: &str) -> Option<&'static str> {
+    let canonical = match name.to_ascii_lowercase().as_str() {
+        "left" => "Left",
+        "right" => "Right",
+        "middle" => "Middle",
+        "back" => "Back",
+        "forward" => "Forward",
+        _ => return None,
+    };
+    Some(canonical)
+}
+
+/// Known mouse-button names, for did-you-mean suggestions.
+pub const KNOWN_MOUSE_BUTTONS: &[&str] = &["left", "right", "middle", "back", "forward"];
+
+/// Unknown-mouse-button error with a did-you-mean suggestion.
+pub fn unknown_mouse_button_error(button: &str, at: Option<u64>) -> String {
+    let mut msg = format!(
+        "unknown mouse button '{}'{}",
+        button,
+        at.map(|f| format!(" at frame {f}")).unwrap_or_default()
+    );
+    let cands: Vec<String> = KNOWN_MOUSE_BUTTONS.iter().map(|s| s.to_string()).collect();
+    if let Some(sug) = suggest_similar(button, &cands) {
+        msg.push_str(&format!(" — did you mean '{sug}'?"));
+    }
+    msg.push_str(" (valid: left, right, middle, back, forward)");
+    msg
+}
+
 /// Unknown-key error with a did-you-mean suggestion.
 pub fn unknown_key_error(key: &str, at: Option<u64>) -> String {
     let mut msg = format!(
@@ -653,9 +733,13 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
     }
     // Bot-specific requirements.
     if scenario.bot.bot_type == BotType::SyntheticKeyboard {
-        if scenario.bot.key_presses.is_empty() {
+        // `key_presses` OR `mouse_clicks` must be non-empty: a
+        // mouse-only scripted scenario is valid (the docs advertise
+        // `mouse_clicks` as orthogonal to the bot's keyboard half).
+        if scenario.bot.key_presses.is_empty() && scenario.bot.mouse_clicks.is_empty() {
             return Err(ScenarioError::Rejected(
-                "synthetic_keyboard bot requires a non-empty key_presses list".into(),
+                "synthetic_keyboard bot requires a non-empty key_presses or mouse_clicks list"
+                    .into(),
             ));
         }
         for kp in &scenario.bot.key_presses {
@@ -665,6 +749,24 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                     Some(kp.frame),
                 )));
             }
+        }
+    }
+    // Scripted mouse clicks: every button must be a real button the
+    // harness can inject (an unknown name would silently no-op).
+    for click in &scenario.bot.mouse_clicks {
+        if normalize_mouse_button_name(&click.button).is_none() {
+            return Err(ScenarioError::Rejected(unknown_mouse_button_error(
+                &click.button,
+                Some(click.frame),
+            )));
+        }
+        if click.hold_frames == 0 {
+            return Err(ScenarioError::Rejected(format!(
+                "mouse_clicks at frame {}: hold_frames must be >= 1 (a \
+                 zero-frame hold is a same-frame press+release, which \
+                 ButtonInput cancels)",
+                click.frame
+            )));
         }
     }
     // Chaos-bot input surface: every declared key must be a real,
@@ -677,12 +779,22 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                     return Err(ScenarioError::Rejected(unknown_key_error(key, None)));
                 }
             }
-            if surface.keys.is_empty() {
+            // An explicitly empty `keys` list opts out of chaos keys
+            // (mouse-only chaos) — valid only if the mouse surface is
+            // non-empty; a fully-empty surface can do nothing.
+            if surface.keys.is_empty() && surface.mouse_buttons.is_empty() {
                 return Err(ScenarioError::Rejected(
-                    "raw_surface.keys must not be empty — a chaos bot with no \
-                     keys can do nothing (vacuous run)"
+                    "raw_surface is empty — a chaos bot with no keys and no \
+                     mouse buttons can do nothing (vacuous run)"
                         .into(),
                 ));
+            }
+            for button in &surface.mouse_buttons {
+                if normalize_mouse_button_name(button).is_none() {
+                    return Err(ScenarioError::Rejected(unknown_mouse_button_error(
+                        button, None,
+                    )));
+                }
             }
         }
     }

@@ -232,6 +232,127 @@ fn synthetic_keyboard_requires_nonempty() {
 }
 
 #[test]
+fn synthetic_keyboard_accepts_mouse_only() {
+    // `mouse_clicks` is documented as orthogonal to the bot type: a
+    // scripted scenario with clicks but no key presses is valid.
+    let mut json = minimal_scenario("synthetic_keyboard");
+    json["bot"]["mouse_clicks"] =
+        serde_json::json!([{ "frame": 0, "button": "left", "x": 10.0, "y": 10.0 }]);
+    let s = parse(json);
+    validate_scenario(&s).unwrap();
+}
+
+#[test]
+fn mouse_button_normalization_common_forms() {
+    use bevy_playtest::scenario::normalize_mouse_button_name;
+    assert_eq!(normalize_mouse_button_name("left"), Some("Left"));
+    assert_eq!(normalize_mouse_button_name("LEFT"), Some("Left"));
+    assert_eq!(normalize_mouse_button_name("Right"), Some("Right"));
+    assert_eq!(normalize_mouse_button_name("middle"), Some("Middle"));
+    assert_eq!(normalize_mouse_button_name("back"), Some("Back"));
+    assert_eq!(normalize_mouse_button_name("Forward"), Some("Forward"));
+    assert_eq!(normalize_mouse_button_name("side"), None);
+    assert_eq!(normalize_mouse_button_name(""), None);
+}
+
+#[test]
+fn mouse_clicks_require_valid_buttons() {
+    let mut json = minimal_scenario("chaos");
+    json["bot"]["mouse_clicks"] = serde_json::json!([
+        { "frame": 0, "button": "left", "x": 100.0, "y": 50.0 },
+        { "frame": 10, "button": "lift" }
+    ]);
+    let s = parse(json);
+    let err = validate_scenario(&s).unwrap_err().to_string();
+    assert!(err.contains("lift"), "{err}");
+    assert!(err.contains("did you mean"), "{err}");
+}
+
+#[test]
+fn mouse_clicks_reject_zero_hold() {
+    let mut json = minimal_scenario("chaos");
+    json["bot"]["mouse_clicks"] =
+        serde_json::json!([{ "frame": 0, "button": "left", "hold_frames": 0 }]);
+    let s = parse(json);
+    let err = validate_scenario(&s).unwrap_err().to_string();
+    assert!(err.contains("hold_frames"), "{err}");
+}
+
+#[test]
+fn mouse_clicks_default_hold_and_position() {
+    // Minimal click: frame + button only; position defaults to (0,0),
+    // hold to 2 frames (same-frame press+release would cancel).
+    let mut json = minimal_scenario("chaos");
+    json["bot"]["mouse_clicks"] = serde_json::json!([{ "frame": 3, "button": "right" }]);
+    let s: Scenario = serde_json::from_value(json).unwrap();
+    assert_eq!(s.bot.mouse_clicks.len(), 1);
+    assert_eq!(s.bot.mouse_clicks[0].frame, 3);
+    assert_eq!(s.bot.mouse_clicks[0].button, "right");
+    assert_eq!(s.bot.mouse_clicks[0].x, 0.0);
+    assert_eq!(s.bot.mouse_clicks[0].y, 0.0);
+    assert_eq!(s.bot.mouse_clicks[0].hold_frames, 1);
+    validate_scenario(&s).unwrap();
+}
+
+#[test]
+fn chaos_surface_mouse_buttons_must_be_known() {
+    let mut json = minimal_scenario("chaos");
+    json["bot"]["raw_surface"] =
+        serde_json::json!({ "keys": ["w", "space"], "mouse_buttons": ["left", "midle"] });
+    let s = parse(json);
+    let err = validate_scenario(&s).unwrap_err().to_string();
+    assert!(err.contains("midle"), "{err}");
+    assert!(err.contains("did you mean"), "{err}");
+}
+
+#[test]
+fn raw_surface_defaults_include_mouse_buttons() {
+    // An explicit-but-empty raw_surface object takes the serde field
+    // defaults: default key set + all three primary buttons (both halves
+    // of the chaos bot default on).
+    let mut json = minimal_scenario("chaos");
+    json["bot"]["raw_surface"] = serde_json::json!({});
+    let s: Scenario = serde_json::from_value(json).unwrap();
+    let surface = s.bot.raw_surface.clone().expect("raw_surface present");
+    assert_eq!(
+        surface.keys,
+        vec![
+            "KeyW".to_string(),
+            "KeyA".to_string(),
+            "KeyS".to_string(),
+            "KeyD".to_string(),
+            "ArrowUp".to_string(),
+            "ArrowDown".to_string(),
+            "ArrowLeft".to_string(),
+            "ArrowRight".to_string()
+        ]
+    );
+    assert_eq!(
+        surface.mouse_buttons,
+        vec![
+            "Left".to_string(),
+            "Right".to_string(),
+            "Middle".to_string()
+        ]
+    );
+    validate_scenario(&s).unwrap();
+}
+
+/// Mouse-only chaos: an explicitly empty `keys` list opts out of chaos
+/// keys while keeping chaos clicks — the inverse of the documented
+/// `mouse_buttons: []` click opt-out.
+#[test]
+fn mouse_only_chaos_surface_is_valid() {
+    let mut json = minimal_scenario("chaos");
+    json["bot"]["raw_surface"] = serde_json::json!({ "keys": [] });
+    let s: Scenario = serde_json::from_value(json).unwrap();
+    let surface = s.bot.raw_surface.clone().expect("raw_surface present");
+    assert!(surface.keys.is_empty(), "keys explicitly emptied");
+    assert_eq!(surface.mouse_buttons.len(), 3, "mouse defaults retained");
+    validate_scenario(&s).unwrap();
+}
+
+#[test]
 fn check_op_boundary_semantics() {
     // "overall<0 iff fail" must hold at exact boundaries.
     assert!(CheckOp::Le.holds(10.0, 10.0));
