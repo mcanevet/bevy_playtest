@@ -15,3 +15,7 @@
 !/fixtures/*/tests/
 !/fixtures/*/tests/playtest.rs
 bevy_playtest-smoke.report.json
+
+# Local-only: never commit internal analysis or agent instructions.
+/.local/
+/AGENTS.md
