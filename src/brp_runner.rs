@@ -133,6 +133,19 @@ pub fn run_scenario_brp(
             "external-BRP mode supports only the chaos bot".to_string(),
         ));
     }
+    // Scripted mouse clicks need a harness-owned cursor position; over
+    // BRP the harness cannot own one (cursor lives in the game's Window
+    // component, which BRP cannot mutate field-wise). Reject loudly
+    // rather than clicking at a meaningless position.
+    if !scenario.bot.mouse_clicks.is_empty() {
+        return Err(ScenarioError::NotImplemented(
+            "external-BRP mode does not support scripted mouse_clicks: \
+             the click position is harness-owned, and the wire protocol \
+             cannot set the game's Window cursor position; use the \
+             in-process driver for scripted clicks"
+                .to_string(),
+        ));
+    }
     // Wall-clock pacing across processes makes honest replay verification
     // impossible in BRP mode — the report must never claim it.
     if scenario.verify_replay {
@@ -222,10 +235,13 @@ async fn run_brp_inner(
     // Chaos surface + input rate mirror the in-process driver: same
     // default key list, interval derived from tps/input_rate_hz —
     // never hardcoded, so both modes stay behaviorally identical.
+    // A declared surface is authoritative: an explicitly empty `keys`
+    // list opts out of chaos keys (mouse-only chaos); an absent surface
+    // uses the default set (default-on). Mirrors chaos_bot_system.
     let keys: Vec<&'static str> = {
-        let declared = scenario.bot.raw_surface.as_ref().map(|s| s.keys.clone());
-        match declared {
-            Some(keys) if !keys.is_empty() => keys
+        match scenario.bot.raw_surface.as_ref() {
+            Some(surface) => surface
+                .keys
                 .iter()
                 .filter_map(|k| {
                     // Surface strings are canonical names; CHAOS_KEYS is
@@ -236,9 +252,31 @@ async fn run_brp_inner(
                         .copied()
                 })
                 .collect(),
-            _ => CHAOS_KEYS.to_vec(),
+            None => CHAOS_KEYS.to_vec(),
         }
     };
+    // Mouse surface mirrors the in-process driver: declared
+    // raw_surface.mouse_buttons, or the default three. `Some(surface)`
+    // is authoritative: an empty list opts out of chaos mouse. Names are
+    // canonicalized (e.g. "left" -> "Left"): the reflected
+    // MouseButton payload on the wire needs canonical variant names.
+    let mouse_buttons: Vec<&'static str> = {
+        let declared = scenario
+            .bot
+            .raw_surface
+            .as_ref()
+            .map(|s| s.mouse_buttons.clone());
+        match declared {
+            Some(buttons) => buttons
+                .iter()
+                .filter_map(|b| crate::scenario::normalize_mouse_button_name(b))
+                .collect(),
+            None => vec!["Left", "Right", "Middle"],
+        }
+    };
+    // Theoretical headless viewport: same extent the in-process driver
+    // scales chaos cursor positions into (kept in lockstep for parity).
+    let mut held_mouse: Vec<(&str, u64)> = Vec::new();
     let rate = scenario.bot.input_rate_hz.max(1);
     let interval = (tps as u64 / rate as u64).max(1);
 
@@ -256,15 +294,29 @@ async fn run_brp_inner(
             }
         });
 
+        // --- Release mouse buttons whose hold duration expired (same
+        // 2-frame hold as keys).
+        held_mouse.retain(|(button, release_at)| {
+            if frame >= *release_at {
+                input_count += 1;
+                let fut = send_mouse_click(&client, button, "Released", frame, &mut violations);
+                futures_lite::future::block_on(fut);
+                false
+            } else {
+                true
+            }
+        });
+
         // --- Drive input: chaos bot decides a raw key, map to a BRP
         // keyboard message.
         if frame % interval == 0 && held.is_empty() {
             let bound = keys.len() as u64;
-            let idx = choices.below(frame, bound);
+            let idx = choices.below_kind(frame, bound, crate::choice::ChoiceKind::Key);
             recorded_choices.push(crate::choice::Choice {
                 frame,
                 value: idx,
                 bound,
+                kind: crate::choice::ChoiceKind::Key,
             });
             let Some(&key) = keys.get(idx as usize) else {
                 continue;
@@ -272,6 +324,45 @@ async fn run_brp_inner(
             input_count += 1;
             send_key(&client, key, "Pressed", frame, &mut violations).await;
             held.push((key, frame + hold_frames));
+        }
+
+        // --- Chaos mouse: same draw order as in-process (keyboard first
+        // if both fire, then mouse position, then mouse button). Hold 2
+        // frames like keyboard. Mirrors chaos_mouse_system in driver.rs.
+        // An emptied mouse surface opts out entirely (parity with the
+        // in-process driver).
+        if !mouse_buttons.is_empty() && frame % interval == 0 && held_mouse.is_empty() {
+            // Draw order: position (one u32), then button index.
+            let pos_draw =
+                choices.below_kind(frame, 1u64 << 32, crate::choice::ChoiceKind::MousePosition);
+            let button_idx = choices.below_kind(
+                frame,
+                mouse_buttons.len() as u64,
+                crate::choice::ChoiceKind::MouseButton,
+            ) as usize;
+            recorded_choices.push(crate::choice::Choice {
+                frame,
+                value: pos_draw,
+                bound: 1u64 << 32,
+                kind: crate::choice::ChoiceKind::MousePosition,
+            });
+            recorded_choices.push(crate::choice::Choice {
+                frame,
+                value: button_idx as u64,
+                bound: mouse_buttons.len() as u64,
+                kind: crate::choice::ChoiceKind::MouseButton,
+            });
+            let Some(button_name) = mouse_buttons.get(button_idx).copied() else {
+                continue;
+            };
+            // For mode-parity we record the draws; the actual click is
+            // sent over BRP so the game's ButtonInput sees it. Cursor
+            // position cannot be set via BRP (Window component field
+            // mutation not available), so we omit it — documented caveat.
+            input_count += 1;
+            let fut = send_mouse_click(&client, button_name, "Pressed", frame, &mut violations);
+            futures_lite::future::block_on(fut);
+            held_mouse.push((button_name, frame + hold_frames));
         }
 
         // --- Poll transforms and evaluate bounds/NaN (same semantics
@@ -432,6 +523,40 @@ async fn send_key(
                     "state": state,
                     "text": null,
                     "repeat": false,
+                    "window": 1
+                }
+            })),
+        )
+        .await
+    {
+        violations.report(
+            rules::Rule::OracleError.name(),
+            "brp_write_message",
+            format!("world.write_message failed: {e}"),
+            frame,
+        );
+    }
+}
+
+/// Send a MouseButtonInput message over BRP. Mirrors `send_key`, but
+/// for `bevy_input::mouse::MouseButtonInput` — the game's
+/// `mouse_button_input_system` translates it to `ButtonInput<MouseButton>`.
+/// Mouse button serialization uses bevy's reflected enum ("Left" etc.).
+async fn send_mouse_click(
+    client: &BrpClient,
+    button: &str,
+    state: &str,
+    frame: u64,
+    violations: &mut Violations,
+) {
+    if let Err(e) = client
+        .call(
+            "world.write_message",
+            Some(json!({
+                "message": "bevy_input::mouse::MouseButtonInput",
+                "value": {
+                    "button": button,
+                    "state": state,
                     "window": 1
                 }
             })),

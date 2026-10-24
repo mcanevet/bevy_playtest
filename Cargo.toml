@@ -20,7 +20,10 @@ bevy_transform = { version = "0.20.0", default-features = false, features = ["st
 bevy_tasks = { version = "0.20.0", default-features = false }
 bevy_time = { version = "0.20.0", default-features = false, features = ["std"] }
 tracing = "0.1.44"
-bevy_input = { version = "0.20.0", default-features = false, features = ["std", "keyboard"] }
+bevy_input = { version = "0.20.0", default-features = false, features = ["std", "keyboard", "mouse"] }
+# Vec2 for cursor positions. Already in every consumer graph via bevy_input;
+# a direct dependency only adds the type, no new crates.
+bevy_math = { version = "0.20.0", default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["std", "registry", "fmt", "env-filter"] }

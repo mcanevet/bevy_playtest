@@ -36,16 +36,16 @@ fn rejects_invalid_chaos_keys() {
     }
 }
 
-/// A chaos bot with an empty key surface can do nothing; it must reject
-/// rather than produce a vacuous pass.
+/// A chaos bot with a fully-empty surface (no keys, no mouse buttons)
+/// can do nothing; it must reject rather than produce a vacuous pass.
 #[test]
 fn rejects_empty_chaos_keys() {
     let mut json = minimal_scenario("chaos");
-    json["bot"]["raw_surface"] = serde_json::json!({ "keys": [] });
+    json["bot"]["raw_surface"] = serde_json::json!({ "keys": [], "mouse_buttons": [] });
     let s = parse(json);
     assert!(
         matches!(validate_scenario(&s), Err(ScenarioError::Rejected(_))),
-        "a chaos bot with zero keys must reject, not no-op"
+        "a chaos bot with a fully-empty surface must reject, not no-op"
     );
 }
 
@@ -81,11 +81,13 @@ fn removed_bot_fields_reject_at_parse_time() {
     }
 }
 
-/// Mouse/gamepad surface knobs are removed from RawSurface: declaring
-/// them must fail at parse time, not yield a silently keyboard-only bot.
+/// Removed gamepad/wheel surface knobs: declaring them must fail at
+/// parse time, not yield a silently keyboard-only bot. (`mouse_buttons`
+/// is now a REAL knob — the chaos mouse bot samples it — and has its
+/// own schema tests in scenario_schema.rs.)
 #[test]
 fn removed_surface_kinds_reject_at_parse_time() {
-    for field in ["mouse_buttons", "mouse_motion", "wheel", "gamepad"] {
+    for field in ["mouse_motion", "wheel", "gamepad"] {
         let mut json = minimal_scenario("chaos");
         json["bot"]["raw_surface"] = serde_json::json!({ field: true });
         let err = serde_json::from_value::<Scenario>(json)

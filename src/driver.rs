@@ -10,8 +10,10 @@ use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::{Schedules, SingleThreadedExecutor};
 use bevy_input::keyboard::{KeyCode, KeyboardFocusLost, KeyboardInput};
 use bevy_input::{prelude::ButtonInput, ButtonState};
+use bevy_math::Vec2;
 use bevy_time::{Time, TimeUpdateStrategy};
 use bevy_transform::prelude::Transform;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::contract::{CheatHooks, ResetHooks};
@@ -208,12 +210,16 @@ fn chaos_bot_system(
         "ArrowLeft",
         "ArrowRight",
     ];
+    // A declared surface is authoritative: an explicitly empty `keys`
+    // list opts out of chaos keys (mouse-only chaos). Absent surface =
+    // the default set (default-on).
     let keys: Vec<&str> = match &scenario.0.bot.raw_surface {
-        Some(surface) if !surface.keys.is_empty() => {
-            surface.keys.iter().map(String::as_str).collect()
-        }
-        _ => default_keys.to_vec(),
+        Some(surface) => surface.keys.iter().map(String::as_str).collect(),
+        None => default_keys.to_vec(),
     };
+    if keys.is_empty() {
+        return; // chaos keyboard opted out
+    }
     let idx = choices.0.below(state.frame, keys.len() as u64) as usize;
     let Some(canonical) = crate::scenario::normalize_key_name(keys[idx]) else {
         return;
@@ -289,6 +295,243 @@ fn synthetic_keyboard_bot_system(
         });
         state.metrics.input_count += 1;
         hold_state.held.push((code, state.frame + hold_frames));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Mouse bots (chaos + scripted)
+// ---------------------------------------------------------------------------
+
+/// Canonical mouse-button name -> MouseButton. Mirrors the keyboard
+/// name-normalization layer (lowercase shortcuts + canonical spellings).
+fn mouse_button_from_canonical(canonical: &str) -> Option<bevy_input::mouse::MouseButton> {
+    use bevy_input::mouse::MouseButton;
+    Some(match canonical.to_ascii_lowercase().as_str() {
+        "left" => MouseButton::Left,
+        "right" => MouseButton::Right,
+        "middle" => MouseButton::Middle,
+        "back" => MouseButton::Back,
+        "forward" => MouseButton::Forward,
+        _ => return None,
+    })
+}
+
+/// Theoretical viewport size used for headless chaos cursor placement.
+/// Windows don't exist under the takeover (winit is dropped); chaos
+/// positions are normalized to [0,1]² and scaled into this box so clicks
+/// land somewhere plausible inside a default-sized viewport.
+const HEADLESS_CLICK_EXTENT: f32 = 1280.0;
+
+/// Shared mouse hold state for BOTH the chaos and scripted mouse bots,
+/// keyed by button with a hold count. Overlapping holds on the same
+/// physical button (e.g. chaos pressing `Left` while a scripted click
+/// still holds it) must NOT emit `Released` while another holder is
+/// active — `ButtonInput::pressed` would clear prematurely. The
+/// `Released` message is emitted only when the LAST holder lets go.
+#[derive(Resource, Default)]
+struct MouseHoldState {
+    /// Outstanding holds per button across all sources (chaos +
+    /// scripted). A button leaves this map when its count reaches 0.
+    counts: HashMap<bevy_input::mouse::MouseButton, u32>,
+    /// Pending chaos hold: one button at a time, matching the chaos
+    /// keyboard bot's one-key-at-a-time model. `(button, release_frame)`.
+    chaos_pending: Option<(bevy_input::mouse::MouseButton, u64)>,
+    /// Pending scripted holds: one entry per outstanding scripted click
+    /// `(button, release_frame)`. A Vec, not a single slot — the schema
+    /// accepts multiple clicks per frame and clicks scheduled while a
+    /// hold is active; every declared click gets a matching release.
+    scripted_pending: Vec<(bevy_input::mouse::MouseButton, u64)>,
+}
+
+impl MouseHoldState {
+    /// Register a press from one source. Emits `true` when the
+    /// 0 -> 1 transition happened (the caller writes the `Pressed`
+    /// message — which it does unconditionally anyway).
+    fn press(&mut self, button: bevy_input::mouse::MouseButton) {
+        *self.counts.entry(button).or_insert(0) += 1;
+    }
+
+    /// Register a release from one source. Returns `true` when the
+    /// last holder let go — only then must the caller write the
+    /// `Released` message (an early release would clear another
+    /// source's hold on the same button).
+    fn release(&mut self, button: bevy_input::mouse::MouseButton) -> bool {
+        match self.counts.get_mut(&button) {
+            Some(count) if *count > 1 => {
+                *count -= 1;
+                false
+            }
+            Some(_) => {
+                self.counts.remove(&button);
+                true
+            }
+            None => false, // unbalanced release; nothing to clear
+        }
+    }
+}
+
+/// Cursor position resource: the harness owns the cursor under the
+/// takeover (winit, which normally writes it, is dropped). Headless by
+/// construction — a plain f32 pair, never an OS event.
+#[derive(Resource, Default)]
+pub struct CursorInputResource {
+    /// Window-space position in logical pixels. None until the first
+    /// mouse bot event.
+    position: Option<Vec2>,
+}
+
+impl CursorInputResource {
+    fn set(&mut self, pos: Vec2) {
+        self.position = Some(pos);
+    }
+
+    /// Current window-space cursor position, if the bot moved it.
+    pub fn position(&self) -> Option<Vec2> {
+        self.position
+    }
+}
+
+/// Chaos mouse bot: on input-rate ticks, picks a random surface button,
+/// moves the cursor to a random position, presses, and releases after
+/// the hold window — mirroring the chaos keyboard bot's scheduling so
+/// `mode_parity` semantics stay aligned between modes.
+///
+/// Draw order per click event: position first (one draw), then button.
+/// Position is quantized into a u32 (16 bits per axis) — identical
+/// seeds replay identically with no float-formatting drift.
+fn chaos_mouse_system(
+    mut state: ResMut<RunState>,
+    scenario: Res<ScenarioResource>,
+    mut choices: ResMut<RunChoices>,
+    mut hold_state: ResMut<MouseHoldState>,
+    mut cursor: ResMut<CursorInputResource>,
+    mut writer: MessageWriter<bevy_input::mouse::MouseButtonInput>,
+) {
+    let rate = scenario.0.bot.input_rate_hz.max(1);
+    let interval = (state.tps / rate as u64).max(1);
+    let hold_frames = 2u64;
+
+    // Release held button if its hold duration expired. Only the last
+    // outstanding hold on a button emits `Released` — a scripted click
+    // holding the same button keeps it pressed.
+    if let Some((button, release_at)) = hold_state.chaos_pending {
+        if state.frame >= release_at {
+            if hold_state.release(button) {
+                writer.write(bevy_input::mouse::MouseButtonInput {
+                    button,
+                    state: ButtonState::Released,
+                    window: Entity::PLACEHOLDER,
+                });
+            }
+            hold_state.chaos_pending = None;
+            // Cursor stays where it was — hover state persists.
+        }
+    }
+
+    if hold_state.chaos_pending.is_some() || !state.frame.is_multiple_of(interval) {
+        return;
+    }
+
+    // Surface: declared mouse_buttons. `Some(surface)` is authoritative:
+    // an explicitly empty list opts OUT of chaos mouse (keyboard-only
+    // chaos). Absent surface = default three buttons (default-on).
+    let buttons: Vec<String> = match &scenario.0.bot.raw_surface {
+        Some(surface) => surface.mouse_buttons.clone(),
+        None => vec!["Left".into(), "Right".into(), "Middle".into()],
+    };
+    if buttons.is_empty() {
+        return; // chaos mouse opted out
+    }
+
+    // Draw order: position first (single u32 draw), then button.
+    let pos_draw = choices.0.below_kind(
+        state.frame,
+        1u64 << 32,
+        crate::choice::ChoiceKind::MousePosition,
+    );
+    let button_idx = choices.0.below_kind(
+        state.frame,
+        buttons.len() as u64,
+        crate::choice::ChoiceKind::MouseButton,
+    ) as usize;
+    let x_norm = (pos_draw >> 16) as f32 / 65535.0;
+    let y_norm = (pos_draw & 0xFFFF) as f32 / 65535.0;
+
+    let Some(button_name) = buttons.get(button_idx) else {
+        return;
+    };
+    let Some(button) = mouse_button_from_canonical(button_name) else {
+        return;
+    };
+
+    // Scale the normalized position into the theoretical viewport.
+    let pos = Vec2::new(
+        x_norm * HEADLESS_CLICK_EXTENT,
+        y_norm * HEADLESS_CLICK_EXTENT,
+    );
+    cursor.set(pos);
+    writer.write(bevy_input::mouse::MouseButtonInput {
+        button,
+        state: ButtonState::Pressed,
+        window: Entity::PLACEHOLDER,
+    });
+    state.metrics.input_count += 1;
+    hold_state.press(button);
+    hold_state.chaos_pending = Some((button, state.frame + hold_frames));
+}
+
+/// Scripted mouse clicks (`mouse_clicks`): frame-indexed position +
+/// button + hold, through the same MouseButtonInput chain. Orthogonal
+/// to the bot type — a chaos-keyboard scenario may still script clicks.
+/// Shares `MouseHoldState` with the chaos bot so overlapping holds on
+/// the same button refcount: `Released` is emitted only when the last
+/// holder lets go.
+fn scripted_mouse_system(
+    mut state: ResMut<RunState>,
+    scenario: Res<ScenarioResource>,
+    mut hold_state: ResMut<MouseHoldState>,
+    mut cursor: ResMut<CursorInputResource>,
+    mut writer: MessageWriter<bevy_input::mouse::MouseButtonInput>,
+) {
+    // Release scripted holds whose duration expired. Only the last
+    // outstanding hold on a button emits `Released`.
+    let mut i = 0;
+    while i < hold_state.scripted_pending.len() {
+        let (button, release_at) = hold_state.scripted_pending[i];
+        if state.frame >= release_at {
+            if hold_state.release(button) {
+                writer.write(bevy_input::mouse::MouseButtonInput {
+                    button,
+                    state: ButtonState::Released,
+                    window: Entity::PLACEHOLDER,
+                });
+            }
+            hold_state.scripted_pending.remove(i);
+        } else {
+            i += 1;
+        }
+    }
+
+    for click in &scenario.0.bot.mouse_clicks {
+        if click.frame != state.frame {
+            continue;
+        }
+        let Some(button) = mouse_button_from_canonical(&click.button) else {
+            continue;
+        };
+        let pos = Vec2::new(click.x, click.y);
+        cursor.set(pos);
+        writer.write(bevy_input::mouse::MouseButtonInput {
+            button,
+            state: ButtonState::Pressed,
+            window: Entity::PLACEHOLDER,
+        });
+        state.metrics.input_count += 1;
+        let hold_frames = click.hold_frames.max(1);
+        hold_state.press(button);
+        hold_state
+            .scripted_pending
+            .push((button, state.frame + hold_frames));
     }
 }
 
@@ -675,11 +918,20 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     app.add_message::<KeyboardFocusLost>();
     app.init_resource::<ButtonInput<KeyCode>>();
     app.init_resource::<ButtonInput<bevy_input::keyboard::Key>>();
+    // Mouse messages: same seeding rationale as keyboard — games read
+    // ButtonInput<MouseButton>; MinimalPlugins lacks InputPlugin, so the
+    // harness registers the message, seeds the resource and runs the
+    // event->ButtonInput translation system.
+    app.add_message::<bevy_input::mouse::MouseButtonInput>();
+    app.init_resource::<ButtonInput<bevy_input::mouse::MouseButton>>();
     // Order: translate BEFORE game systems in Update so games observe the
     // same-frame state (matching InputPlugin's placement in PreUpdate).
     app.add_systems(
         bevy_app::prelude::PreUpdate,
-        bevy_input::keyboard::keyboard_input_system,
+        (
+            bevy_input::keyboard::keyboard_input_system,
+            bevy_input::mouse::mouse_button_input_system,
+        ),
     );
     // Oracles read wall-clock delta; Time may be absent on minimal apps.
     if app.world().get_resource::<Time>().is_none() {
@@ -689,6 +941,8 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     // Register bot + oracle systems once.
     app.init_resource::<ChaosHoldState>();
     app.init_resource::<ScheduledHoldState>();
+    app.init_resource::<MouseHoldState>();
+    app.insert_resource(CursorInputResource::default());
 
     app.insert_resource(crate::invariant_eval::ScenarioInvariants(
         scenario.invariants.clone(),
@@ -701,7 +955,9 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         Update,
         (
             chaos_bot_system.run_if(is_chaos_bot),
+            chaos_mouse_system.run_if(is_chaos_bot),
             synthetic_keyboard_bot_system.run_if(is_synthetic_keyboard_bot),
+            scripted_mouse_system,
             frame_timing_oracle_system,
             frozen_world_oracle_system,
             crate::invariant_eval::evaluate_invariants_system,
@@ -834,9 +1090,11 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     }
 
     // Action log: one entry per emitted input press, so a report's claim
-    // of bot activity is auditable.
+    // of bot activity is auditable. Only key draws appear here — mouse
+    // draws are not key presses.
     let action_log = choices
         .iter()
+        .filter(|c| c.kind == crate::choice::ChoiceKind::Key)
         .map(|c| crate::state::ActionEntry {
             frame: c.frame,
             source: "bot".to_string(),
@@ -846,6 +1104,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         .collect();
 
     // Coverage: declared observations (log-based) + chaos surface exercise.
+    // Mouse draws do NOT contribute to key-surface coverage.
     let coverage = if !scenario.observes.is_empty() || scenario.bot.raw_surface.is_some() {
         let fallback = ["KeyW", "KeyA", "KeyS", "KeyD"];
         let declared_keys: Vec<&str> = match &scenario.bot.raw_surface {
@@ -854,6 +1113,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         };
         let drawn_keys: std::collections::HashSet<String> = choices
             .iter()
+            .filter(|c| c.kind == crate::choice::ChoiceKind::Key)
             .filter_map(|c| {
                 let idx = c.bound as usize;
                 if idx < declared_keys.len() {

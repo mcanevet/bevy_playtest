@@ -11,11 +11,17 @@ Public API surface for integrators.
     "type": "chaos" | "synthetic_keyboard",
     "seed": number,               // default 42
     "input_rate_hz": number,      // default 10
-    "key_presses": [              // required for synthetic_keyboard
+    "key_presses": [              // synthetic_keyboard needs this or mouse_clicks
       { "frame": number, "key": "string", "hold_frames": number }
     ],
+    "mouse_clicks": [             // optional; scripted clicks, any bot type
+      { "frame": number, "x": number, "y": number,
+        "button": "left" | "right" | "middle" | "back" | "forward",
+        "hold_frames": number }   // default 1
+    ],
     "raw_surface": {              // optional, chaos only
-      "keys": ["KeyW", "ArrowLeft"]
+      "keys": ["KeyW", "ArrowLeft"],
+      "mouse_buttons": ["Left", "Right"]   // default: all three primary buttons
     }
   },
   "tps": number,                  // default 60; range 1..=1000
@@ -58,7 +64,31 @@ Public API surface for integrators.
 
 Key names accept `KeyCode` spellings (`ArrowLeft`, `KeyW`) or lowercase
 shortcuts (`left`, `w`); unknown names are rejected at load with a
-did-you-mean suggestion.
+did-you-mean suggestion. Mouse buttons accept the same tolerance
+(`Left`, `left`); valid buttons are `left`, `right`, `middle`, `back`,
+`forward`.
+
+### Chaos mouse (default on)
+
+The chaos bot clicks as well as types — no scenario changes required.
+On each input tick it picks a random surface button, moves a harness
+owned cursor to a random quantized position (a single draw, 16 bits
+per axis, scaled into a 1280×1280 theoretical viewport), presses, and
+releases after 2 frames (same scheduling as chaos keys). Clicks reach
+the game through real `MouseButtonInput` messages, so
+`ButtonInput<MouseButton>` and message-based input handlers both see
+them; scenario seeds replay identically.
+
+Opt out with an explicit empty surface:
+`"raw_surface": { "keys": [...], "mouse_buttons": [] }`. Symmetrically,
+`"keys": []` opts out of chaos keys (mouse-only chaos); omitting a
+field keeps its default. A fully-empty surface rejects at load.
+
+Known limitation (honesty first): the click position lives in a
+harness-owned resource (`driver::CursorInputResource`), not the game's
+`Window.cursor_position` — UI systems that hit-test against the window
+cursor (e.g. `bevy_ui` hover) will not see chaos clicks land where the
+bot placed them. Button state itself is fully exercised.
 
 ### Rejection at load
 
@@ -66,7 +96,7 @@ Two distinct error classes, at different stages:
 
 - **Unknown fields** (any misspelled or never-implemented knob, including
   once-documented-in-planning names like `persona`, `actuator`, `inputs`,
-  `agent_target`, or mouse/gamepad surface knobs) fail deserialization
+  `agent_target`, or gamepad/wheel surface knobs) fail deserialization
   immediately with a serde unknown-field error naming the offender.
 - **Known-but-unimplemented fields** parse, then reject at validation
   with `NotImplemented`: `eventually_s`, `after_s`, `before_s`,
