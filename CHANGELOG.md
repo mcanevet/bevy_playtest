@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/mcanevet/bevy_playtest/compare/v0.3.0...v0.3.1) - 2026-10-24
+
+### Other
+
+- restructure docs/ into diátaxis framework
+
 ## [0.3.0](https://github.com/mcanevet/bevy_playtest/compare/v0.2.0...v0.3.0) - 2026-10-23
 
 ### Added
