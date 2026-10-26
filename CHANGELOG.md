@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/mcanevet/bevy_playtest/compare/v0.3.0...v0.4.0) - 2026-10-26
+
+### Added
+
+- chaos mouse bot + scripted mouse_clicks
+
+### Other
+
+- ci Update release-plz/action action to v0.5.146
+- restructure docs/ into diátaxis framework
+
 ## [0.3.0](https://github.com/mcanevet/bevy_playtest/compare/v0.2.0...v0.3.0) - 2026-10-23
 
 ### Added
