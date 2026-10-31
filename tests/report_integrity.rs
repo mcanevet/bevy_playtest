@@ -131,8 +131,7 @@ fn liveness_timeout_config_must_be_honored() {
 // ---------------------------------------------------------------------------
 
 /// A run where the bot definitely emitted input must report
-/// input_count > 0 and a populated action log : cheat_count and
-/// action_log are currently hardcoded empty/0).
+/// input_count > 0 and a populated action_log.
 #[test]
 fn bot_activity_must_be_visible_in_telemetry() {
     let _slot = common::run_slot();
@@ -146,32 +145,6 @@ fn bot_activity_must_be_visible_in_telemetry() {
         "a chaos bot run must show activity in metrics.input_count ({}) or action_log ({} entries)",
         report.metrics.input_count,
         report.action_log.len()
-    );
-}
-
-/// A scheduled cheat must bump cheat_count (currently always 0 — C5).
-#[test]
-fn fired_cheat_must_bump_cheat_count() {
-    let _slot = common::run_slot();
-    use bevy_playtest::contract::CheatHooks;
-
-    let mut hooks = CheatHooks::default();
-    hooks.register("probe", |_world| {});
-
-    let scenario: Scenario = serde_json::from_str(
-        r#"{"bot":{"type":"chaos","seed":7},"duration_s":0.3,"tps":60,"setup":{"cheats":[{"frame":0,"kind":"probe"}]}}"#,
-    )
-    .unwrap();
-    let mut app = minimal_app();
-    app.insert_resource(hooks);
-    let report = run_scenario(&mut app, &scenario).unwrap();
-    eprintln!(
-        "CHEAT-PROBE cheats={} report.cheat_count={} violations={:?}",
-        1, report.cheat_count, report.violations
-    );
-    assert_eq!(
-        report.cheat_count, 1,
-        "a fired cheat must be auditable in cheat_count"
     );
 }
 

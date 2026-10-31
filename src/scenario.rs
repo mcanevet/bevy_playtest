@@ -65,8 +65,6 @@ pub struct Scenario {
     pub duration_s: f32,
     #[serde(default)]
     pub invariants: Vec<Invariant>,
-    #[serde(default)]
-    pub setup: Setup,
     /// Typed-oracle selection. None = run ALL registered typed oracles;
     /// Some(names) restricts to the listed ones. Unknown names reject at
     /// load time.
@@ -81,17 +79,6 @@ pub struct Scenario {
     /// makes honest replay verification impossible there).
     #[serde(default)]
     pub verify_replay: bool,
-    /// Declared behavioral observations for coverage: free-form event
-    /// names. The report records, per name, whether any mechanism
-    /// observed it this run (v1 mechanism: digit-normalized log
-    /// messages — observation is opt-in by logging convention).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub observes: Vec<String>,
-    /// Make any coverage hole a Fail instead of a report-only note.
-    /// Doctrine-safe: the declares are explicit, so an unobserved
-    /// event is user-visible truth, not silence.
-    #[serde(default)]
-    pub strict_coverage: bool,
 }
 
 /// Bot configuration.
@@ -276,63 +263,6 @@ pub struct Invariant {
     /// deadline (seconds).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eventually_s: Option<f32>,
-}
-
-/// Setup: resets and cheats invoked at scheduled frames.
-#[derive(Deserialize, Serialize, Clone, Debug, Default)]
-#[serde(deny_unknown_fields)]
-pub struct Setup {
-    #[serde(default)]
-    pub resets: Vec<ResetCall>,
-    /// Cheats invoked at scheduled frames (AUDITED — every invocation
-    /// lands in the action log and bumps cheat_count).
-    #[serde(default)]
-    pub cheats: Vec<CheatCall>,
-}
-
-#[derive(Deserialize, Serialize, Clone, Debug)]
-#[serde(deny_unknown_fields)]
-pub struct ResetCall {
-    pub kind: String,
-}
-
-#[derive(Deserialize, Serialize, Clone, Debug)]
-#[serde(deny_unknown_fields)]
-pub struct CheatCall {
-    /// Fire time. MUST be 0 (fire pre-run); the validator rejects
-    /// any other value. Kept as a field so scheduled cheats remain a
-    /// schema-compatible extension.
-    pub frame: u64,
-    pub kind: String,
-    /// Postcondition contract: entity-count comparison against the
-    /// pre-hook value, evaluated after the hook runs. Catches silently
-    /// no-op hooks. v1 is statistical (counts), not semantic — value
-    /// contracts are roadmapped behind reflection wiring.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expects: Option<CheatExpectation>,
-}
-
-/// Declarative postcondition on a cheat/reset hook. v1: the world's
-/// transform-entity count after the hook, compared to the count
-/// before it ran.
-#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct CheatExpectation {
-    /// Comparison applied to the transform-entity count.
-    pub transform_entity_count: CountCmp,
-}
-
-/// Count comparison ops for cheat postconditions.
-#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum CountCmp {
-    /// Fewer entities than before (a reset that rebuilt the world).
-    Lt,
-    /// More entities than before.
-    Gt,
-    /// Exactly the same count. Asserts stability; a no-op hook also
-    /// satisfies this — use it deliberately.
-    Eq,
 }
 
 // ---------------------------------------------------------------------------
@@ -560,72 +490,20 @@ pub fn unknown_key_error(key: &str, at: Option<u64>) -> String {
 pub enum ScenarioError {
     /// The scenario JSON is structurally invalid (bad field combos).
     Rejected(String),
-    /// The scenario references a reset kind the game never registered.
-    UnknownReset { kind: String, known: Vec<String> },
-    /// The scenario references a cheat kind the game never registered.
-    UnknownCheat { kind: String, known: Vec<String> },
     /// The scenario references a bot type not implemented in this version.
     NotImplemented(String),
-    /// The scenario depends on reset semantics (restart-like frame-0
-    /// cheats) but the game registered no reset hooks.
-    ResetMissing,
 }
 
 impl std::fmt::Display for ScenarioError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Rejected(msg) => write!(f, "scenario rejected: {msg}"),
-            Self::UnknownReset { kind, known } => {
-                let base = format!(
-                    "unknown reset kind '{}' — known kinds: {}",
-                    kind,
-                    if known.is_empty() {
-                        "(none registered)".to_string()
-                    } else {
-                        known.join(", ")
-                    }
-                );
-                write!(
-                    f,
-                    "scenario rejected: {base}{}",
-                    suggestion_suffix(kind, known)
-                )
-            }
-            Self::UnknownCheat { kind, known } => {
-                let base = format!(
-                    "unknown cheat kind '{}' — known kinds: {}",
-                    kind,
-                    if known.is_empty() {
-                        "(none registered)".to_string()
-                    } else {
-                        known.join(", ")
-                    }
-                );
-                write!(
-                    f,
-                    "scenario rejected: {base}{}",
-                    suggestion_suffix(kind, known)
-                )
-            }
             Self::NotImplemented(msg) => write!(f, "not implemented: {msg}"),
-            Self::ResetMissing => write!(
-                f,
-                "reset missing: scenario depends on reset semantics (frame-0 cheats) \
-                 but the game registered no reset hooks; register ResetHooks \
-                 or remove the restart semantics from the scenario"
-            ),
         }
     }
 }
 
 impl std::error::Error for ScenarioError {}
-
-fn suggestion_suffix(input: &str, candidates: &[String]) -> String {
-    match suggest_similar(input, candidates) {
-        Some(s) => format!(" — did you mean '{s}'?"),
-        None => String::new(),
-    }
-}
 
 /// Validate a scenario. Rejects (never silently degrades) on:
 /// - bad tps/duration/liveness values
@@ -796,17 +674,6 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                     )));
                 }
             }
-        }
-    }
-    // Scheduled cheats: the `frame` field parses but all cheats fire
-    // pre-run — a nonzero frame claims scheduling that doesn't exist.
-    for (idx, cheat) in scenario.setup.cheats.iter().enumerate() {
-        if cheat.frame != 0 {
-            return Err(ScenarioError::NotImplemented(format!(
-                "cheats[{idx}].frame {}: scheduled cheats are not supported — \
-                 all cheats fire pre-run (frame 0); omit the frame field",
-                cheat.frame
-            )));
         }
     }
     // Invariant names key the eventual-state and dedup tables —

@@ -26,8 +26,3 @@ frame where the two passes disagreed — the signature of hidden
 nondeterminism (unseeded game RNG, wall-clock reads, iteration-order
 dependencies).
 
-A related but lighter-weight check: `"observes": ["event_name"]`
-declares behavioral observations the run should exercise (recorded via
-the logging convention — digit-normalized log messages), reported as
-coverage in the report; `"strict_coverage": true` escalates any hole
-from a report-only note to a Fail.

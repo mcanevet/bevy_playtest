@@ -373,8 +373,7 @@ fn roundtrips_through_serde() {
         "duration_s": 5.0,
         "invariants": [
             { "name": "bounds", "rule": "nodes_in_bounds", "min_x": -100.0, "max_x": 100.0 }
-        ],
-        "setup": { "resets": [ { "kind": "scene" } ] }
+        ]
     });
     let s: Scenario = serde_json::from_value(json).unwrap();
     let out = serde_json::to_value(&s).unwrap();
@@ -447,40 +446,11 @@ fn verify_replay_defaults_false_and_parses() {
         serde_json::from_str(r#"{"bot":{"type":"chaos","seed":1},"duration_s":1.0,"tps":60}"#)
             .unwrap();
     assert!(!s.verify_replay);
-    assert!(s.observes.is_empty());
-    assert!(!s.strict_coverage);
 
     let s: Scenario = serde_json::from_str(
         r#"{"bot":{"type":"chaos","seed":1},"duration_s":1.0,"tps":60,
-            "verify_replay":true,"observes":["a","b"],"strict_coverage":true}"#,
+            "verify_replay":true}"#,
     )
     .unwrap();
     assert!(s.verify_replay);
-    assert_eq!(s.observes, vec!["a", "b"]);
-    assert!(s.strict_coverage);
-}
-
-#[test]
-fn cheat_expects_lt_parses_and_unknown_op_rejects() {
-    let s: Scenario = serde_json::from_str(
-        r#"{"bot":{"type":"chaos","seed":1},"duration_s":1.0,"tps":60,
-            "setup":{"cheats":[{"frame":0,"kind":"x",
-              "expects":{"transform_entity_count":"lt"}}]}}"#,
-    )
-    .unwrap();
-    assert_eq!(
-        s.setup.cheats[0]
-            .expects
-            .as_ref()
-            .unwrap()
-            .transform_entity_count,
-        bevy_playtest::scenario::CountCmp::Lt
-    );
-
-    let err = serde_json::from_str::<Scenario>(
-        r#"{"bot":{"type":"chaos","seed":1},"duration_s":1.0,"tps":60,
-            "setup":{"cheats":[{"frame":0,"kind":"x",
-              "expects":{"transform_entity_count":"gt_or_lt"}}]}}"#,
-    );
-    assert!(err.is_err(), "unknown count op must reject");
 }

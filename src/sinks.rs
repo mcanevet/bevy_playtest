@@ -40,14 +40,13 @@ pub enum Captured {
     },
 }
 
-/// The exclusively-held active run: all captured events + observation
-/// fuel + the current frame stamp. Existence of this state IS the
-/// capture-active signal — events observed while no run is held are
-/// dropped (bounded memory, no cross-run contamination possible).
+/// The exclusively-held active run: all captured events + the current
+/// frame stamp. Existence of this state IS the capture-active signal —
+/// events observed while no run is held are dropped (bounded memory, no
+/// cross-run contamination possible).
 #[derive(Default)]
 struct ActiveRun {
     events: Vec<Captured>,
-    observed_info: Vec<String>,
     frame: u64,
 }
 
@@ -159,16 +158,6 @@ pub fn drain() -> Vec<Captured> {
     std::mem::take(&mut run.events)
 }
 
-/// Drain captured INFO messages (observation fuel). Called by the
-/// driver alongside `drain`.
-pub fn drain_observed_info() -> Vec<String> {
-    let mut guard = lock_active_run();
-    let Some(run) = guard.as_mut() else {
-        return Vec::new();
-    };
-    std::mem::take(&mut run.observed_info)
-}
-
 /// Process-global, write-once record of whether the capture subscriber
 /// actually became the global default. See [`ensure_global_subscriber`].
 static SUBSCRIBER_WON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
@@ -241,8 +230,8 @@ pub fn ensure_global_subscriber() {
     });
 }
 
-/// Tracing layer capturing WARN/ERROR events (plus INFO as observation
-/// fuel) into the process-global sink — only while a run is active
+/// Tracing layer capturing WARN/ERROR events into the process-global
+/// sink — only while a run is active
 /// (anywhere in the process; events from worker threads included).
 pub struct CaptureLayer;
 
@@ -259,27 +248,15 @@ where
         // Cheap level check BEFORE touching the shared lock: TRACE/
         // DEBUG never reach storage, and capture-active (a run being
         // held) is re-checked under the lock itself.
-        if !matches!(
-            level,
-            tracing::Level::INFO | tracing::Level::WARN | tracing::Level::ERROR
-        ) {
+        if !matches!(level, tracing::Level::WARN | tracing::Level::ERROR) {
             return;
         }
-        // Coverage observation needs INFO messages too (declared
-        // observations often surface as info logs). They never become
-        // violations — only observation fuel.
         let mut visitor = MessageVisitor(String::new());
         event.record(&mut visitor);
         if visitor.0.is_empty() {
             return;
         }
         let frame = current_frame();
-        if level == tracing::Level::INFO {
-            if let Some(run) = lock_active_run().as_mut() {
-                run.observed_info.push(visitor.0);
-            }
-            return;
-        }
         let target = event.metadata().target().to_string();
         let message = visitor.0;
         push_event(Captured::Log {

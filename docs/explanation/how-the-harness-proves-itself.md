@@ -77,8 +77,7 @@ planted-fault proof.
 
 - `verification_depth`: replay-divergence actually fires when hidden
   nondeterminism exists (same scenario + seed producing different
-  fingerprints); cheat postconditions are enforced; coverage accounting tells
-  the truth.
+  fingerprints).
 - `report_integrity`: what the `PlaytestReport` says matches what happened —
   provenance recorded, no phantom passes, findings not dropped on the floor
   between detection and report.

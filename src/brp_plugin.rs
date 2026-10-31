@@ -4,8 +4,6 @@
 //!
 //! Methods (namespace `bevy_playtest/`, discovered via `rpc.discover`):
 //! - `bevy_playtest/health`: panic status + recent log excerpts
-//! - `bevy_playtest/reset`: invoke a registered reset hook by kind
-//! - `bevy_playtest/cheat`: invoke a registered cheat hook by kind
 //! - `bevy_playtest/time`: time scale control (scale only — pause/step
 //!   stay in-process-only; see README "time control asymmetry")
 //!
@@ -17,8 +15,6 @@ use bevy_ecs::prelude::*;
 use bevy_ecs::world::World;
 use bevy_remote::{error_codes, BrpError, BrpResult, RemoteMethodSystemId, RemoteMethods};
 use serde_json::{json, Value};
-
-use crate::contract::{CheatHooks, ResetHooks};
 
 /// Number of recent log excerpts kept for `bevy_playtest/health`.
 const HEALTH_LOG_TAIL: usize = 32;
@@ -57,8 +53,6 @@ impl Plugin for PlaytestBrpPlugin {
         }
         app.init_resource::<HealthLedger>();
         register_method(app, "bevy_playtest/health", health_handler);
-        register_method(app, "bevy_playtest/reset", reset_handler);
-        register_method(app, "bevy_playtest/cheat", cheat_handler);
         register_method(app, "bevy_playtest/time", time_handler);
     }
 }
@@ -90,67 +84,6 @@ fn health_handler(In(_): In<Option<Value>>, world: &mut World) -> BrpResult {
         "panicked": ledger.panicked,
         "recent_logs": ledger.tail,
     }))
-}
-
-/// Reset: invoke a registered reset hook by kind.
-fn reset_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpResult {
-    let kind = expect_kind(params, "bevy_playtest/reset")?;
-    let Some(hooks) = world.remove_resource::<ResetHooks>() else {
-        return Err(brp_err(
-            error_codes::INTERNAL_ERROR,
-            "no ResetHooks registered".into(),
-        ));
-    };
-    let result = invoke_hook(world, &hooks.0, &kind, "reset");
-    world.insert_resource(hooks);
-    result
-}
-
-/// Cheat: invoke a registered cheat hook by kind.
-fn cheat_handler(In(params): In<Option<Value>>, world: &mut World) -> BrpResult {
-    let kind = expect_kind(params, "bevy_playtest/cheat")?;
-    let Some(hooks) = world.remove_resource::<CheatHooks>() else {
-        return Err(brp_err(
-            error_codes::INTERNAL_ERROR,
-            "no CheatHooks registered".into(),
-        ));
-    };
-    let result = invoke_hook(world, &hooks.0, &kind, "cheat");
-    world.insert_resource(hooks);
-    result
-}
-
-fn expect_kind(params: Option<Value>, method: &str) -> Result<String, BrpError> {
-    let Value::Object(map) = params.unwrap_or(Value::Null) else {
-        return Err(brp_err(
-            error_codes::INVALID_PARAMS,
-            format!("{method}: params must be an object with a string 'kind'"),
-        ));
-    };
-    match map.get("kind") {
-        Some(Value::String(s)) => Ok(s.clone()),
-        _ => Err(brp_err(
-            error_codes::INVALID_PARAMS,
-            format!("{method}: expected string field 'kind'"),
-        )),
-    }
-}
-
-fn invoke_hook(
-    world: &mut World,
-    hooks: &std::collections::HashMap<String, crate::contract::WorldHook>,
-    kind: &str,
-    what: &str,
-) -> BrpResult {
-    let Some(hook) = hooks.get(kind) else {
-        let known: Vec<&String> = hooks.keys().collect();
-        return Err(brp_err(
-            error_codes::INTERNAL_ERROR,
-            format!("unknown {what} kind '{kind}' (known: {known:?})"),
-        ));
-    };
-    hook(world);
-    Ok(json!({ "applied": kind }))
 }
 
 /// Time: scale control only. Pause/step are in-process-model concepts;
@@ -191,17 +124,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plugin_registers_all_four_methods_into_remote_methods() {
+    fn plugin_registers_both_methods_into_remote_methods() {
         let mut app = bevy_app::App::new();
         app.add_plugins(bevy_remote::RemotePlugin::default());
         app.add_plugins(PlaytestBrpPlugin);
         let methods = app.world().resource::<RemoteMethods>();
-        for m in [
-            "bevy_playtest/health",
-            "bevy_playtest/reset",
-            "bevy_playtest/cheat",
-            "bevy_playtest/time",
-        ] {
+        for m in ["bevy_playtest/health", "bevy_playtest/time"] {
             assert!(methods.get(m).is_some(), "{m} not registered");
         }
     }

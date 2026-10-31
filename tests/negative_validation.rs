@@ -100,26 +100,6 @@ fn removed_surface_kinds_reject_at_parse_time() {
 }
 
 // ---------------------------------------------------------------------------
-// Cheat scheduling
-// ---------------------------------------------------------------------------
-
-/// Cheats currently all fire pre-run; a nonzero `frame` claims scheduled
-/// execution that doesn't exist. Until scheduling is implemented, a
-/// nonzero frame must reject.
-#[test]
-fn rejects_nonzero_cheat_frame() {
-    let mut json = minimal_scenario("chaos");
-    json["setup"] = serde_json::json!({
-        "cheats": [{ "frame": 300, "kind": "some_cheat" }]
-    });
-    let s = parse(json);
-    match validate_scenario(&s) {
-        Err(ScenarioError::NotImplemented(msg)) => assert!(msg.contains("frame"), "{msg}"),
-        other => panic!("expected NotImplemented for nonzero cheat frame, got {other:?}"),
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Oracle selection
 // ---------------------------------------------------------------------------
 

@@ -103,8 +103,7 @@ fn chaos_scenario() -> Scenario {
             "bot": { "type": "chaos", "seed": 1337 },
             "duration_s": 2.0,
             "tps": 60,
-            "invariants": [],
-            "setup": {}
+            "invariants": []
         }"#,
     )
     .expect("chaos scenario parses")

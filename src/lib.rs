@@ -8,7 +8,6 @@ pub mod brp_plugin;
 #[cfg(feature = "brp")]
 pub mod brp_runner;
 pub mod choice;
-pub mod contract;
 pub mod driver;
 pub mod enums;
 pub mod invariant_eval;

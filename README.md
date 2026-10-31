@@ -18,7 +18,6 @@ way — they differ in **how much they can see**:
 | Game source changes      | ~15 lines (feature + cfg'd helpers)             | 3 touch-points (bevy_remote, register_type, port) |
 | Harness code in game     | Yes, test builds only                           | None                                          |
 | Oracles                  | All (panic, log, liveness, NaN, bounds, replay) | Reduced (NaN, bounds, liveness)  |
-| Reset/cheat hooks, time control | ✓                                         | ✗                                            |
 | Determinism proof (`verify_replay`) | ✓                                    | ✗ (rejected explicitly)                      |
 | Release builds           | Zero playtest code                              | Remote plugin stays in the binary            |
 
@@ -28,8 +27,6 @@ way — they differ in **how much they can see**:
 |--------------------------|---------------------|--------------|--------------------------------|
 | Panic capture            | ✓                   | ✗            | ✓ (`bevy_playtest/health`)     |
 | Log capture              | ✓                   | ✗            | ✓                              |
-| Reset hooks              | ✓                   | ✗            | ✓ (`bevy_playtest/reset`)      |
-| Cheat hooks              | ✓                   | ✗            | ✓ (`bevy_playtest/cheat`)      |
 | Time scale control       | N/A                 | ✗            | ✓ (`bevy_playtest/time`)       |
 
 The report's `brp_parity` field distinguishes "full" from "degraded"
@@ -167,8 +164,7 @@ external-BRP surface instead. In the recommended integration these modes only
 exist in a playtest-enabled build (`cargo test`, or `cargo run --features
 playtest`); the default and release builds contain zero bevy_playtest code.
 
-Known limitations: games whose first state is a menu may need a reset hook
-before the scenario is meaningful; rendering is unavailable (software-only) so
+Known limitations: rendering is unavailable (software-only) so
 visual assertions do not apply.
 
 ### Log capture (the `log_error`/`log_warn` oracles)
@@ -207,7 +203,7 @@ harness does not swallow it, but produces no report for it.
 
 ### Verification depth (what is proven vs. what is asserted)
 
-Three mechanisms take a run from "asserted" to "proven":
+One mechanism takes a run from "asserted" to "proven":
 
 1. **Replay divergence** (`"verify_replay": true`) runs the scenario
    twice against fresh Apps and compares per-frame fingerprints
@@ -220,25 +216,6 @@ Three mechanisms take a run from "asserted" to "proven":
    On the takeover/plugin path, pass B re-runs your game binary as a
    subprocess — whole-process determinism, the strongest form. NOTE:
    `verify_replay` requires `single_threaded: true` (default).
-
-2. **Cheat postcondition contracts** (`expects` on cheat entries):
-   v1 is statistical — transform-entity count comparisons
-   (`lt`/`gt`/`eq`) against the pre-hook value, evaluated
-   immediately after the hook runs. This catches silently no-op hooks
-   (a failing contract is a `cheat_contract_violated` Fail carrying
-   both counts). Semantic contracts (resource/component VALUES) are
-   roadmapped behind reflection wiring — v1 cannot catch a hook that
-   mutates state without changing entity counts.
-
-3. **Behavioral coverage** (`observes: [...]` declarations): the
-   report records, per declared event, whether any mechanism saw it
-   this run. v1 mechanism: log-message matching (digit-normalized,
-   INFO included) — observation is opt-in by logging convention
-   (`tracing::info!("enemy_killed")`). Unobserved declarations are
-   coverage holes in the report; `"strict_coverage": true` makes
-   them Fail. Coverage also reports the fraction of the chaos
-   `raw_surface` keys actually drawn. Holes without the strict flag
-   are visible truth, not silent passes — but they don't gate.
 
 ## Mode 2: External BRP (experimental)
 
@@ -285,7 +262,7 @@ fn playtest_brp() -> Result<(), Box<dyn std::error::Error>> {
 Note: unlike mode 1, the game has no playtest feature here — the
 `bevy_remote`-enabled binary is the normal build. The report carries
 `harness_mode: "external_brp"`. Limits versus mode 1: chaos
-bot only, no reset/cheat hooks, and a reduced oracle set — bounds, NaN
+bot only and a reduced oracle set — bounds, NaN
 transforms, and the frozen-world (liveness) check run over BRP, but panic
 and log capture require mode 1 (or `PlaytestBrpPlugin` — see the parity
 matrix above).

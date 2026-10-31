@@ -53,13 +53,9 @@ impl Rule {
             Self::LogCaptureLost => "Log capture was OFF for this process (another tracing subscriber, typically DefaultPlugins' LogPlugin, installed first): log_error/log_warn findings are under-reported for every run in this process.",
             Self::NodesInBounds => "Entity positions stay inside declared play-space bounds.",
             Self::FiniteTransforms => "Every entity's Transform holds finite values (no NaN/inf).",
-            Self::ResetHookPanicked => "The game's ResetHooks handler panicked.",
-            Self::CheatHookPanicked => "The game's CheatHooks handler panicked.",
             Self::VacuousRun => "Nothing was ever observable: no entities to check and no inputs emitted — the run proves nothing about the game.",
             Self::VacuousInvariant => "An invariant matched zero entities; the check proves nothing until there is something to check.",
             Self::ReplayDivergence => "Same scenario + seed run twice must produce identical per-frame fingerprints; divergence means hidden nondeterminism (wall clock, unseeded RNG, unordered iteration).",
-            Self::CheatContractViolated => "A cheat/reset hook's declared postcondition did not hold — the hook may be a silent no-op.",
-            Self::CoverageHole => "A declared observation was never observed by any mechanism this run.",
             Self::OracleError => "An oracle itself errored while evaluating (infrastructure failure, not a game bug).",
             Self::ScenarioError => "The scenario itself failed (rejected config) rather than the game misbehaving.",
         }
@@ -83,10 +79,6 @@ declare_rules! {
     NodesInBounds => "nodes_in_bounds",
     FiniteTransforms => "finite_transforms",
 
-    // Contract hooks (producible, tested)
-    ResetHookPanicked => "reset_hook_panicked",
-    CheatHookPanicked => "cheat_hook_panicked",
-
     // Vacuity guard: a run where nothing was ever observable.
     VacuousRun => "vacuous_run",
 
@@ -95,8 +87,6 @@ declare_rules! {
 
     // Verification depth.
     ReplayDivergence => "replay_divergence",
-    CheatContractViolated => "cheat_contract_violated",
-    CoverageHole => "coverage_hole",
 
     // Infrastructure errors (producible; oracle_error only in BRP tier)
     OracleError => "oracle_error",
