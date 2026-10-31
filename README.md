@@ -1,11 +1,142 @@
 # bevy_playtest
 
-A playtesting harness for Bevy games. Scenarios drive a deterministic bot
-through your game while oracles check invariants and produce a machine-readable
-report (JSON + JUnit XML).
+A playtesting harness for Bevy games. A deterministic bot plays your
+game while oracles watch for NaN propagation, runaway transforms,
+soft-locks, panics and error spam — and fail a plain `cargo test` the
+moment any of them fires.
+
+**Doctrine: zero friction.** The recommended integration touches three
+files you already have — `Cargo.toml`, `src/main.rs`, `tests/playtest.rs`
+— needs no scenario to start, no contract in game code, and compiles to
+zero bevy_playtest code in normal and release builds.
 
 **Documentation:** [tutorial](docs/tutorial/) · [how-to guides](docs/how-to/) ·
 [reference](docs/reference/) · [explanation](docs/explanation/)
+
+## Quick start: a playtest in three files
+
+**1. `Cargo.toml`** — optional dependency plus the self-dev-dependency
+that activates it only for test builds:
+
+```toml
+[dependencies]
+bevy_playtest = { version = "0.4", optional = true }
+
+[dev-dependencies]
+# Self-dependency: activates OUR OWN `playtest` feature only for
+# test builds. Normal & release builds stay clean.
+my_game = { path = ".", features = ["playtest"] }
+
+[features]
+playtest = ["dep:bevy_playtest", "bevy_playtest/takeover"]
+```
+
+**2. `src/main.rs`** — two cfg'd helper pairs around your existing
+plugin setup (use your own package name in place of `my_game`):
+
+```rust
+#[cfg(feature = "playtest")]
+fn default_plugins() -> bevy_playtest::PlaytestDefaultPlugins {
+    bevy_playtest::PlaytestDefaultPlugins
+}
+#[cfg(not(feature = "playtest"))]
+fn default_plugins() -> bevy::DefaultPlugins {
+    bevy::DefaultPlugins
+}
+
+#[cfg(feature = "playtest")]
+fn playtest_plugins() -> (bevy_playtest::PlaytestPlugin,) {
+    (bevy_playtest::PlaytestPlugin,)
+}
+#[cfg(not(feature = "playtest"))]
+fn playtest_plugins() -> () {}
+```
+
+then use `.add_plugins(default_plugins().set(...))` where you had
+`DefaultPlugins`, and `.add_plugins(playtest_plugins())` before `.run()`.
+The one ordering rule: add `PlaytestPlugin` **after** any plugin group
+that sets a runner, or the takeover is silently inert (the runner swap
+is last-set-wins).
+
+**3. `tests/playtest.rs`** — the whole file, no scenario needed:
+
+```rust
+#[test]
+fn playtest_battery() {
+    bevy_playtest::battery::run_and_expect_clean(
+        env!("CARGO_BIN_EXE_my_game"),
+        bevy_playtest::battery::BUILTIN_BATTERY,
+    );
+}
+```
+
+Run it:
+
+```
+$ cargo test
+running 1 test
+test playtest_battery ... ok
+
+test result: ok. 1 passed; 0 failed
+```
+
+That `ok` is a verdict, not a formality: for the battery's duration a
+seeded bot typed and clicked through your game while every oracle
+watched — and nothing fired. When something does, the test prints the
+findings (violation, tick, entities involved) instead.
+
+## What the battery catches out of the box
+
+The built-in battery scenario runs the chaos bot — keys (WASD/arrows
+by default) and mouse clicks (all primary buttons) at 10 Hz, holding
+each input 2 frames so `ButtonInput`-based games observe it — while
+these oracles watch:
+
+- **NaN/finite transforms** — any non-finite `Transform` → Fail
+- **Runaway geometry** — entities leaving bounds (a hard-coded global
+  ±1000 on x/y/z runs even with nothing declared; authored scenarios
+  tighten per-axis)
+- **Frozen world** — no entity movement across the liveness grace
+  window → Fail (catches soft-locks)
+- **Panic capture** — crash → Crash
+- **Log capture** — ERROR → Fail, WARN → informational
+- **Vacuity guard** — no entities and no inputs means the run proved
+  nothing; it fails loudly instead of passing vacuously
+
+Everything is deterministic: same seed → same inputs → same result.
+A failing run reproduces bit-for-bit until the game actually changes.
+
+Declaring nothing is the point. When you need to target a specific
+situation, authored scenarios are data files referenced from the same
+helper — `battery::run_and_expect_clean(binary, "playtests/menu.json")`
+(see the [scenario reference](docs/reference/README.md) for the full
+JSON schema, and [script keys instead of
+chaos](docs/how-to/how-to-script-keys-instead-of-chaos.md) for scripted
+input). To prove determinism itself, [replay
+verification](#verification-depth-what-is-proven-vs-what-is-asserted)
+runs the scenario twice and compares fingerprints.
+
+Opt-outs: `mouse_buttons: []` in a scenario's `raw_surface` drops
+clicks; `"keys": []` drops chaos keys (mouse-only chaos).
+
+## How mode 1 works
+
+When `BEVY_PLAYTEST_SCENARIO` is set, your binary becomes its own
+headless playtest runner (exit codes: 0 Pass, 1 Fail, 2 Crash, 3 config
+error). Without the env var the plugin is inert. The runner swap
+replaces winit's event loop, so no window appears. Under `BRP_PORT`
+the same binary serves the mode-2 external-BRP surface instead. In the
+recommended integration these modes only exist in a playtest-enabled
+build (`cargo test`, or `cargo run --features playtest`); the default
+and release builds contain zero bevy_playtest code.
+
+`PlaytestDefaultPlugins` drops `WinitPlugin` under the takeover env vars
+(`BEVY_PLAYTEST_*`, plus `BRP_PORT` for external mode — bevy_winit 0.20
+builds its event loop eagerly, so headless CI hosts need it gone before
+the runner swap).
+
+Known limitations: rendering is unavailable (software-only) so visual
+assertions do not apply.
 
 ## The two modes
 
@@ -37,137 +168,57 @@ mode-1 capabilities to mode 2 via a small BRP method surface — see the
 Pick mode 1 unless you can't touch the game code at all or are testing
 a third-party binary.
 
-## Mode 1: In-process (takeover)
+### Mode 2: External BRP (experimental)
 
-Integration is ~15 lines across three files (Cargo.toml feature +
-self-dev-dependency, two cfg'd helper pairs in main.rs, one small
-test) — then plain `cargo test` runs your
-playtests, and `cargo build --release` contains zero bevy_playtest code.
-The [tutorial](docs/tutorial/) walks through every line; this section is
-the same integration as a quick reference.
+No harness imports in the game at all — run the game as a subprocess and
+drive it over Bevy's Remote Protocol. Requires the game binary to:
 
-The built-in battery scenario (`BEVY_PLAYTEST_SCENARIO=battery`) is
-zero-config: the chaos bot both types (WASD/arrows or your declared
-`raw_surface.keys`) and clicks (all mouse buttons by default), at 10 Hz,
-holding each input 2 frames so `ButtonInput`-based games observe it.
-No scenario, no contract — declare `mouse_buttons: []` in
-`raw_surface` to opt out of clicks.
+1. Add Bevy's remote plugins (`RemotePlugin::default()` +
+   `bevy::remote::http::RemoteHttpPlugin::default()`, with the
+   `bevy_remote` cargo feature)
+2. Register the types the harness inspects:
+     ```rust
+     .register_type::<Transform>()
+     ```
+3. Read the listen port from the `BRP_PORT` env var and pass it to
+   `RemoteHttpPlugin::default().with_port(port)` (the harness sets it)
 
-**Cargo.toml:**
+Then from the test side — `cargo test` runs it like any other test.
+`brp_runner` is behind the (non-default) `brp` feature, so the test-side
+dependency must enable it:
+
 ```toml
-[dependencies]
-bevy_playtest = { version = "0.3", optional = true }
-
 [dev-dependencies]
-# Self-dependency: activates OUR OWN `playtest` feature only for
-# test builds. Normal & release builds stay clean.
-my_game = { path = ".", features = ["playtest"] }
-
-[features]
-playtest = ["dep:bevy_playtest", "bevy_playtest/takeover"]
+bevy_playtest = { version = "0.4", features = ["brp"] }
 ```
 
-**src/main.rs:**
 ```rust
-#[cfg(feature = "playtest")]
-fn default_plugins() -> bevy_playtest::PlaytestDefaultPlugins {
-    bevy_playtest::PlaytestDefaultPlugins
-}
-#[cfg(not(feature = "playtest"))]
-fn default_plugins() -> bevy::DefaultPlugins {
-    bevy::DefaultPlugins
-}
+use bevy_playtest::brp_runner::{run_scenario_brp, BrpRunConfig};
 
-#[cfg(feature = "playtest")]
-fn playtest_plugins() -> (bevy_playtest::PlaytestPlugin,) {
-    (bevy_playtest::PlaytestPlugin,)
-}
-#[cfg(not(feature = "playtest"))]
-fn playtest_plugins() -> () {}
-```
-
-then use `.add_plugins(default_plugins().set(...))` where you had
-`DefaultPlugins`, and `.add_plugins(playtest_plugins())` before `.run()`.
-The one ordering rule: add `PlaytestPlugin` **after** any plugin group
-that sets a runner, or the takeover is silently inert (the runner swap
-is last-set-wins). `PlaytestDefaultPlugins` drops `WinitPlugin` under the takeover env vars
-(`BEVY_PLAYTEST_*`, plus `BRP_PORT` for external mode — bevy_winit 0.20 builds its event loop
-eagerly, so headless CI hosts need it gone before the runner swap).
-
-**tests/playtest.rs** (commit it — it's yours, per-game assertions live here):
-```rust
 #[test]
-fn playtest_battery() {
-    bevy_playtest::battery::run_and_expect_clean(
-        env!("CARGO_BIN_EXE_my_game"),
-        bevy_playtest::battery::BUILTIN_BATTERY,
-    );
+fn playtest_brp() -> Result<(), Box<dyn std::error::Error>> {
+    let cfg = BrpRunConfig {
+        game_binary: env!("CARGO_BIN_EXE_my_game").to_string(),
+        port: Some(4570),
+        ..Default::default()
+    };
+    let scenario = serde_json::from_str::<bevy_playtest::scenario::Scenario>(
+        r#"{"bot":{"type":"chaos"},"duration_s":10}"#,
+    )?;
+    let report = run_scenario_brp(&cfg, &scenario)?;
+    assert_ne!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
+    Ok(())
 }
 ```
+Note: unlike mode 1, the game has no playtest feature here — the
+`bevy_remote`-enabled binary is the normal build. The report carries
+`harness_mode: "external_brp"`. Limits versus mode 1: chaos
+bot only and a reduced oracle set — bounds, NaN
+transforms, and the frozen-world (liveness) check run over BRP, but panic
+and log capture require mode 1 (or `PlaytestBrpPlugin` — see the parity
+matrix above).
 
-Authored scenarios are data files referenced from the same helper:
-`battery::run_and_expect_clean(binary, "playtests/menu.json")`.
-
-Games with known findings can pin them instead of failing — see
-[pinning in the reproduce-a-failure guide](docs/how-to/how-to-reproduce-a-failure.md).
-
-`cargo test` compiles the game WITH the feature (the self-dev-dep is
-what activates it) and Cargo hands the test the binary path. The
-helper spawns it with the scenario, reads the report, and fails the
-test with a per-violation findings summary if anything gates.
-
-Release purity caveat: the feature activates for ANY test/example/bench
-build — including `cargo test --release` / `cargo build --all-targets`.
-Only plain `cargo build` / `cargo build --release` (bins) are
-guaranteed playtest-free. To enforce that contract in CI (recommended —
-the failure mode is otherwise silent):
-
-```console
-$ cargo check
-$ cargo tree -e normal | grep -q "bevy_playtest v" && echo "LEAK" && exit 1
-```
-
-Bin-only games (no `src/lib.rs` — the common shape for Bevy games):
-cargo may print
-`ignoring invalid dependency ... which is missing a lib target` when
-resolving the self-dev-dependency (notably for workspace members). The
-warning is benign for this pattern: the dependency is only used for
-feature unification, and the `playtest` feature still activates on
-plain `cargo test` — verified in isolation with a bin-only crate, and
-pinned by CI (the build job's flagless fixture test).
-
-Packaging note: `cargo package` strips `[dev-dependencies]`, so the
-self-dev-dependency no longer auto-activates `playtest` in an unpacked
-archive. Handle this the way the tutorial's battery does: detect the
-inactive feature in `tests/playtest.rs` and report an ignored test
-with the reason and the fix
-(`cargo test --features playtest` restores the full battery — the
-feature and optional dependency survive packaging; only the
-auto-activation is lost).
-
-The battery is a smoke/stress verdict — NaN propagation, runaway
-transforms, soft-locks, panics, nondeterminism, ERROR spam — not
-gameplay-correctness. See "Verification depth" below for exactly what
-each oracle catches.
-
-Bounds invariants check every entity with a `Transform` — zero
-bevy_playtest-specific code in the game — and **fail loudly (not
-vacuously)** when there are no entities to check.
-
-### How mode 1 works
-
-When `BEVY_PLAYTEST_SCENARIO` is set, your binary becomes its own headless
-playtest runner (exit codes: 0 Pass, 1 Fail, 2 Crash, 3 config error). Without
-the env var the plugin is inert. The runner swap replaces winit's event loop,
-so no window appears. Under `BRP_PORT` the same binary serves the mode-2
-external-BRP surface instead. In the recommended integration these modes only
-exist in a playtest-enabled build (`cargo test`, or `cargo run --features
-playtest`); the default and release builds contain zero bevy_playtest code.
-
-Known limitations: rendering is unavailable (software-only) so
-visual assertions do not apply.
-
-### Log capture (the `log_error`/`log_warn` oracles)
+## Log capture (the `log_error`/`log_warn` oracles)
 
 Errors logged via `tracing` from ANY thread — including IoTaskPool
 workers (where bevy_asset reports load failures) and multi-threaded
@@ -201,7 +252,7 @@ loop lands in the run's report; a panic in the setup window (before the
 run starts) propagates out of `run_scenario` to the caller — the
 harness does not swallow it, but produces no report for it.
 
-### Verification depth (what is proven vs. what is asserted)
+## Verification depth (what is proven vs. what is asserted)
 
 One mechanism takes a run from "asserted" to "proven":
 
@@ -217,54 +268,38 @@ One mechanism takes a run from "asserted" to "proven":
    subprocess — whole-process determinism, the strongest form. NOTE:
    `verify_replay` requires `single_threaded: true` (default).
 
-## Mode 2: External BRP (experimental)
+## Integration caveats (read when something surprises you)
 
-No harness imports in the game at all — run the game as a subprocess and
-drive it over Bevy's Remote Protocol. Requires the game binary to:
+Release purity caveat: the feature activates for ANY test/example/bench
+build — including `cargo test --release` / `cargo build --all-targets`.
+Only plain `cargo build` / `cargo build --release` (bins) are
+guaranteed playtest-free. To enforce that contract in CI (recommended —
+the failure mode is otherwise silent):
 
-1. Add Bevy's remote plugins (`RemotePlugin::default()` +
-   `bevy::remote::http::RemoteHttpPlugin::default()`, with the
-   `bevy_remote` cargo feature)
-2. Register the types the harness inspects:
-    ```rust
-    .register_type::<Transform>()
-    ```
-3. Read the listen port from the `BRP_PORT` env var and pass it to
-   `RemoteHttpPlugin::default().with_port(port)` (the harness sets it)
-
-Then from the test side — `cargo test` runs it like any other test.
-`brp_runner` is behind the (non-default) `brp` feature, so the test-side
-dependency must enable it:
-
-```toml
-[dev-dependencies]
-bevy_playtest = { version = "0.3", features = ["brp"] }
+```console
+$ cargo check
+$ cargo tree -e normal | grep -q "bevy_playtest v" && echo "LEAK" && exit 1
 ```
 
-```rust
-use bevy_playtest::brp_runner::{run_scenario_brp, BrpRunConfig};
+Bin-only games (no `src/lib.rs` — the common shape for Bevy games):
+cargo may print
+`ignoring invalid dependency ... which is missing a lib target` when
+resolving the self-dev-dependency (notably for workspace members). The
+warning is benign for this pattern: the dependency is only used for
+feature unification, and the `playtest` feature still activates on
+plain `cargo test` — verified in isolation with a bin-only crate, and
+pinned by CI (the build job's flagless fixture test).
 
-#[test]
-fn playtest_brp() -> Result<(), Box<dyn std::error::Error>> {
-    let cfg = BrpRunConfig {
-        game_binary: env!("CARGO_BIN_EXE_my_game").to_string(),
-        port: Some(4570),
-        ..Default::default()
-    };
-    let scenario = serde_json::from_str::<bevy_playtest::scenario::Scenario>(
-        r#"{"bot":{"type":"chaos"},"duration_s":10}"#,
-    )?;
-    let report = run_scenario_brp(&cfg, &scenario)?;
-    assert_ne!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
-    Ok(())
-}
-```
-Note: unlike mode 1, the game has no playtest feature here — the
-`bevy_remote`-enabled binary is the normal build. The report carries
-`harness_mode: "external_brp"`. Limits versus mode 1: chaos
-bot only and a reduced oracle set — bounds, NaN
-transforms, and the frozen-world (liveness) check run over BRP, but panic
-and log capture require mode 1 (or `PlaytestBrpPlugin` — see the parity
-matrix above).
+Packaging note: `cargo package` strips `[dev-dependencies]`, so the
+self-dev-dependency no longer auto-activates `playtest` in an unpacked
+archive. Handle this the way the tutorial's battery does: detect the
+inactive feature in `tests/playtest.rs` and report an ignored test
+with the reason and the fix
+(`cargo test --features playtest` restores the full battery — the
+feature and optional dependency survive packaging; only the
+auto-activation is lost).
+
+Games with known findings can pin them instead of failing — see
+[pinning in the reproduce-a-failure guide](docs/how-to/how-to-reproduce-a-failure.md).
 
 See the [docs](docs/README.md) for the full guides.
