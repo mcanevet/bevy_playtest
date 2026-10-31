@@ -41,10 +41,24 @@ jobs:
         with:
           persist-credentials: false
 
-      # Reclaim disk before building: the stock image ships ~9 GB of
-      # Android SDK and ~3 GB of .NET we never touch.
+      # Reclaim disk before building: the stock image ships ~12 GB of
+      # Android SDK, ~6 GB of Haskell (.ghcup), ~3 GB of Swift, and other
+      # pre-installed tooling we never touch. Removing these plus Docker
+      # images leaves ample headroom for Bevy's debug build artifacts.
       - name: Free disk space
-        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache/CodeQL
+        run: |
+          sudo rm -rf \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/.ghcup \
+            /opt/ghc \
+            /usr/share/swift \
+            /usr/lib/jvm \
+            /usr/local/share/powershell \
+            /usr/lib/google-cloud-sdk || true
+          sudo docker image prune --all --force || true
+          df -h /
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@ff7f6a3374ce205788da40198ec918bd5d67aea7 # 1.99.0
@@ -106,6 +120,7 @@ jobs:
       # unit tests demanded --all-features, forcing a full rebuild).
       - name: Build everything
         run: |
+          df -h /
           cargo test --manifest-path fixtures/Cargo.toml --workspace --no-run
           cargo test --locked --features brp --no-run
           cargo test --locked --workspace --all-features --lib --tests --no-run
