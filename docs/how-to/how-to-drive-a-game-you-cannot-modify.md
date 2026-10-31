@@ -18,7 +18,7 @@ feature — enable it in the test-side dependency:
 
 ```toml
 [dev-dependencies]
-bevy_playtest = { version = "0.3", features = ["brp"] }
+bevy_playtest = { version = "0.4", features = ["brp"] }
 ```
 
 ```rust
