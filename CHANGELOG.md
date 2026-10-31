@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/mcanevet/bevy_playtest/compare/v0.4.0...v0.5.0) - 2026-10-31
+
+### Other
+
+- fix review findings on battery-first restructure
+- lead with the zero-config battery in README and tutorial
+- ci Update rust dependencies to 0.20.1
+- expand runner disk-space cleanup
+- [**breaking**] remove reset/cheat hooks, observes, and strict_coverage ([#44](https://github.com/mcanevet/bevy_playtest/pull/44))
+- ci Update release-plz/action action to v0.5.147
+
 ## [0.4.0](https://github.com/mcanevet/bevy_playtest/compare/v0.3.0...v0.4.0) - 2026-10-26
 
 ### Added
