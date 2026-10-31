@@ -1,7 +1,8 @@
 # Why two driving modes
 
-- **In-process** gives the bot full programmatic control: reset hooks,
-  cheat hooks, direct ECS access. Cost: the game takes the harness as a
+- **In-process** gives the bot full programmatic control: direct ECS
+  access, panic/log capture, replay verification. Cost: the game takes
+  the harness as a
   (test-build-only) dependency and the fixture shares the crate graph —
   the binary is re-run under the harness's runner for a takeover run.
 - **External-BRP** trades power for zero coupling: the game runs as a

@@ -484,17 +484,14 @@ async fn run_brp_inner(
         // diagnostic.
         error: (status != PlaytestStatus::Pass).then(|| truncate_chars(&stderr, 2000)),
         action_log: vec![],
-        cheat_count: 0,
         choices: recorded_choices,
         harness_mode: "external_brp".to_string(),
         scenario_source: None,
-        reset_hooks_registered: None,
         brp_parity: Some(brp_parity),
         // Log capture does not exist in BRP mode by design (the game is
         // a subprocess whose logs go to pipes) — the field's concept
         // does not apply there, so it stays absent.
         log_capture_available: None,
-        coverage: None,
     };
     Ok(report)
 }

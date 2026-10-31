@@ -37,12 +37,12 @@ are also configurable. This mode drives the chaos bot only. The oracle
 set is reduced but not as far as you might expect: bounds, NaN transforms,
 and the frozen-world (liveness) check all run over BRP queries.
 
-To restore the remaining mode-1 capabilities (panic/log capture,
-reset/cheat hooks, time scale control), add `PlaytestBrpPlugin` to the
-game and enable the `brp-plugin` feature on the harness side: it serves
-the `bevy_playtest/health`, `/reset`, `/cheat`, and `/time` BRP methods,
-and the report's `brp_parity` field flips from "degraded" to "full". The
-README's BRP parity matrix lists exactly which capabilities restore.
+To restore the remaining mode-1 capabilities (panic/log capture and
+time scale control), add `PlaytestBrpPlugin` to the game and enable the
+`brp-plugin` feature on the harness side: it serves the
+`bevy_playtest/health` and `/time` BRP methods, and the report's
+`brp_parity` field flips from "degraded" to "full". The README's BRP
+parity matrix lists exactly which capabilities restore.
 
 Ports: if `port: Some(p)` is set, the harness passes `p` to the game via
 `BRP_PORT` and connects to it; with `port: None` the harness picks a free

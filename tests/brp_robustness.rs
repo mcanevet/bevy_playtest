@@ -101,7 +101,7 @@ fn serve_par(listener: TcpListener, advertise: bool) {
         let is_health = req.contains("\"bevy_playtest/health\"");
         let body = if is_discover {
             if advertise {
-                "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"bevy_playtest/health\":{},\"bevy_playtest/reset\":{},\"bevy_playtest/cheat\":{},\"bevy_playtest/time\":{}}}".to_string()
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"bevy_playtest/health\":{},\"bevy_playtest/time\":{}}}".to_string()
             } else {
                 "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"world.query\":{}}}".to_string()
             }

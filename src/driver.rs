@@ -16,7 +16,6 @@ use bevy_transform::prelude::Transform;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::contract::{CheatHooks, ResetHooks};
 use crate::enums::{BotType, PlaytestStatus};
 use crate::rules::Rule;
 use crate::scenario::{validate_scenario, Scenario, ScenarioError};
@@ -628,38 +627,6 @@ pub struct FrameTimingStats {
     pub anomalies: u64,
 }
 
-fn pretty_cmp(cmp: crate::scenario::CountCmp) -> &'static str {
-    match cmp {
-        crate::scenario::CountCmp::Lt => "fewer",
-        crate::scenario::CountCmp::Gt => "more",
-        crate::scenario::CountCmp::Eq => "equal",
-    }
-}
-
-fn normalize_digits(msg: &str) -> String {
-    let mut out = String::with_capacity(msg.len());
-    let mut prev_digit = false;
-    for c in msg.chars() {
-        if c.is_ascii_digit() {
-            if !prev_digit {
-                out.push('#');
-            }
-            prev_digit = true;
-        } else {
-            out.push(c);
-            prev_digit = false;
-        }
-    }
-    out
-}
-
-fn transform_entity_count(world: &mut bevy_ecs::prelude::World) -> usize {
-    world
-        .query_filtered::<(), bevy_ecs::query::With<bevy_transform::prelude::Transform>>()
-        .iter(world)
-        .count()
-}
-
 /// Run condition: fingerprint only when the scenario opted in.
 fn verify_replay_enabled(scenario: Res<ScenarioResource>) -> bool {
     scenario.0.verify_replay
@@ -748,159 +715,6 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     app.insert_resource(RunChoices(crate::choice::ChoiceStream::from_seed(
         scenario.bot.seed,
     )));
-
-    // Resets: validate against registered hooks, then invoke (inside a
-    // panic boundary — a panicking hook is reported, not fatal).
-    // needs_reset: any cheat/restart semantics in the scenario mean the
-    // run depends on reset semantics — without hooks this must fail
-    // loudly (never a fake no-op reset).
-    let needs_reset =
-        !scenario.setup.resets.is_empty() || scenario.setup.cheats.iter().any(|c| c.frame == 0);
-    let registered_hooks = app
-        .world()
-        .get_resource::<ResetHooks>()
-        .map(|h| !h.0.is_empty())
-        .unwrap_or(false);
-    if needs_reset && !scenario.setup.resets.is_empty() && !registered_hooks {
-        return Err(ScenarioError::ResetMissing);
-    }
-    let reset_hooks_registered = needs_reset.then_some(registered_hooks);
-    {
-        let kinds: Vec<String> = scenario
-            .setup
-            .resets
-            .iter()
-            .map(|r| r.kind.clone())
-            .collect();
-        for k in &kinds {
-            let known: Vec<String> = app
-                .world()
-                .get_resource::<ResetHooks>()
-                .map(|h| h.0.keys().cloned().collect())
-                .unwrap_or_default();
-            if !known.contains(k) {
-                return Err(ScenarioError::UnknownReset {
-                    kind: k.clone(),
-                    known: known.clone(),
-                });
-            }
-        }
-        // Invoke (hooks taken out of the world to avoid double-borrow).
-        if !kinds.is_empty() {
-            let hooks = app
-                .world_mut()
-                .remove_resource::<ResetHooks>()
-                .unwrap_or_default();
-            for k in &kinds {
-                if let Some(hook) = hooks.0.get(k) {
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        hook(app.world_mut());
-                    }))
-                    .unwrap_or_else(|_| {
-                        if let Some(mut violations) =
-                            app.world_mut().get_resource_mut::<RunViolations>()
-                        {
-                            violations.0.report(
-                                rules::Rule::ResetHookPanicked.name(),
-                                k,
-                                format!("reset hook '{k}' panicked"),
-                                0,
-                            );
-                        }
-                    });
-                }
-            }
-            app.insert_resource(hooks);
-        }
-    }
-
-    // Cheats: validate kinds (scheduled application lands with the
-    // cheat scheduler; setup.cheats are applied immediately pre-loop).
-    {
-        let known: Vec<String> = app
-            .world()
-            .get_resource::<CheatHooks>()
-            .map(|h| h.0.keys().cloned().collect())
-            .unwrap_or_default();
-        for cheat in &scenario.setup.cheats {
-            if !known.contains(&cheat.kind) {
-                return Err(ScenarioError::UnknownCheat {
-                    kind: cheat.kind.clone(),
-                    known: known.clone(),
-                });
-            }
-        }
-        let scheduled = !scenario.setup.cheats.is_empty();
-        if scheduled {
-            let hooks = app
-                .world_mut()
-                .remove_resource::<CheatHooks>()
-                .unwrap_or_default();
-            for cheat in &scenario.setup.cheats {
-                // Postcondition contract: entity count before the hook
-                // vs after, evaluated immediately — catches silent
-                // no-op hooks (the anti-lying-oracle).
-                let pre_count = cheat
-                    .expects
-                    .as_ref()
-                    .map(|_| transform_entity_count(app.world_mut()));
-                if let Some(hook) = hooks.0.get(&cheat.kind) {
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        hook(app.world_mut());
-                    }))
-                    .unwrap_or_else(|_| {
-                        if let Some(mut violations) =
-                            app.world_mut().get_resource_mut::<RunViolations>()
-                        {
-                            violations.0.report(
-                                rules::Rule::CheatHookPanicked.name(),
-                                &cheat.kind,
-                                format!("cheat hook '{}' panicked", cheat.kind),
-                                0,
-                            );
-                        }
-                    });
-                }
-                if let Some(expected) = &cheat.expects {
-                    let post_count = transform_entity_count(app.world_mut());
-                    let ok = match expected.transform_entity_count {
-                        crate::scenario::CountCmp::Lt => {
-                            post_count < pre_count.unwrap_or(post_count)
-                        }
-                        crate::scenario::CountCmp::Gt => {
-                            post_count > pre_count.unwrap_or(post_count)
-                        }
-                        crate::scenario::CountCmp::Eq => {
-                            post_count == pre_count.unwrap_or(post_count)
-                        }
-                    };
-                    if !ok {
-                        if let Some(mut violations) =
-                            app.world_mut().get_resource_mut::<RunViolations>()
-                        {
-                            violations.0.report(
-                                rules::Rule::CheatContractViolated.name(),
-                                &cheat.kind,
-                                format!(
-                                    "cheat '{}' postcondition violated: transform \
-                                     entity count was {}, expected {} after the \
-                                     hook ran ({} -> {}) — the hook may be a \
-                                     silent no-op",
-                                    cheat.kind,
-                                    pretty_cmp(expected.transform_entity_count),
-                                    pre_count.unwrap_or(post_count),
-                                    pre_count.unwrap_or(post_count),
-                                    post_count
-                                ),
-                                0,
-                            );
-                        }
-                    }
-                }
-            }
-            app.insert_resource(hooks);
-        }
-    }
 
     if scenario.simulated_time {
         app.insert_resource(TimeUpdateStrategy::ManualDuration(
@@ -999,19 +813,6 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         .unwrap_or_default();
 
     let drained = sinks::drain();
-    let observed_info = sinks::drain_observed_info();
-    // Coverage v1: log-based observation. A declared observation is
-    // "observed" when any captured log/panic message contains the
-    // declared name (digit-normalized on both sides per the sinks
-    // dedup convention). Observation is opt-in by logging convention.
-    let normalized_messages: Vec<String> = drained
-        .iter()
-        .map(|c| match c {
-            sinks::Captured::Log { message, .. } => normalize_digits(message),
-            sinks::Captured::Panic { message, .. } => normalize_digits(message),
-        })
-        .chain(observed_info.iter().map(|m| normalize_digits(m)))
-        .collect();
     let mut snap = violations.snapshot();
     // Drain panics/logs captured during the run (including the one
     // that unwound the loop itself) and merge into the snapshot.
@@ -1103,78 +904,6 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         })
         .collect();
 
-    // Coverage: declared observations (log-based) + chaos surface exercise.
-    // Mouse draws do NOT contribute to key-surface coverage.
-    let coverage = if !scenario.observes.is_empty() || scenario.bot.raw_surface.is_some() {
-        let fallback = ["KeyW", "KeyA", "KeyS", "KeyD"];
-        let declared_keys: Vec<&str> = match &scenario.bot.raw_surface {
-            Some(s) => s.keys.iter().map(String::as_str).collect(),
-            _ => fallback.to_vec(),
-        };
-        let drawn_keys: std::collections::HashSet<String> = choices
-            .iter()
-            .filter(|c| c.kind == crate::choice::ChoiceKind::Key)
-            .filter_map(|c| {
-                let idx = c.bound as usize;
-                if idx < declared_keys.len() {
-                    Some(crate::scenario::normalize_key_name(declared_keys[idx])?.to_string())
-                } else {
-                    None
-                }
-            })
-            .collect();
-        let unexercised: Vec<String> = declared_keys
-            .iter()
-            .filter(|k| {
-                let norm = crate::scenario::normalize_key_name(k);
-                norm.is_none() || !drawn_keys.contains(norm.unwrap())
-            })
-            .map(|k| k.to_string())
-            .collect();
-        let surface_coverage = if declared_keys.is_empty() {
-            1.0
-        } else {
-            (declared_keys.len() - unexercised.len()) as f32 / declared_keys.len() as f32
-        };
-        let mut observations: Vec<crate::state::ObservationRecord> = scenario
-            .observes
-            .iter()
-            .map(|name| {
-                let norm_name = normalize_digits(name);
-                let observed = normalized_messages.iter().any(|m| m.contains(&norm_name));
-                crate::state::ObservationRecord {
-                    name: name.clone(),
-                    observed,
-                }
-            })
-            .collect();
-        observations.sort_by(|a, b| a.name.cmp(&b.name));
-        let holes = observations.iter().filter(|o| !o.observed).count();
-        if scenario.strict_coverage && holes > 0 {
-            snap.push(crate::state::ViolationEntry {
-                rule: crate::rules::Rule::CoverageHole.name().to_string(),
-                target: "coverage".to_string(),
-                first_frame: 0,
-                last_frame: state.frame,
-                count: holes as u64,
-                detail: format!(
-                    "{} declared observation(s) were never observed by any \
-                     mechanism; declare logging for these events or wire a hook",
-                    holes
-                ),
-                last_detail: "unobserved declarations".to_string(),
-            });
-            status = PlaytestStatus::Fail;
-        }
-        Some(crate::state::Coverage {
-            observations,
-            unexercised_keys: unexercised,
-            surface_coverage,
-        })
-    } else {
-        None
-    };
-
     // Log-capture honesty: if the harness's capture subscriber lost the
     // write-once global default (typically DefaultPlugins' LogPlugin
     // installed first), log_error/log_warn findings are under-reported
@@ -1206,18 +935,15 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         status,
         violations: snap,
         metrics,
-        coverage,
         frame_count: state.frame,
         tps: state.tps,
         simulated_duration_s: state.frame as f64 / state.tps as f64,
         wall_time_s,
         error: crash_detected.then(|| "run loop panicked".to_string()),
         action_log,
-        cheat_count: scenario.setup.cheats.len(),
         choices,
         harness_mode: "in_process".to_string(),
         scenario_source: None,
-        reset_hooks_registered,
         brp_parity: None,
         log_capture_available: Some(log_capture_available),
     })

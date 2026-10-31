@@ -28,10 +28,8 @@ Public API surface for integrators.
   "simulated_time": boolean,      // default true
   "single_threaded": boolean,     // default true
   "strict_warnings": boolean,     // default false
-  "strict_coverage": boolean,     // default false
   "duration_s": number,           // default 15.0; max 3600
   "verify_replay": boolean,       // default false; in-process only, needs single_threaded
-  "observes": ["string"],         // default []; declared behavioral observations
   "invariants": [
     {
       "name": "string",
@@ -42,18 +40,6 @@ Public API surface for integrators.
       "target_selector": "all"   // optional; only "all" exists
     }
   ],
-  "setup": {
-    "resets": [{ "kind": "string" }],
-    "cheats": [
-      {
-        "frame": number,          // must be 0 (pre-run); other values rejected
-        "kind": "string",
-        "expects": {              // optional postcondition on the hook
-          "transform_entity_count": "lt" | "gt" | "eq"
-        }
-      }
-    ]
-  },
   "oracles": ["string"],          // rejected: oracle selection not implemented
   "liveness": {
     "mode": "real_time",          // "off" rejected: not implemented
@@ -101,7 +87,7 @@ Two distinct error classes, at different stages:
 - **Known-but-unimplemented fields** parse, then reject at validation
   with `NotImplemented`: `eventually_s`, `after_s`, `before_s`,
   invariant `value`/`path`/`check` selectors, `oracles` selection,
-  `liveness.mode: "off"`, nonzero cheat `frame`s. Unknown rule values
+  `liveness.mode: "off"`. Unknown rule values
   (e.g. `custom`) and unknown bot types (e.g. `pursuit`, `replay`) fail
   deserialization naming the offender.
 - **Invalid values** reject with specific `Rejected` errors:
@@ -150,18 +136,14 @@ Two distinct error classes, at different stages:
 - `schema_version`, `frame_count`, `tps`, `simulated_duration_s`,
   `wall_time_s`, `error`
 - `action_log`: `[{ frame, source, action, details }]` — audited bot
-  inputs and cheat invocations
-- `cheat_count`, `choices` (the bot's recorded random draws)
+  inputs
+- `choices` (the bot's recorded random draws)
 - `harness_mode`: `"takeover"` or `"external_brp"`
 - `scenario_source`: `"file"`, `"builtin_smoke"`, or `"builtin_battery"`
-- `reset_hooks_registered`, `log_capture_available` (absent when not
-  applicable; `log_capture_available: false` also produces an
+- `log_capture_available` (absent when not applicable; `log_capture_available: false` also produces an
   informational `log_capture_lost` violation — see the
   [rejected-scenario recipe](../how-to/how-to-handle-a-rejected-scenario.md))
 - `brp_parity`: `"full"` | `"degraded"` (external-BRP runs only)
-- `coverage`: `{ observations: [{ name, observed }], unexercised_keys,
-  surface_coverage }` (absent unless the scenario declared `observes`
-  or a chaos surface)
 
 Report helpers on `PlaytestReport`:
 
@@ -208,28 +190,11 @@ for `cargo test` integration:
   swaps winit's runner for a schedule loop under the takeover env vars
   (feature `takeover-winit`)
 - `PlaytestBrpPlugin` — restores mode-1 capabilities to external-BRP
-  mode via `bevy_playtest/health`, `/reset`, `/cheat`, `/time` BRP
-  methods (feature `brp-plugin`)
+  mode via `bevy_playtest/health` and `/time` BRP methods (feature `brp-plugin`)
 
 Plugin order: add `PlaytestPlugin` **after** any plugin group that sets
 a runner — the runner swap is last-set-wins, and a wrong order silently
 disables the takeover.
-
-## Hooks
-
-Reset/cheat hooks are registered via the harness's typed registry in
-`bevy_playtest::contract`:
-
-```rust
-use bevy_playtest::contract::ResetHooks;
-
-app.world_mut().insert_resource(ResetHooks::default());
-app.world_mut()
-    .resource_mut::<ResetHooks>()
-    .register("name", |world| { /* ... */ });
-```
-
-Unknown kinds are rejected at scenario load.
 
 ## Environment variables
 
