@@ -6,8 +6,8 @@ soft-locks, panics and error spam — and fail a plain `cargo test` the
 moment any of them fires.
 
 **Doctrine: zero friction.** The recommended integration touches three
-files you already have — `Cargo.toml`, `src/main.rs`, `tests/playtest.rs`
-— needs no scenario to start, no contract in game code, and compiles to
+files — `Cargo.toml`, `src/main.rs`, `tests/playtest.rs` — needs no
+scenario to start, no contract in game code, and compiles to
 zero bevy_playtest code in normal and release builds.
 
 **Documentation:** [tutorial](docs/tutorial/) · [how-to guides](docs/how-to/) ·
@@ -92,7 +92,7 @@ by default) and mouse clicks (all primary buttons) at 10 Hz, holding
 each input 2 frames so `ButtonInput`-based games observe it — while
 these oracles watch:
 
-- **NaN/finite transforms** — any non-finite `Transform` → Fail
+- **Non-finite translations** — any non-finite `Transform.translation` → Fail (rotations/scales are not checked)
 - **Runaway geometry** — entities leaving bounds (a hard-coded global
   ±1000 on x/y/z runs even with nothing declared; authored scenarios
   tighten per-axis)
@@ -100,11 +100,18 @@ these oracles watch:
   window → Fail (catches soft-locks)
 - **Panic capture** — crash → Crash
 - **Log capture** — ERROR → Fail, WARN → informational
-- **Vacuity guard** — no entities and no inputs means the run proved
-  nothing; it fails loudly instead of passing vacuously
+- **Vacuity guard** — if no entity with a `Transform` existed at any
+  point during the run, a Pass proves nothing; it fails loudly instead
+  (the criterion is any-frame, so a game whose entities despawn before
+  the end is not flagged)
 
-Everything is deterministic: same seed → same inputs → same result.
-A failing run reproduces bit-for-bit until the game actually changes.
+Determinism: the seed controls the bot's choices — same seed → same
+inputs → same bot behavior. It does not control game-side randomness
+or wall-clock reads, so an unchanged game can still produce a
+different verdict; the battery leaves replay verification off. To
+prove determinism, enable
+[replay verification](#verification-depth-what-is-proven-vs-what-is-asserted),
+which runs the scenario twice and compares per-frame fingerprints.
 
 Declaring nothing is the point. When you need to target a specific
 situation, authored scenarios are data files referenced from the same
@@ -112,12 +119,10 @@ helper — `battery::run_and_expect_clean(binary, "playtests/menu.json")`
 (see the [scenario reference](docs/reference/README.md) for the full
 JSON schema, and [script keys instead of
 chaos](docs/how-to/how-to-script-keys-instead-of-chaos.md) for scripted
-input). To prove determinism itself, [replay
-verification](#verification-depth-what-is-proven-vs-what-is-asserted)
-runs the scenario twice and compares fingerprints.
+input).
 
-Opt-outs: `mouse_buttons: []` in a scenario's `raw_surface` drops
-clicks; `"keys": []` drops chaos keys (mouse-only chaos).
+Opt-outs: `mouse_buttons: []` under a scenario's `bot.raw_surface`
+drops clicks; `"keys": []` there drops chaos keys (mouse-only chaos).
 
 ## How mode 1 works
 
