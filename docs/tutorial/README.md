@@ -108,40 +108,47 @@ That `ok` is a verdict, not a formality: for the battery's duration a
 seeded bot pressed keys in your game while NaN checks, bounds checks,
 the liveness oracle, panic capture and log capture all watched — and
 none of them fired. Had something gone wrong, the test would print the
-violation list instead — NaN transform, out-of-bounds entity, crash, or
-ERROR log, each with the tick and entities involved.
+violation list instead — non-finite translation, out-of-bounds entity,
+crash, or ERROR log, each with the tick and entities involved.
 
 The battery catches out of the box:
-- **NaN/finite transforms** — any non-finite `Transform` → Fail
+- **Non-finite translations** — any non-finite `Transform.translation` → Fail (rotations/scales are not checked)
 - **Runaway geometry** — entities leaving bounds (a hard-coded global
   ±1000 on x/y/z runs even with nothing declared)
 - **Frozen world** — no entity movement across the liveness grace
   window → Fail (catches soft-locks)
 - **Panic capture** — crash → Crash
 - **Log capture** — ERROR → Fail, WARN → informational
-- **Vacuity guard** — no entities and no inputs means the run proved
-  nothing; it fails loudly instead of passing vacuously
+- **Vacuity guard** — if no entity with a `Transform` existed at any
+  point during the run, a Pass proves nothing; it fails loudly instead
+  (the criterion is any-frame, so a game whose entities despawn before
+  the end is not flagged)
 
 ## 5. Make it repeat
 
-Same seed → same key sequence → same result. A failing run will fail
-identically on every re-run — that's the feature. So when a failure
-appears, we don't roll the dice again: we leave the seed alone, re-run
-to reproduce while we debug the game, and the same seed proves the fix
-— the run passes again only when the game actually changed.
+Same seed → same key sequence → same bot behavior. A failing run
+reproduces identically on every re-run — that's the feature. So when a
+failure appears, we don't roll the dice again: we leave the seed alone,
+re-run to reproduce while we debug the game, and the same seed proves
+the fix — the run passes again only when the game actually changed.
+
+One qualification: the seed controls the bot's choices, not game-side
+randomness or wall-clock reads, so an unchanged game can still produce
+a different verdict. The battery leaves replay verification off; to
+prove determinism itself, see
+[the verification-depth section of the README](../../README.md#verification-depth-what-is-proven-vs-what-is-asserted).
 
 The chaos bot is seeded internally, so declaring nothing is sufficient
-for reproducibility. When you need a specific seed, you can declare one
-in an authored scenario (see step 6 below).
+for reproducible bot behavior. When you need a specific seed, you can
+declare one in an authored scenario (see step 6 below).
 
 ## 6. Author your own scenario (optional)
 
 When the battery isn't specific enough, author a scenario file. Create
 a directory at `playtests/` (or whatever suits your layout) and drop a
-JSON file in it:
+JSON file in it (shown here as `playtests/menu.json`):
 
 ```json
-// playtests/menu.json
 {
   "name": "menu-smoke",
   "bot": { "type": "chaos", "seed": 42 },
@@ -169,7 +176,7 @@ fn menu_scenario() {
 ```
 
 To opt out of mouse clicks, add `"mouse_buttons": []` to the scenario's
-`raw_surface` field. To opt out of chaos keys entirely, add
+`bot.raw_surface`. To opt out of chaos keys entirely, add
 `"keys": []` (mouse-only chaos). See the
 [scenario reference](../reference/README.md) for the full JSON schema,
 and [script keys instead of chaos](../how-to/how-to-script-keys-instead-of-chaos.md)
@@ -178,8 +185,8 @@ for scripted input.
 ## Wrap-up
 
 We now have a playtest that any contributor can run with plain
-`cargo test`, that replays bit-for-bit from its seed, and that fails
-loudly the moment the game misbehaves.
+`cargo test`, that replays the bot's inputs bit-for-bit from its seed,
+and that fails loudly the moment the game misbehaves.
 
 When you're ready for the next step — the exact JSON fields, scripting
 keys instead of chaos, proving determinism, or the reasoning behind the
