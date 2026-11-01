@@ -10,10 +10,12 @@ fn playtest_battery() {
         bevy_playtest::battery::BUILTIN_BATTERY,
     )
     .expect("battery infrastructure failure");
-    // Known finding: mines waits for user input (no Transform updates),
-    // which trips the liveness oracle. Once PR #23 (synthetic_pointer
-    // bot) drives pointer input through the UI, this should assert
-    // empty instead.
+    // Known finding: mines is pointer-driven (bevy_picking) and the
+    // harness's chaos mouse updates only its own CursorInputResource —
+    // no CursorMoved reaches the game, so picking never fires and
+    // the board sits static waiting for clicks. The keyboard
+    // just_pressed fix doesn't apply here. Expected to flip to empty
+    // once the harness emits CursorMoved.
     assert_eq!(report.violation_pairs(), [("frozen_world", "world")]);
 }
 
