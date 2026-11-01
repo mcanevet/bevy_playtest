@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/mcanevet/bevy_playtest/compare/v0.5.0...v0.6.0) - 2026-11-01
+
+### Added
+
+- emit wrapped KeyboardInput events with populated logical_key/text
+- teach frozen_world oracle about UI activity (ui-liveness)
+- [**breaking**] remove external-BRP mode
+- emit wrapped WindowEvent messages for pointer-driven games
+
+### Fixed
+
+- deliver just_pressed under DefaultPlugins takeover
+- *(ci)* derive Bevy fixture rev from Cargo.lock
+
+### Other
+
+- refresh fixtures Cargo.lock to Bevy 0.20.1
+- key target cache on fetch-script hash
+
 ## [0.5.0](https://github.com/mcanevet/bevy_playtest/compare/v0.4.0...v0.5.0) - 2026-10-31
 
 ### Other
