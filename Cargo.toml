@@ -24,6 +24,14 @@ bevy_input = { version = "0.20.1", default-features = false, features = ["std", 
 # Vec2 for cursor positions. Already in every consumer graph via bevy_input;
 # a direct dependency only adds the type, no new crates.
 bevy_math = { version = "0.20.1", default-features = false }
+# Wrapped WindowEvent messages for cursor/button delivery: bevy_picking
+# reads `bevy_window::WindowEvent` (what winit writes), not the raw
+# bevy_input messages the harness writes, so pointer-driven games
+# (bevy_ui picking) need the wrapped forms too. Core to both driving
+# modes (mode parity), hence non-optional. default-features = false
+# adds only bevy_window + raw-window-handle beyond the already-shared
+# bevy_{app,ecs,input,math,reflect} set.
+bevy_window = { version = "0.20.1", default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["std", "registry", "fmt", "env-filter"] }
@@ -70,6 +78,14 @@ required-features = ["takeover"]
 [[bin]]
 name = "takeover_demo_input"
 path = "src/bin/takeover_demo_input.rs"
+required-features = ["takeover"]
+
+# Picking-delivery regression demo: world moves only on
+# `PointerClick` under a picking-capable graph (see
+# tests/input_delivery.rs).
+[[bin]]
+name = "takeover_demo_picking"
+path = "src/bin/takeover_demo_picking.rs"
 required-features = ["takeover"]
 
 [features]

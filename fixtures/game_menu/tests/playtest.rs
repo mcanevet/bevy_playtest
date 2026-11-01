@@ -10,12 +10,12 @@ fn playtest_battery() {
         bevy_playtest::battery::BUILTIN_BATTERY,
     )
     .expect("battery infrastructure failure");
-    // Known finding: game_menu is pointer-driven (bevy_picking) and the
-    // harness's chaos mouse updates only its own CursorInputResource —
-    // no CursorMoved reaches the game, so picking never fires and the
-    // menu sits static. The keyboard just_pressed fix doesn't apply
-    // here. Expected to flip to empty once the harness emits
-    // CursorMoved.
+    // Known finding: game_menu is pointer-driven (bevy_picking); the
+    // harness now emits wrapped WindowEvents, so picking fires.
+    // However, the frozen_world oracle watches Changed<Transform>; Bevy 0.20
+    // UI nodes carry UiTransform, not Transform, so pure-UI games remain
+    // flagged even when actively responding. This is an oracle coverage
+    // gap, not a delivery failure.
     assert_eq!(report.violation_pairs(), [("frozen_world", "world")]);
 }
 

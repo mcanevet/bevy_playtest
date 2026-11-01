@@ -1440,6 +1440,7 @@ dependencies = [
  "bevy_tasks",
  "bevy_time",
  "bevy_transform",
+ "bevy_window",
  "bevy_winit",
  "serde",
  "serde_json",
