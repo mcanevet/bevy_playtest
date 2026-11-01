@@ -152,6 +152,58 @@ const KEY_CODE_DIGITS: [KeyCode; 10] = [
     KeyCode::Digit9,
 ];
 
+/// Derives `logical_key` for a key code the way winit would on a US
+/// QWERTY layout — the same assumption the `KeyCode` names themselves
+/// make. Non-printable keys get their named `Key` variant. When
+/// `shift_held` is true, letter keys map to their uppercase `Character`
+/// variant, matching winit's modifier-aware logical key.
+///
+/// This matters for consumers like bevy_text's editable-text path,
+/// which derives `TextEdit::Insert` from `KeyboardInput::logical_key`:
+/// without a `Key::Character` logical key, text inputs are deaf to bot
+/// typing even though `ButtonInput<KeyCode>` sees the press.
+fn logical_key_for_code(code: KeyCode, shift_held: bool) -> bevy_input::keyboard::Key {
+    use bevy_input::keyboard::{Key, KeyCode as KC};
+
+    // Letter keys: case follows Shift (winit resolves the level before
+    // reporting the logical key).
+    if let Some(i) = KEY_CODE_LETTERS.iter().position(|&k| k == code) {
+        let base = if shift_held {
+            (b'a' + i as u8).to_ascii_uppercase()
+        } else {
+            b'a' + i as u8
+        };
+        return Key::Character((base as char).to_string().into());
+    }
+
+    match code {
+        KC::Space => Key::Space,
+        KC::Enter => Key::Enter,
+        KC::Tab => Key::Tab,
+        KC::Backspace => Key::Backspace,
+        KC::ArrowUp => Key::ArrowUp,
+        KC::ArrowDown => Key::ArrowDown,
+        KC::ArrowLeft => Key::ArrowLeft,
+        KC::ArrowRight => Key::ArrowRight,
+        KC::Escape => Key::Escape,
+        KC::ShiftLeft | KC::ShiftRight => Key::Shift,
+        KC::ControlLeft | KC::ControlRight => Key::Control,
+        KC::AltLeft | KC::AltRight => Key::Alt,
+        KC::SuperLeft | KC::SuperRight => Key::Super,
+        KC::Digit0 => Key::Character("0".into()),
+        KC::Digit1 => Key::Character("1".into()),
+        KC::Digit2 => Key::Character("2".into()),
+        KC::Digit3 => Key::Character("3".into()),
+        KC::Digit4 => Key::Character("4".into()),
+        KC::Digit5 => Key::Character("5".into()),
+        KC::Digit6 => Key::Character("6".into()),
+        KC::Digit7 => Key::Character("7".into()),
+        KC::Digit8 => Key::Character("8".into()),
+        KC::Digit9 => Key::Character("9".into()),
+        _ => KEY_UNIDENTIFIED.clone(),
+    }
+}
+
 /// Chaos bot: emits random raw key presses. Uses the scenario's
 /// raw_surface (or the default WASD+arrows surface) — it does not yet
 /// consult an IntentSurface. Keys are held for `hold_frames` frames before
@@ -167,7 +219,8 @@ fn chaos_bot_system(
     scenario: Res<ScenarioResource>,
     mut choices: ResMut<RunChoices>,
     mut hold_state: ResMut<ChaosHoldState>,
-    mut writer: MessageWriter<KeyboardInput>,
+    primary_window: Query<Entity, With<bevy_window::PrimaryWindow>>,
+    mut keyboard: BotKeyboardWriters,
 ) {
     let rate = scenario.0.bot.input_rate_hz.max(1);
     let interval = (state.tps / rate as u64).max(1);
@@ -178,16 +231,7 @@ fn chaos_bot_system(
     // Release held key if its hold duration expired.
     if let Some((code, release_at)) = hold_state.held {
         if state.frame >= release_at {
-            writer.write(KeyboardInput {
-                key_code: code,
-                logical_key: bevy_input::keyboard::Key::Unidentified(
-                    bevy_input::keyboard::NativeKey::Unidentified,
-                ),
-                state: ButtonState::Released,
-                text: None,
-                repeat: false,
-                window: Entity::PLACEHOLDER,
-            });
+            keyboard.key_event(code, ButtonState::Released, primary_window.single().ok());
             hold_state.held = None;
         }
     }
@@ -227,16 +271,11 @@ fn chaos_bot_system(
     let Some(code) = keycode_from_canonical(canonical) else {
         return;
     };
-    writer.write(KeyboardInput {
-        key_code: code,
-        logical_key: bevy_input::keyboard::Key::Unidentified(
-            bevy_input::keyboard::NativeKey::Unidentified,
-        ),
-        state: ButtonState::Pressed,
-        text: None,
-        repeat: false,
-        window: Entity::PLACEHOLDER,
-    });
+    // Dual-form emission mirrors winit's pipeline: raw `KeyboardInput`
+    // plus wrapped `WindowEvent::KeyboardInput`, with `logical_key`
+    // derived for the key code (US QWERTY assumption, same as the
+    // `KeyCode` names) and `text` set on printable presses.
+    keyboard.key_event(code, ButtonState::Pressed, primary_window.single().ok());
     state.metrics.input_count += 1;
     hold_state.held = Some((code, state.frame + hold_frames));
 }
@@ -254,19 +293,13 @@ fn synthetic_keyboard_bot_system(
     mut state: ResMut<RunState>,
     scenario: Res<ScenarioResource>,
     mut hold_state: ResMut<ScheduledHoldState>,
-    mut writer: MessageWriter<KeyboardInput>,
+    primary_window: Query<Entity, With<bevy_window::PrimaryWindow>>,
+    mut keyboard: BotKeyboardWriters,
 ) {
     // Release any keys whose hold duration expired.
     hold_state.held.retain(|(code, release_at)| {
         if state.frame >= *release_at {
-            writer.write(KeyboardInput {
-                key_code: *code,
-                logical_key: KEY_UNIDENTIFIED,
-                state: ButtonState::Released,
-                text: None,
-                repeat: false,
-                window: Entity::PLACEHOLDER,
-            });
+            keyboard.key_event(*code, ButtonState::Released, primary_window.single().ok());
             false
         } else {
             true
@@ -285,14 +318,10 @@ fn synthetic_keyboard_bot_system(
         };
         // Per-press hold duration (default 1 frame after the press).
         let hold_frames = kp.hold_frames.max(1);
-        writer.write(KeyboardInput {
-            key_code: code,
-            logical_key: KEY_UNIDENTIFIED,
-            state: ButtonState::Pressed,
-            text: None,
-            repeat: false,
-            window: Entity::PLACEHOLDER,
-        });
+        // Dual-form emission mirrors winit's pipeline: raw `KeyboardInput`
+        // plus wrapped `WindowEvent::KeyboardInput`, with `logical_key`
+        // derived for the key code and `text` set on printable presses.
+        keyboard.key_event(code, ButtonState::Pressed, primary_window.single().ok());
         state.metrics.input_count += 1;
         hold_state.held.push((code, state.frame + hold_frames));
     }
@@ -314,6 +343,84 @@ fn mouse_button_from_canonical(canonical: &str) -> Option<bevy_input::mouse::Mou
         "forward" => MouseButton::Forward,
         _ => return None,
     })
+}
+
+/// Bundled message writers for the keyboard bots: the raw
+/// `KeyboardInput` form (feeds `ButtonInput<KeyCode>` / `ButtonInput<Key>`)
+/// and the wrapped `bevy_window::WindowEvent` form. Mirrors the mouse-bot
+/// dual-form pattern from #50 so consumers of either stream see bot keys.
+#[derive(SystemParam)]
+struct BotKeyboardWriters<'w> {
+    raw: MessageWriter<'w, KeyboardInput>,
+    window: MessageWriter<'w, bevy_window::WindowEvent>,
+    modifiers: ResMut<'w, KeyboardModifierState>,
+}
+
+/// Held-modifier tracking for the bot keyboard pipeline, mirroring the
+/// OS-side state winit consults when resolving `logical_key`/`text`.
+/// Tracked per physical Shift key so overlapping holds (ShiftLeft still
+/// down when ShiftRight releases) don't clear the modifier early.
+///
+/// This state is owned by the harness rather than read from
+/// `ButtonInput<KeyCode>` because the bot writes messages during
+/// `Update`; the message→`ButtonInput` translation runs in the next
+/// frame's `PreUpdate`, so the resource lags the bot by one frame.
+#[derive(Resource, Default)]
+struct KeyboardModifierState {
+    shift_left_held: bool,
+    shift_right_held: bool,
+}
+
+impl KeyboardModifierState {
+    fn shift_held(&self) -> bool {
+        self.shift_left_held || self.shift_right_held
+    }
+}
+
+impl BotKeyboardWriters<'_> {
+    /// Writes a bot key event through BOTH message forms, mirroring
+    /// winit's pipeline: the raw `KeyboardInput` (feeds
+    /// `ButtonInput<KeyCode>` via `keyboard_input_system`) and the
+    /// wrapped `bevy_window::WindowEvent::KeyboardInput` (what
+    /// wrapped-stream consumers read). `logical_key` and `text` are
+    /// derived via `logical_key_for_code` (US QWERTY assumption, same
+    /// as the `KeyCode` names), with letter case following the tracked
+    /// Shift state; text is set only for presses of printable keys
+    /// (Character and Space — space is printable in winit's
+    /// text-input pipeline), matching winit's shape.
+    fn key_event(
+        &mut self,
+        key_code: KeyCode,
+        btn_state: ButtonState,
+        primary_window: Option<Entity>,
+    ) {
+        // Resolve the modifier state the OS would have had at this
+        // event, then fold the event itself into the tracked state.
+        let shift_held = self.modifiers.shift_held();
+        match key_code {
+            KeyCode::ShiftLeft => self.modifiers.shift_left_held = btn_state.is_pressed(),
+            KeyCode::ShiftRight => self.modifiers.shift_right_held = btn_state.is_pressed(),
+            _ => {}
+        }
+        let logical_key = logical_key_for_code(key_code, shift_held);
+        let raw = KeyboardInput {
+            key_code,
+            logical_key: logical_key.clone(),
+            state: btn_state,
+            text: match (&logical_key, btn_state) {
+                (bevy_input::keyboard::Key::Character(s), ButtonState::Pressed) => Some(s.clone()),
+                (bevy_input::keyboard::Key::Space, ButtonState::Pressed) => Some(" ".into()),
+                _ => None,
+            },
+            repeat: false,
+            window: primary_window.unwrap_or(Entity::PLACEHOLDER),
+        };
+        self.raw.write(raw.clone());
+        if primary_window.is_some() {
+            self.window
+                .write(bevy_window::WindowEvent::KeyboardInput(raw));
+        }
+    }
 }
 
 /// Theoretical viewport size used for headless chaos cursor placement.
@@ -883,10 +990,13 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         app.insert_resource(Time::<()>::default());
     }
 
-    // Register bot + oracle systems once.
+    // Register bot + oracle systems once. The keyboard modifier state
+    // is RESET each run so a previous run's held Shift cannot leak
+    // into a fresh scenario's logical-key case mapping.
     app.init_resource::<ChaosHoldState>();
     app.init_resource::<ScheduledHoldState>();
     app.init_resource::<MouseHoldState>();
+    app.insert_resource(KeyboardModifierState::default());
     app.insert_resource(CursorInputResource::default());
 
     app.insert_resource(crate::invariant_eval::ScenarioInvariants(
