@@ -32,6 +32,13 @@ bevy_math = { version = "0.20.1", default-features = false }
 # adds only bevy_window + raw-window-handle beyond the already-shared
 # bevy_{app,ecs,input,math,reflect} set.
 bevy_window = { version = "0.20.1", default-features = false }
+# Bevy UI for the liveness oracle: watch Changed<UiTransform> in addition
+# to Changed<Transform> so pure-UI games (Bevy 0.20 UI nodes carry
+# UiTransform, not Transform) count as alive when they respond. Optional —
+# in-process-only consumers who skip it keep the narrow dependency set.
+# Under takeover the full `bevy` meta-crate is already in the graph, so
+# enabling this there costs no extra crates (same-version unification).
+bevy_ui = { version = "0.20.1", default-features = false, optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["std", "registry", "fmt", "env-filter"] }
@@ -84,7 +91,11 @@ required-features = ["takeover"]
 default = ["in-process", "takeover"]
 in-process = []
 takeover = ["in-process", "takeover-winit"]
-takeover-winit = ["takeover", "dep:bevy_winit", "dep:bevy"]
+takeover-winit = ["takeover", "dep:bevy_winit", "dep:bevy", "ui-liveness"]
+# UI liveness oracle: extends frozen_world to Changed<UiTransform>. Free
+# under takeover (bevy meta-crate already unifies bevy_ui), so default-on
+# there; in-process-only consumers opt in explicitly.
+ui-liveness = ["dep:bevy_ui"]
 
 # Local dev speedup: line-tables-only debuginfo (fast link, much
 # smaller target/ — full debuginfo made each Bevy rlib 190-370 MB).

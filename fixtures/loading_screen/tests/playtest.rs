@@ -12,10 +12,11 @@ fn playtest_battery() {
     .expect("battery infrastructure failure");
     // Known finding: static loading screen screens trip the liveness
     // oracle. Keyboard delivery is healthy post just_pressed fix —
-    // verified 200+ delivered press transitions — but the level-select
-    // scene holds no animating transforms, so the static-scene verdict
-    // is CORRECT for now. Once the harness emits CursorMoved (pointer
-    // path), menu interaction may animate the scene; re-check then.
+    // verified 200+ delivered press transitions — and the harness now
+    // emits wrapped CursorMoved/WindowEvents (pointer path) plus the UI
+    // liveness watcher (Changed<UiTransform>). Re-checked with both: the
+    // level-select scene still holds no animating transforms or UI
+    // changes, so the static-scene verdict remains CORRECT.
     assert_eq!(report.violation_pairs(), [("frozen_world", "world")]);
 }
 

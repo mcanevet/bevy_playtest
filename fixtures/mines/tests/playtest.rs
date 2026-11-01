@@ -5,19 +5,14 @@
 #[cfg(feature = "playtest")]
 #[test]
 fn playtest_battery() {
-    let report = bevy_playtest::battery::run(
+    // mines is pointer-driven (bevy_picking): the harness emits
+    // wrapped WindowEvents so picking fires, and the UI liveness watcher
+    // (ui-liveness feature) sees Changed<UiTransform> — the board
+    // responds to bot clicks, so the run is healthy: no violations.
+    bevy_playtest::battery::run_and_expect_clean(
         env!("CARGO_BIN_EXE_fixture_mines"),
         bevy_playtest::battery::BUILTIN_BATTERY,
-    )
-    .expect("battery infrastructure failure");
-    // Known finding: mines is pointer-driven (bevy_picking); the
-    // harness now emits wrapped WindowEvents, so picking fires (verified
-    // end-to-end). However, the frozen_world oracle watches
-    // Changed<Transform>; Bevy 0.20 UI nodes carry UiTransform, not
-    // Transform, so pure-UI games remain flagged even when actively
-    // responding. This is an oracle coverage gap, not a delivery
-    // failure.
-    assert_eq!(report.violation_pairs(), [("frozen_world", "world")]);
+    );
 }
 
 // `cargo package` strips `[dev-dependencies]`, so the self-dev-dependency

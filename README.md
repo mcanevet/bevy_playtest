@@ -96,14 +96,16 @@ these oracles watch:
 - **Runaway geometry** — entities leaving bounds (a hard-coded global
   ±1000 on x/y/z runs even with nothing declared; authored scenarios
   tighten per-axis)
-- **Frozen world** — no entity movement across the liveness grace
-  window → Fail (catches soft-locks)
+- **Frozen world** — no entity movement (or UI change, under
+  `ui-liveness`) across the liveness grace window → Fail (catches
+  soft-locks)
 - **Panic capture** — crash → Crash
 - **Log capture** — ERROR → Fail, WARN → informational
-- **Vacuity guard** — if no entity with a `Transform` existed at any
-  point during the run, a Pass proves nothing; it fails loudly instead
-  (the criterion is any-frame, so a game whose entities despawn before
-  the end is not flagged)
+- **Vacuity guard** — if no entity with a `Transform` (or, under
+  `ui-liveness`, a `UiTransform`) existed at any point during the run, a
+  Pass proves nothing; it fails loudly instead (the criterion is
+  any-frame, so a game whose entities despawn before the end is not
+  flagged)
 
 Determinism: the seed controls the bot's choices — same seed → same
 inputs → same bot behavior. It does not control game-side randomness
