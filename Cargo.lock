@@ -251,12 +251,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anyhow"
-version = "1.0.104"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
-
-[[package]]
 name = "approx"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -781,12 +775,8 @@ dependencies = [
  "bevy_transform",
  "bevy_ui",
  "bevy_ui_widgets",
- "bevy_utils",
  "bevy_window",
  "bevy_world_serialization",
- "ron",
- "serde",
- "thiserror 2.0.21",
  "tracing",
 ]
 
@@ -1400,7 +1390,6 @@ version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9c1280bc12c975ddb041b8341b005415024994477479861ea4490b9b7f9f6185"
 dependencies = [
- "async-io",
  "bytemuck",
  "critical-section",
  "foldhash 0.2.0",
@@ -1422,25 +1411,19 @@ dependencies = [
 name = "bevy_playtest"
 version = "0.5.0"
 dependencies = [
- "async-io",
  "bevy",
  "bevy_app",
  "bevy_ecs",
  "bevy_input",
  "bevy_math",
  "bevy_reflect",
- "bevy_remote",
  "bevy_tasks",
  "bevy_time",
  "bevy_transform",
  "bevy_window",
  "bevy_winit",
- "futures-lite",
- "http-body-util",
- "hyper",
  "serde",
  "serde_json",
- "smol-hyper",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1519,32 +1502,6 @@ dependencies = [
  "quote",
  "syn 2.0.119",
  "uuid",
-]
-
-[[package]]
-name = "bevy_remote"
-version = "0.20.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c229dec78a70b24cac779fcb0e019fa86e980f9463bb931258776efcfbdabfa0"
-dependencies = [
- "anyhow",
- "async-channel",
- "async-io",
- "bevy_app",
- "bevy_color",
- "bevy_derive",
- "bevy_dev_tools",
- "bevy_ecs",
- "bevy_log",
- "bevy_platform",
- "bevy_reflect",
- "bevy_tasks",
- "bevy_utils",
- "http-body-util",
- "hyper",
- "serde",
- "serde_json",
- "smol-hyper",
 ]
 
 [[package]]
@@ -3129,71 +3086,6 @@ dependencies = [
  "constgebra",
  "glam",
  "tinyvec",
-]
-
-[[package]]
-name = "http"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "918d3568bebf352712bc2ef3d46a8bcf1a75b373be6539de198e9105cbbf9ce0"
-dependencies = [
- "bytes",
- "itoa",
-]
-
-[[package]]
-name = "http-body"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca2a8f2913ee65f60facd6a5905613afaa448497a0230cc41ce022d93290bc2c"
-dependencies = [
- "bytes",
- "http",
-]
-
-[[package]]
-name = "http-body-util"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23169fe34a5fbcdd3f3862e78fb9b6fccd5f02a6dc6f732547005d45631ce71c"
-dependencies = [
- "bytes",
- "futures-core",
- "http",
- "http-body",
- "pin-project-lite",
-]
-
-[[package]]
-name = "httparse"
-version = "1.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
-
-[[package]]
-name = "httpdate"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
-
-[[package]]
-name = "hyper"
-version = "1.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c3e324da4c95177d6291d4c8730197c0d1822f8a9766814a4a44fa5ab797c9c"
-dependencies = [
- "atomic-waker",
- "bytes",
- "futures-core",
- "http",
- "http-body",
- "httparse",
- "httpdate",
- "itoa",
- "pin-project-lite",
- "smallvec",
- "tokio",
- "want",
 ]
 
 [[package]]
@@ -5092,19 +4984,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "smol-hyper"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7428a49d323867702cd12b97b08a6b0104f39ec13b49117911f101271321bc1a"
-dependencies = [
- "async-executor",
- "async-io",
- "futures-io",
- "hyper",
- "pin-project-lite",
-]
-
-[[package]]
 name = "smol_str"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5490,12 +5369,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "try-lock"
-version = "0.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
-
-[[package]]
 name = "ttf-parser"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5614,15 +5487,6 @@ checksum = "29790946404f91d9c5d06f9874efddea1dc06c5efe94541a7d6863108e3a5e4b"
 dependencies = [
  "same-file",
  "winapi-util",
-]
-
-[[package]]
-name = "want"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec4cdd0dd910afe868b7ef477227d8d538b46b3075031afee8a9f2acb0a2ed0b"
-dependencies = [
- "try-lock",
 ]
 
 [[package]]

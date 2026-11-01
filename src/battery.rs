@@ -162,7 +162,7 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
     // are the entire contract, so they must be set AFTER the strip.
     for (key, _) in std::env::vars_os() {
         if let Some(k) = key.to_str() {
-            if k.starts_with("BEVY_PLAYTEST") || k == "BRP_PORT" {
+            if k.starts_with("BEVY_PLAYTEST") {
                 cmd.env_remove(k);
             }
         }

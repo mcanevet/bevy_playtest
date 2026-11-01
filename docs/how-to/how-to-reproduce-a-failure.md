@@ -9,7 +9,7 @@ deterministic.
    unordered iteration — which the replay-divergence check exists to expose).
 2. **Run locally** rather than in CI to iterate quickly:
    `BEVY_PLAYTEST_SCENARIO=<scenario.json> cargo run --features playtest`
-   inside the game crate (mode 1), or run the failing test directly. The
+   inside the game crate, or run the failing test directly. The
    report lands next to the scenario at `<scenario>.report.json`.
 3. **Read the report before the code.** Each violation names its rule
    (`finite_transforms`, `nodes_in_bounds`, `frozen_world`…), a target

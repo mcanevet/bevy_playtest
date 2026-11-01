@@ -75,8 +75,7 @@ pub struct Scenario {
     pub liveness: LivenessConfig,
     /// Replay-divergence verification: run the scenario twice against
     /// freshly built Apps and compare per-frame fingerprints. Default
-    /// false. In-process only — BRP mode rejects it (wall-clock pacing
-    /// makes honest replay verification impossible there).
+    /// false.
     #[serde(default)]
     pub verify_replay: bool,
 }
@@ -186,7 +185,7 @@ fn default_mouse_buttons() -> Vec<String> {
 }
 
 /// Default chaos keyboard surface: WASD + arrows (kept in lockstep with
-/// the runtime default and the BRP runner's CHAOS_KEYS).
+/// the runtime default).
 fn default_surface_keys() -> Vec<String> {
     vec![
         "KeyW".into(),

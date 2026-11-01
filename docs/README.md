@@ -15,8 +15,7 @@ machine-readable report.
 
 ## What it does
 
-- Runs a Bevy game headless, in-process, or as a subprocess over BRP
-  (Bevy's Remote Protocol)
+- Runs a Bevy game headless and in-process
 - Drives it with a seeded chaos bot or a scripted key schedule
 - Watches for: NaN/finite transforms, entities leaving bounds,
   a frozen world, panics, ERROR logs
@@ -33,9 +32,7 @@ Scenario (JSON) ──▶ Bot ──▶ your App ──▶ Oracles ──▶ Pla
                                         panic/log capture
 ```
 
-The harness never edits your game logic. In-process mode swaps two
+The harness never edits your game logic. It swaps two
 plugin groups in (`PlaytestDefaultPlugins` + `PlaytestPlugin`);
-external-BRP mode needs no harness imports in the game, but the game
-binary must serve Bevy's Remote Protocol (`bevy_remote` feature,
-`register_type`, `BRP_PORT`) and keep ticking without winit — see
-[drive a game you can't modify](how-to/how-to-drive-a-game-you-cannot-modify.md).
+the app runs headless when `BEVY_PLAYTEST_SCENARIO` or
+`BEVY_PLAYTEST_HEADLESS` is set.

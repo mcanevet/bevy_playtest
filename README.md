@@ -124,106 +124,25 @@ input).
 Opt-outs: `mouse_buttons: []` under a scenario's `bot.raw_surface`
 drops clicks; `"keys": []` there drops chaos keys (mouse-only chaos).
 
-## How mode 1 works
+## How in-process takeover works
 
 When `BEVY_PLAYTEST_SCENARIO` is set, your binary becomes its own
 headless playtest runner (exit codes: 0 Pass, 1 Fail, 2 Crash, 3 config
 error). Without the env var the plugin is inert. The runner swap
-replaces winit's event loop, so no window appears. Under `BRP_PORT`
-the same binary serves the mode-2 external-BRP surface instead. In the
-recommended integration these modes only exist in a playtest-enabled
+replaces winit's event loop, so no window appears. In the
+recommended integration this mode only exists in a playtest-enabled
 build (`cargo test`, or `cargo run --features playtest`); the default
 and release builds contain zero bevy_playtest code.
 
 `PlaytestDefaultPlugins` drops `WinitPlugin` under the takeover env vars
-(`BEVY_PLAYTEST_*`, plus `BRP_PORT` for external mode — bevy_winit 0.20
-builds its event loop eagerly, so headless CI hosts need it gone before
-the runner swap).
+(`BEVY_PLAYTEST_*` — bevy_winit 0.20 builds its event loop eagerly, so
+headless CI hosts need it gone before the runner swap).
 
 Known limitations: rendering is unavailable (software-only) so visual
 assertions do not apply.
 
-## The two modes
+## Oracles
 
-bevy_playtest drives your game in one of two ways. Both run as plain
-`cargo test` tests, produce the same report formats, and gate the same
-way — they differ in **how much they can see**:
-
-|                          | **Mode 1: In-process (takeover)**              | **Mode 2: External BRP**                       |
-|--------------------------|-------------------------------------------------|-----------------------------------------------|
-| Game source changes      | ~15 lines (feature + cfg'd helpers)             | 3 touch-points (bevy_remote, register_type, port) |
-| Harness code in game     | Yes, test builds only                           | None                                          |
-| Oracles                  | All (panic, log, liveness, NaN, bounds, replay) | Reduced (NaN, bounds, liveness)  |
-| Determinism proof (`verify_replay`) | ✓                                    | ✗ (rejected explicitly)                      |
-| Release builds           | Zero playtest code                              | Remote plugin stays in the binary            |
-
-### BRP parity matrix
-
-| Capability               | Mode 1 (in-process) | Mode 2 (BRP) | Mode 2 + PlaytestBrpPlugin     |
-|--------------------------|---------------------|--------------|--------------------------------|
-| Panic capture            | ✓                   | ✗            | ✓ (`bevy_playtest/health`)     |
-| Log capture              | ✓                   | ✗            | ✓                              |
-| Time scale control       | N/A                 | ✗            | ✓ (`bevy_playtest/time`)       |
-
-The report's `brp_parity` field distinguishes "full" from "degraded"
-modes; never a silent downgrade. (`PlaytestBrpPlugin` restores some
-mode-1 capabilities to mode 2 via a small BRP method surface — see the
-[docs](docs/how-to/how-to-drive-a-game-you-cannot-modify.md).)
-
-Pick mode 1 unless you can't touch the game code at all or are testing
-a third-party binary.
-
-### Mode 2: External BRP (experimental)
-
-No harness imports in the game at all — run the game as a subprocess and
-drive it over Bevy's Remote Protocol. Requires the game binary to:
-
-1. Add Bevy's remote plugins (`RemotePlugin::default()` +
-   `bevy::remote::http::RemoteHttpPlugin::default()`, with the
-   `bevy_remote` cargo feature)
-2. Register the types the harness inspects:
-     ```rust
-     .register_type::<Transform>()
-     ```
-3. Read the listen port from the `BRP_PORT` env var and pass it to
-   `RemoteHttpPlugin::default().with_port(port)` (the harness sets it)
-
-Then from the test side — `cargo test` runs it like any other test.
-`brp_runner` is behind the (non-default) `brp` feature, so the test-side
-dependency must enable it:
-
-```toml
-[dev-dependencies]
-bevy_playtest = { version = "0.4", features = ["brp"] }
-```
-
-```rust
-use bevy_playtest::brp_runner::{run_scenario_brp, BrpRunConfig};
-
-#[test]
-fn playtest_brp() -> Result<(), Box<dyn std::error::Error>> {
-    let cfg = BrpRunConfig {
-        game_binary: env!("CARGO_BIN_EXE_my_game").to_string(),
-        port: Some(4570),
-        ..Default::default()
-    };
-    let scenario = serde_json::from_str::<bevy_playtest::scenario::Scenario>(
-        r#"{"bot":{"type":"chaos"},"duration_s":10}"#,
-    )?;
-    let report = run_scenario_brp(&cfg, &scenario)?;
-    assert_ne!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
-    Ok(())
-}
-```
-Note: unlike mode 1, the game has no playtest feature here — the
-`bevy_remote`-enabled binary is the normal build. The report carries
-`harness_mode: "external_brp"`. Limits versus mode 1: chaos
-bot only and a reduced oracle set — bounds, NaN
-transforms, and the frozen-world (liveness) check run over BRP, but panic
-and log capture require mode 1 (or `PlaytestBrpPlugin` — see the parity
-matrix above).
-
-## Log capture (the `log_error`/`log_warn` oracles)
 
 Errors logged via `tracing` from ANY thread — including IoTaskPool
 workers (where bevy_asset reports load failures) and multi-threaded
@@ -249,9 +168,6 @@ write-once global default. Two consequences:
   deliberately. A green report under a lost race never implies "no
   errors were logged".
 
-Mode 2 (external BRP) does not capture logs — the game is a separate
-process whose logs go to pipes; the parity matrix above reflects this.
-
 Panics are captured independently of tracing: a panic during the run's
 loop lands in the run's report; a panic in the setup window (before the
 run starts) propagates out of `run_scenario` to the caller — the
@@ -267,8 +183,7 @@ One mechanism takes a run from "asserted" to "proven":
    `replay_divergence` Fail identifying the first divergent frame.
    This PROVES determinism for the observable surface — it does not
    prove absence of nondeterminism in unobserved state (components
-   without Transform). In-process only; BRP mode rejects the field
-   (wall-clock pacing makes honest verification impossible there).
+   without Transform).
    On the takeover/plugin path, pass B re-runs your game binary as a
    subprocess — whole-process determinism, the strongest form. NOTE:
    `verify_replay` requires `single_threaded: true` (default).

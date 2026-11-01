@@ -9,9 +9,6 @@
 //! single-threaded executor, but the fingerprint sorts translations
 //! anyway so the guarantee is structural, not assumed.
 //!
-//! BRP mode rejects `verify_replay` outright: wall-clock pacing makes
-//! honest replay verification impossible there, and the BRP report
-//! must never claim it.
 
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;

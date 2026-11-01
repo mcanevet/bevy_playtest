@@ -21,9 +21,9 @@ fixtures generated, see below.
 | Negative validation | `negative_validation`, `vacuous_invariant_rule` | 8 | invalid/ignored config fails loudly |
 | Oracle negative controls | `fault_injection` | 10 | every oracle detects the fault it names |
 | Verification depth | `verification_depth`, `report_integrity` | 18 | verdicts and reports reflect reality |
-| Process robustness | `brp_robustness`, `isolation`, `log_capture_race` | 17 | hostile games, poisoned processes, races |
-| End-to-end | `takeover_e2e`, `driver_smoke`, `plugin_brp`, `mode_parity` | 42 | the whole loop, including subprocesses |
-| Real games | fixture battery + external-BRP acceptance | 7 games × 2 modes | it works on unmodified third-party games |
+| Process robustness | `isolation`, `log_capture_race` | 7 | hostile games, poisoned processes, races |
+| End-to-end | `takeover_e2e`, `driver_smoke` | 33 | the whole loop, including subprocesses |
+| Real games | fixture battery | 7 games | it works on unmodified third-party games |
 
 Counts are `#[test]` functions per file at the time of writing; they drift as
 suites grow, the tiers do not.
@@ -32,7 +32,7 @@ suites grow, the tiers do not.
 
 Fast, no `App` needed: JUnit XML generation and its hardening (control-char
 replacement, `CDATA` splitting, U+FFFE/U+FFFF substitution), plugin
-internals, BRP auto-enable logic, battery defaults, choice/RNG draw logic,
+internals, battery defaults, choice/RNG draw logic,
 rule classification, report sinks, and run-state accounting. Doc-tests cover
 the battery's public examples.
 
@@ -84,12 +84,10 @@ planted-fault proof.
 
 ## Process robustness
 
-The harness runs games as processes; hostile processes must not defeat it
-(`brp_robustness`, against mock game binaries compiled on demand):
+The harness runs games as processes; hostile processes must not defeat it:
 
 - stdout/stderr flooding → no deadlock
 - crash at startup → clear error, no hang, no leaked process
-- never binding the BRP port → startup timeout honored, bounded runtime
 - death mid-run → surfaced as a failure, never a silent Pass
 
 `isolation` proves runs don't contaminate each other: the panic/log capture
@@ -117,13 +115,6 @@ imply "no errors were logged" when it was deaf.
   placement, and the stock-game `all` selector.
 - `driver_smoke` runs `run_scenario` against a minimal headless app in the
   test process.
-- `plugin_brp` checks BRP auto-enable for `PlaytestPlugin` — including the
-  rejection path when the feature is off.
-- `mode_parity` asserts the same seed drives the same behavior in-process
-  and over BRP: external BRP is advertised as driving the same chaos bot
-  as in-process mode,
-  and the determinism claim depends on that equality. The choice logic is
-  compared fixture-independently; the full comparison is fixture-gated.
 
 ## The fixture battery — real, unmodified games
 
@@ -134,17 +125,12 @@ The strongest evidence tier: seven Bevy showcase games (`alien_cake_addict`,
 and `Cargo.lock` are).
 
 Each fixture runs the default battery **against its own unmodified game
-binary** in both modes:
-
-- **Mode 1 (in-process)** — via a self-dev-dependency that activates the
-  `playtest` feature, each game's committed `tests/playtest.rs` runs
-  `bevy_playtest::battery::run(BUILTIN_BATTERY)` and asserts per-game known
-  findings (e.g. `mines` expects exactly `[("frozen_world", "world")]` — it
-  waits for pointer input the keyboard bot cannot give; the assertion pins
-  that behavior until the synthetic-pointer bot lands).
-- **Mode 2 (external BRP)** — `acceptance.rs` drives each fixture's stock
-  binary over BRP; CI fans out one matrix job per fixture via
-  `BEVY_PLAYTEST_FIXTURE`.
+binary** via a self-dev-dependency that activates the
+`playtest` feature; each game's committed `tests/playtest.rs` runs
+`bevy_playtest::battery::run(BUILTIN_BATTERY)` and asserts per-game known
+findings (e.g. `mines` expects exactly `[("frozen_world", "world")]` — it
+waits for pointer input the keyboard bot cannot give; the assertion pins
+that behavior until the synthetic-pointer bot lands).
 
 Two guards around the battery:
 

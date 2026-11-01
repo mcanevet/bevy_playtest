@@ -53,16 +53,12 @@ pub const ENV_REPORT: &str = "BEVY_PLAYTEST_REPORT";
 /// plugin (added after DefaultPlugins) replaces winit's runner with a
 /// schedule loop so no window opens and no display is needed.
 pub const ENV_HEADLESS: &str = "BEVY_PLAYTEST_HEADLESS";
-/// External-BRP port. When set, PlaytestPlugin adds RemotePlugin +
-/// RemoteHttpPlugin and registers types for reflection queries.
-pub const ENV_BRP_PORT: &str = "BRP_PORT";
 pub use crate::sinks::ENV_ALLOW_MISSING_LOG_CAPTURE;
-const KNOWN_ENV_VARS: [&str; 7] = [
+const KNOWN_ENV_VARS: [&str; 6] = [
     ENV_SCENARIO,
     ENV_REPORT,
     ENV_HEADLESS,
     ENV_REPLAY_PASS_B,
-    ENV_BRP_PORT,
     ENV_ALLOW_MISSING_LOG_CAPTURE,
     // Test-selection var (set by the acceptance suite / CI matrix to
     // pick one fixture); inherited by the game process harmlessly.
@@ -85,65 +81,13 @@ pub struct PlaytestPlugin;
 
 impl Plugin for PlaytestPlugin {
     fn build(&self, app: &mut App) {
-        // BRP auto-enable: if BRP_PORT is set, add remote plugins and
-        // register types for reflection queries. Invalid port → exit 3.
-        if let Some(port_str) = std::env::var_os(ENV_BRP_PORT) {
-            let port_str = port_str.to_string_lossy();
-            let port: u16 = port_str.parse().unwrap_or_else(|_| {
-                eprintln!(
-                    "bevy_playtest: {} must be a valid port number (got '{}')",
-                    ENV_BRP_PORT, port_str
-                );
-                std::process::exit(exit_code::CONFIG_ERROR);
-            });
-
-            #[cfg(not(feature = "brp-plugin"))]
-            {
-                let _ = port; // validated above; feature is the deciding factor
-                eprintln!(
-                    "bevy_playtest: {} is set but the brp-plugin feature is not enabled. \
-                     Rebuild with --features brp-plugin to enable external-BRP mode.",
-                    ENV_BRP_PORT
-                );
-                std::process::exit(exit_code::CONFIG_ERROR);
-            }
-
-            #[cfg(feature = "brp-plugin")]
-            {
-                // RemotePlugin requires the async task pools; a stock
-                // game without DefaultPlugins hasn't initialized them.
-                bevy_tasks::IoTaskPool::get_or_init(|| {
-                    bevy_tasks::TaskPoolBuilder::default().build()
-                });
-                app.add_plugins(bevy_remote::RemotePlugin::default());
-                app.add_plugins(bevy_remote::http::RemoteHttpPlugin::default().with_port(port));
-                // Register types for reflection queries (mirrors the fixture shim)
-                app.register_type::<bevy_transform::prelude::Transform>();
-                app.register_type::<bevy_input::keyboard::KeyboardInput>();
-                // Also add PlaytestBrpPlugin for method registration
-                app.add_plugins(crate::brp_plugin::PlaytestBrpPlugin);
-                // External-BRP mode should run headless (no window for
-                // an automation-driven game). PlaytestDefaultPlugins
-                // already installs the schedule runner; for plain
-                // DefaultPlugins games add one here so no window opens
-                // on display-ful hosts (display-less hosts need the
-                // PlaytestDefaultPlugins swap — WinitPlugin builds its
-                // event loop eagerly at plugin-build time).
-                if !app.is_plugin_added::<bevy_app::ScheduleRunnerPlugin>() {
-                    app.add_plugins(bevy_app::ScheduleRunnerPlugin::run_loop(
-                        std::time::Duration::from_secs_f64(1.0 / 60.0),
-                    ));
-                }
-            }
-        }
-
         // Log-capture preflight: this plugin is contracted to be added
         // AFTER DefaultPlugins, so if the game uses DefaultPlugins its
         // LogPlugin has already claimed the write-once global tracing
         // default — log_error/log_warn findings would be silently
         // under-reported for the whole process. Detect NOW (plugin
         // presence is reliably queryable at this point) and warn with
-        // remediation. Not fatal: BRP/headless games never capture
+        // remediation. Not fatal: headless games never capture
         // logs anyway, and ENV_ALLOW_MISSING_LOG_CAPTURE acknowledges
         // the loss deliberately.
         if std::env::var_os(ENV_SCENARIO).is_some()
@@ -503,7 +447,7 @@ fn write_report(path: &str, report: &crate::state::PlaytestReport) -> Result<(),
 /// that prefer an explicit headless plugin graph.
 ///
 /// - No env vars set: identical to `bevy::DefaultPlugins` (pure pass-through).
-/// - [`ENV_SCENARIO`], [`ENV_HEADLESS`], or [`ENV_BRP_PORT`] set: drops
+/// - [`ENV_SCENARIO`] or [`ENV_HEADLESS`] set: drops
 ///   `WinitPlugin` and adds `ScheduleRunnerPlugin::run_loop` so the app
 ///   ticks headless. (bevy_winit 0.20 builds its event loop eagerly in
 ///   `WinitPlugin::build` — a display-less host panics before any
@@ -516,9 +460,8 @@ fn write_report(path: &str, report: &crate::state::PlaytestReport) -> Result<(),
 ///   global default is write-once per process, permanently blinding
 ///   log capture. The harness's fmt layer replaces LogPlugin's
 ///   console output (RUST_LOG honored, default INFO). Deliberately
-///   NOT applied under [`ENV_HEADLESS`]/[`ENV_BRP_PORT`]: those run
-///   the game normally (or as a BRP child whose piped output is read
-///   post-mortem) and keep the game's own logging.
+///   NOT applied under [`ENV_HEADLESS`]: those run
+///   the game normally and keep the game's own logging.
 ///
 /// Requires the `takeover-winit` feature (adds the `bevy_winit` and
 /// `bevy` (DefaultPlugins) dependencies).
@@ -529,17 +472,14 @@ pub struct PlaytestDefaultPlugins;
 impl bevy_app::prelude::PluginGroup for PlaytestDefaultPlugins {
     fn build(self) -> bevy_app::PluginGroupBuilder {
         let builder = bevy::DefaultPlugins.build();
-        if std::env::var_os(ENV_SCENARIO).is_some()
-            || std::env::var_os(ENV_HEADLESS).is_some()
-            || std::env::var_os(ENV_BRP_PORT).is_some()
-        {
+        if std::env::var_os(ENV_SCENARIO).is_some() || std::env::var_os(ENV_HEADLESS).is_some() {
             let builder = builder.disable::<bevy_winit::WinitPlugin>().add(
                 bevy_app::ScheduleRunnerPlugin::run_loop(std::time::Duration::from_secs_f64(
                     1.0 / 60.0,
                 )),
             );
             // Only a scenario run installs the harness's capture
-            // subscriber (run_scenario); headless-assert and BRP
+            // subscriber (run_scenario); headless-assert
             // children never do, so dropping LogPlugin there would
             // leave them with NO logging at all. Note: unconditional
             // `bevy::log::LogPlugin` reference relies on bevy's

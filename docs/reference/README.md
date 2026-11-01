@@ -113,11 +113,8 @@ Two distinct error classes, at different stages:
 
 - **NaN/finite transforms** — any non-finite `Transform` → Fail
 - **Frozen world** — no movement of any entity over the liveness grace
-  window (default 2 s at 60 tps) → Fail. Also runs in external-BRP mode
-  (transform positions polled over BRP); panic/log capture there require
-  `PlaytestBrpPlugin` or mode 1.
-- **Panic capture** — crash → Crash (in-process, or via
-  `bevy_playtest/health` under `PlaytestBrpPlugin`)
+  window (default 2 s at 60 tps) → Fail (catches soft-locks).
+- **Panic capture** — crash → Crash (in-process)
 - **Log capture** — ERROR → Fail, WARN → informational (unless
   `strict_warnings: true`)
 
@@ -131,19 +128,18 @@ Two distinct error classes, at different stages:
   last_detail }]` — aggregated by `(rule, target)`; `target` semantics
   vary by rule: the invariant's `name` for scenario bounds checks, the
   entity id for the global bounds oracle, the literal `"world"` for
-  `frozen_world`, `"brp_query"` for BRP transport errors
+  `frozen_world`
 - `metrics`: `{ input_count, frame_count, worst_frame_ms, crash_detected }`
 - `schema_version`, `frame_count`, `tps`, `simulated_duration_s`,
   `wall_time_s`, `error`
 - `action_log`: `[{ frame, source, action, details }]` — audited bot
   inputs
 - `choices` (the bot's recorded random draws)
-- `harness_mode`: `"takeover"` or `"external_brp"`
+- `harness_mode`: `"in_process"`
 - `scenario_source`: `"file"`, `"builtin_smoke"`, or `"builtin_battery"`
 - `log_capture_available` (absent when not applicable; `log_capture_available: false` also produces an
   informational `log_capture_lost` violation — see the
   [rejected-scenario recipe](../how-to/how-to-handle-a-rejected-scenario.md))
-- `brp_parity`: `"full"` | `"degraded"` (external-BRP runs only)
 
 Report helpers on `PlaytestReport`:
 
@@ -159,9 +155,6 @@ Report helpers on `PlaytestReport`:
 - `bevy_playtest::replay::run_scenario_verified(build: impl Fn() -> App,
   &Scenario) -> Result<PlaytestReport, ScenarioError>` — runs the scenario
   twice on freshly built apps and compares per-frame fingerprints
-- `bevy_playtest::brp_runner::run_scenario_brp(&BrpRunConfig, &Scenario)
-  -> Result<PlaytestReport, ScenarioError>` — external-BRP (feature `brp`;
-  not a default feature)
 - `bevy_playtest::junit::reports_to_junit(&[(String, PlaytestReport)],
   &str) -> String`
 
@@ -189,8 +182,6 @@ for `cargo test` integration:
 - `PlaytestDefaultPlugins` — pass-through of `bevy::DefaultPlugins` that
   swaps winit's runner for a schedule loop under the takeover env vars
   (feature `takeover-winit`)
-- `PlaytestBrpPlugin` — restores mode-1 capabilities to external-BRP
-  mode via `bevy_playtest/health` and `/time` BRP methods (feature `brp-plugin`)
 
 Plugin order: add `PlaytestPlugin` **after** any plugin group that sets
 a runner — the runner swap is last-set-wins, and a wrong order silently
@@ -204,7 +195,6 @@ disables the takeover.
 | `BEVY_PLAYTEST_REPORT` | Report output path (default `<scenario>.report.json`) |
 | `BEVY_PLAYTEST_HEADLESS` | Assert headlessness without running a scenario: no window, no display needed |
 | `BEVY_PLAYTEST_REPLAY_PASS_B` | Internal: replay pass-B marker |
-| `BRP_PORT` | External-BRP port; set for the game subprocess by the harness |
 | `BEVY_PLAYTEST_ALLOW_MISSING_LOG_CAPTURE` | Acknowledge a lost log subscriber instead of failing |
 
 Unknown `BEVY_PLAYTEST_*` variables abort the game process with exit
@@ -217,5 +207,4 @@ The takeover runner exits the game process with:
 
 ## Compatibility
 
-Targets Bevy 0.20. Older Bevy versions are reached through external-BRP
-mode rather than multi-version compilation.
+Targets Bevy 0.20.
