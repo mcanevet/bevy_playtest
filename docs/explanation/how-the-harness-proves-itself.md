@@ -128,9 +128,10 @@ Each fixture runs the default battery **against its own unmodified game
 binary** via a self-dev-dependency that activates the
 `playtest` feature; each game's committed `tests/playtest.rs` runs
 `bevy_playtest::battery::run(BUILTIN_BATTERY)` and asserts per-game known
-findings (e.g. `mines` expects exactly `[("frozen_world", "world")]` — it
-waits for pointer input the keyboard bot cannot give; the assertion pins
-that behavior until the synthetic-pointer bot lands).
+findings (e.g. `mines` and `game_menu` are pointer-driven and now run
+clean — the synthetic-pointer bot delivers wrapped `WindowEvent`s and
+the UI liveness watcher sees `Changed<UiTransform>`, so the run is
+healthy with no violations).
 
 Two guards around the battery:
 

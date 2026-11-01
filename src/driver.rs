@@ -621,9 +621,12 @@ fn frame_timing_oracle_system(mut state: ResMut<RunState>, time: Res<Time>) {
 }
 
 /// Frozen-world oracle: detects when the world stops changing. Counts
-/// consecutive frames with no `Changed<Transform>` anywhere and reports
+/// consecutive frames with no `Changed<Transform>` anywhere (plus, under
+/// the `ui-liveness` feature, no `Changed<UiTransform>`) and reports
 /// a `frozen_world` violation once the streak exceeds the grace window.
-/// Needs no marker: "any transform changed" is the liveness evidence.
+/// Needs no marker: "anything changed" is the liveness evidence.
+///
+/// Runs after the liveness watchers so same-frame activity is counted.
 fn frozen_world_oracle_system(
     mut state: ResMut<RunState>,
     mut violations: ResMut<RunViolations>,
@@ -633,22 +636,46 @@ fn frozen_world_oracle_system(
     if !q_all.is_empty() {
         state.saw_transform_entity = true;
     }
-    if q.is_empty() {
-        state.frozen_frames += 1;
-    } else {
+    let transform_activity = !q.is_empty();
+    let ui_activity = state.ui_activity_this_frame;
+    state.ui_activity_this_frame = false;
+    if transform_activity || ui_activity {
         state.frozen_frames = 0;
+    } else {
+        state.frozen_frames += 1;
     }
     // Report once per crossing (guard so we don't spam every frame).
     if state.frozen_frames == state.frozen_grace_frames + 1 {
+        let watched = if cfg!(feature = "ui-liveness") {
+            "no Transform or UI change"
+        } else {
+            "no Transform change"
+        };
         violations.0.report(
             Rule::FrozenWorld.name(),
             "world",
-            format!(
-                "no Transform changed for {} frames — soft-lock?",
-                state.frozen_frames
-            ),
+            format!("{watched} for {} frames — soft-lock?", state.frozen_frames),
             state.frame,
         );
+    }
+}
+
+/// UI liveness watcher (`ui-liveness` feature): Bevy 0.20 UI nodes carry
+/// `UiTransform`, not `Transform`, so a pure-UI game that responds to
+/// input looks frozen to the transform-only oracle. This watcher feeds
+/// UI changes into the same liveness evidence; it must run BEFORE
+/// `frozen_world_oracle_system` (chained at registration).
+#[cfg(feature = "ui-liveness")]
+fn ui_liveness_system(
+    mut state: ResMut<RunState>,
+    q: Query<(), Changed<bevy_ui::prelude::UiTransform>>,
+    q_all: Query<(), With<bevy_ui::prelude::UiTransform>>,
+) {
+    if !q_all.is_empty() {
+        state.saw_ui_entity = true;
+    }
+    if !q.is_empty() {
+        state.ui_activity_this_frame = true;
     }
 }
 
@@ -671,6 +698,14 @@ pub struct RunState {
     /// a game whose entities all despawn before the end is NOT vacuous
     /// (the oracles observed them while they lived).
     saw_transform_entity: bool,
+    /// True once any UI-node entity existed (UiTransform-bearing). Same
+    /// purpose as `saw_transform_entity`: a pure-UI world is observable
+    /// world state, not a vacuous run.
+    saw_ui_entity: bool,
+    /// Set by `ui_liveness_system` when any UiTransform changed this
+    /// frame; consumed (and cleared) by `frozen_world_oracle_system`,
+    /// which runs after it in the frame.
+    ui_activity_this_frame: bool,
 }
 
 impl Default for RunState {
@@ -686,6 +721,8 @@ impl Default for RunState {
             // loop runs.
             frozen_grace_frames: 180,
             saw_transform_entity: false,
+            saw_ui_entity: false,
+            ui_activity_this_frame: false,
         }
     }
 }
@@ -875,6 +912,15 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         ),
     );
 
+    // UI liveness watcher must observe this frame's changes BEFORE the
+    // oracle consumes them. Registered separately so the whole system
+    // (and its bevy_ui dependency) compiles away when the feature is off.
+    #[cfg(feature = "ui-liveness")]
+    app.add_systems(
+        Update,
+        ui_liveness_system.before(frozen_world_oracle_system),
+    );
+
     let total_ticks = (scenario.duration_s * tps as f32).ceil() as u64;
     let start = std::time::Instant::now();
 
@@ -939,22 +985,25 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     metrics.crash_detected = crash_detected;
     metrics.worst_frame_ms = state.frame_timing.worst_ms;
 
-    // Vacuity guard: if the whole run never had a Transform entity the
+    // Vacuity guard: if the whole run never had a Transform or UI entity the
     // oracles could check, a Pass proves nothing about the game (bot
     // inputs hitting a void are unobservable activity). Flag loudly.
     // Tracked DURING the run (any-frame observability), not post-hoc:
     // a game whose entities despawn before the end is NOT vacuous.
-    let entities_observable = state.saw_transform_entity;
+    let entities_observable = state.saw_transform_entity || state.saw_ui_entity;
     if status == PlaytestStatus::Pass && !entities_observable {
+        let remedy = if cfg!(feature = "ui-liveness") {
+            "spawn entities with a Transform or UiTransform so oracles have something to check"
+        } else {
+            "spawn entities with a Transform so oracles have something to check"
+        };
         snap.push(crate::state::ViolationEntry {
             rule: Rule::VacuousRun.name().to_string(),
             target: "run".to_string(),
             first_frame: 0,
             last_frame: state.frame,
             count: 1,
-            detail: "no entities to observe — the run is vacuous; spawn \
-                     entities with a Transform so oracles have something to check"
-                .to_string(),
+            detail: format!("no entities to observe — the run is vacuous; {remedy}"),
             last_detail: "no entities to observe — the run is vacuous".to_string(),
         });
         status = PlaytestStatus::Fail;
