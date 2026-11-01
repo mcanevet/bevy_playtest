@@ -8,6 +8,7 @@
 use bevy_app::{App, PluginsState, Update};
 use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::{Schedules, SingleThreadedExecutor};
+use bevy_ecs::system::SystemParam;
 use bevy_input::keyboard::{KeyCode, KeyboardFocusLost, KeyboardInput};
 use bevy_input::{prelude::ButtonInput, ButtonState};
 use bevy_math::Vec2;
@@ -321,6 +322,53 @@ fn mouse_button_from_canonical(canonical: &str) -> Option<bevy_input::mouse::Mou
 /// land somewhere plausible inside a default-sized viewport.
 const HEADLESS_CLICK_EXTENT: f32 = 1280.0;
 
+/// Bundled message writers for the mouse bots: the raw
+/// `MouseButtonInput` form (feeds `ButtonInput<MouseButton>`) and the
+/// wrapped `bevy_window::WindowEvent` form (what bevy_picking reads).
+#[derive(SystemParam)]
+struct BotMouseWriters<'w> {
+    raw: MessageWriter<'w, bevy_input::mouse::MouseButtonInput>,
+    window: MessageWriter<'w, bevy_window::WindowEvent>,
+}
+
+impl BotMouseWriters<'_> {
+    /// Writes a bot click through BOTH message forms, mirroring
+    /// winit's pipeline: the raw `MouseButtonInput` (feeds
+    /// `ButtonInput<MouseButton>`) and the wrapped
+    /// `bevy_window::WindowEvent` (what bevy_picking's mouse backend
+    /// reads; without it, pointer-driven games never see the click).
+    fn click(
+        &mut self,
+        primary_window: Option<Entity>,
+        button: bevy_input::mouse::MouseButton,
+        btn_state: ButtonState,
+    ) {
+        let raw = bevy_input::mouse::MouseButtonInput {
+            button,
+            state: btn_state,
+            window: primary_window.unwrap_or(Entity::PLACEHOLDER),
+        };
+        self.raw.write(raw);
+        if primary_window.is_some() {
+            self.window
+                .write(bevy_window::WindowEvent::MouseButtonInput(raw));
+        }
+    }
+
+    /// Writes the cursor move through the wrapped `WindowEvent` form
+    /// (the only form bevy_picking consumes). `delta` is computed
+    /// against the bot's last position, matching winit's shape.
+    fn cursor_moved(&mut self, primary_window: Entity, pos: Vec2, last_pos: Option<Vec2>) {
+        self.window.write(bevy_window::WindowEvent::CursorMoved(
+            bevy_window::CursorMoved {
+                window: primary_window,
+                position: pos,
+                delta: last_pos.map(|last| pos - last),
+            },
+        ));
+    }
+}
+
 /// Shared mouse hold state for BOTH the chaos and scripted mouse bots,
 /// keyed by button with a hold count. Overlapping holds on the same
 /// physical button (e.g. chaos pressing `Left` while a scripted click
@@ -398,17 +446,40 @@ impl CursorInputResource {
 /// Draw order per click event: position first (one draw), then button.
 /// Position is quantized into a u32 (16 bits per axis) — identical
 /// seeds replay identically with no float-formatting drift.
+///
+/// Delivery goes through BOTH message forms, mirroring winit's real
+/// pipeline: the raw `MouseButtonInput` (feeds ButtonInput<MouseButton>)
+/// and the wrapped `WindowEvent` (what bevy_picking's mouse backend
+/// reads; without it, pointer-driven games never see the click). The
+/// cursor move is likewise written as a wrapped `WindowEvent::CursorMoved`
+/// targeted at the primary window entity — picking normalizes the
+/// event's window against `PrimaryWindow` and silently drops
+/// non-primary targets.
 fn chaos_mouse_system(
     mut state: ResMut<RunState>,
     scenario: Res<ScenarioResource>,
     mut choices: ResMut<RunChoices>,
     mut hold_state: ResMut<MouseHoldState>,
     mut cursor: ResMut<CursorInputResource>,
-    mut writer: MessageWriter<bevy_input::mouse::MouseButtonInput>,
+    primary_window: Query<(Entity, &bevy_window::Window), With<bevy_window::PrimaryWindow>>,
+    mut writers: BotMouseWriters,
 ) {
     let rate = scenario.0.bot.input_rate_hz.max(1);
     let interval = (state.tps / rate as u64).max(1);
     let hold_frames = 2u64;
+
+    // One (window, size) snapshot per frame; None = no window (pure
+    // headless apps) — fall back to the theoretical extent and skip
+    // the wrapped WindowEvent forms (nothing consumes them without a
+    // window anyway).
+    let window = primary_window.single().ok().map(|(entity, w)| {
+        (
+            entity,
+            // Logical extent: scale bot positions INTO the real window
+            // so clicks land on-screen (picking ignores off-window hits).
+            Vec2::new(w.width(), w.height()),
+        )
+    });
 
     // Release held button if its hold duration expired. Only the last
     // outstanding hold on a button emits `Released` — a scripted click
@@ -416,11 +487,7 @@ fn chaos_mouse_system(
     if let Some((button, release_at)) = hold_state.chaos_pending {
         if state.frame >= release_at {
             if hold_state.release(button) {
-                writer.write(bevy_input::mouse::MouseButtonInput {
-                    button,
-                    state: ButtonState::Released,
-                    window: Entity::PLACEHOLDER,
-                });
+                writers.click(window.map(|(e, _)| e), button, ButtonState::Released);
             }
             hold_state.chaos_pending = None;
             // Cursor stays where it was — hover state persists.
@@ -453,8 +520,13 @@ fn chaos_mouse_system(
         buttons.len() as u64,
         crate::choice::ChoiceKind::MouseButton,
     ) as usize;
-    let x_norm = (pos_draw >> 16) as f32 / 65535.0;
-    let y_norm = (pos_draw & 0xFFFF) as f32 / 65535.0;
+    // Divide by 65536, not 65535: the max quantized axis value is
+    // 0xFFFF, and dividing by 65535 would yield exactly 1.0 — placing
+    // the cursor AT the width/height edge, outside the viewport's
+    // half-open bounds ([0, width) x [0, height)). Picking (and any
+    // hit test) would drop those clicks even on a fullscreen target.
+    let x_norm = (pos_draw >> 16) as f32 / 65536.0;
+    let y_norm = (pos_draw & 0xFFFF) as f32 / 65536.0;
 
     let Some(button_name) = buttons.get(button_idx) else {
         return;
@@ -463,17 +535,20 @@ fn chaos_mouse_system(
         return;
     };
 
-    // Scale the normalized position into the theoretical viewport.
-    let pos = Vec2::new(
-        x_norm * HEADLESS_CLICK_EXTENT,
-        y_norm * HEADLESS_CLICK_EXTENT,
-    );
+    // Scale the normalized position into the target viewport: the real
+    // window's logical size when it exists (so clicks land ON-SCREEN —
+    // picking ignores off-window positions), else the theoretical
+    // extent.
+    let extent = window
+        .map(|(_, size)| size)
+        .unwrap_or(Vec2::splat(HEADLESS_CLICK_EXTENT));
+    let pos = Vec2::new(x_norm * extent.x, y_norm * extent.y);
+    let last_pos = cursor.position();
     cursor.set(pos);
-    writer.write(bevy_input::mouse::MouseButtonInput {
-        button,
-        state: ButtonState::Pressed,
-        window: Entity::PLACEHOLDER,
-    });
+    if let Some((entity, _)) = window {
+        writers.cursor_moved(entity, pos, last_pos);
+    }
+    writers.click(window.map(|(e, _)| e), button, ButtonState::Pressed);
     state.metrics.input_count += 1;
     hold_state.press(button);
     hold_state.chaos_pending = Some((button, state.frame + hold_frames));
@@ -490,8 +565,10 @@ fn scripted_mouse_system(
     scenario: Res<ScenarioResource>,
     mut hold_state: ResMut<MouseHoldState>,
     mut cursor: ResMut<CursorInputResource>,
-    mut writer: MessageWriter<bevy_input::mouse::MouseButtonInput>,
+    primary_window: Query<Entity, With<bevy_window::PrimaryWindow>>,
+    mut writers: BotMouseWriters,
 ) {
+    let window = primary_window.single().ok();
     // Release scripted holds whose duration expired. Only the last
     // outstanding hold on a button emits `Released`.
     let mut i = 0;
@@ -499,11 +576,7 @@ fn scripted_mouse_system(
         let (button, release_at) = hold_state.scripted_pending[i];
         if state.frame >= release_at {
             if hold_state.release(button) {
-                writer.write(bevy_input::mouse::MouseButtonInput {
-                    button,
-                    state: ButtonState::Released,
-                    window: Entity::PLACEHOLDER,
-                });
+                writers.click(window, button, ButtonState::Released);
             }
             hold_state.scripted_pending.remove(i);
         } else {
@@ -519,12 +592,12 @@ fn scripted_mouse_system(
             continue;
         };
         let pos = Vec2::new(click.x, click.y);
+        let last_pos = cursor.position();
         cursor.set(pos);
-        writer.write(bevy_input::mouse::MouseButtonInput {
-            button,
-            state: ButtonState::Pressed,
-            window: Entity::PLACEHOLDER,
-        });
+        if let Some(entity) = window {
+            writers.cursor_moved(entity, pos, last_pos);
+        }
+        writers.click(window, button, ButtonState::Pressed);
         state.metrics.input_count += 1;
         let hold_frames = click.hold_frames.max(1);
         hold_state.press(button);
@@ -738,6 +811,11 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     // event->ButtonInput translation system.
     app.add_message::<bevy_input::mouse::MouseButtonInput>();
     app.init_resource::<ButtonInput<bevy_input::mouse::MouseButton>>();
+    // Wrapped window-event forms: bevy_picking's mouse backend reads
+    // `WindowEvent::CursorMoved`/`WindowEvent::MouseButtonInput` (what
+    // winit writes). The mouse bots write these alongside the raw
+    // forms so pointer-driven games (bevy_ui picking) see bot input.
+    app.add_message::<bevy_window::WindowEvent>();
     // Order: translate BEFORE game systems in Update so games observe the
     // same-frame state (matching InputPlugin's placement in PreUpdate).
     // ONLY register when the app has no input plugin of its own: a second
