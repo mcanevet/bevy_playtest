@@ -27,9 +27,22 @@ set -euo pipefail
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
-# Immutable pin: fetch by commit SHA, not the v0.20.0 tag (tags are
-# mutable refs and can be deleted/recreated; commit SHAs cannot).
-BEVY_REV="b3bdd75becaffe9a16677cf5bae5bd6d198f052b" # = tag v0.20.0
+# Immutable pin: fetch by commit SHA, not a tag (tags are mutable
+# refs and can be deleted/recreated; commit SHAs cannot).
+#
+# Single source of truth for the Bevy version: Cargo.lock. Renovate
+# bumps the harness's bevy_* deps (and the lockfiles) — reading the
+# locked version here means a dependency bump automatically picks up
+# the matching showcase sources. Previously the rev was hardcoded and
+# drifted silently whenever renovate bumped Cargo.toml without the .sh.
+# We still fetch by SHA: resolve the locked version's tag to its
+# commit at fetch time via `git ls-remote`.
+BEVY_VERSION="$(sed -n '/^name = "bevy_app"$/{n;p;}' Cargo.lock | sed 's/^version = "\(.*\)"$/\1/')"
+[ -n "$BEVY_VERSION" ] || die "could not read bevy_app version from Cargo.lock"
+BEVY_TAG="v${BEVY_VERSION}"
+BEVY_REV="$(git ls-remote https://github.com/bevyengine/bevy "refs/tags/${BEVY_TAG}" | awk '{print $1}')"
+[ -n "$BEVY_REV" ] || die "no tag ${BEVY_TAG} on bevyengine/bevy (Cargo.lock and upstream out of sync?)"
+echo "Bevy pin: ${BEVY_TAG} -> ${BEVY_REV}"
 FIXTURES_DIR="fixtures"
 # Local Bevy checkout override — OPT-IN. The default is always the
 # immutable pinned revision fetched from GitHub; a local checkout at a
@@ -53,8 +66,10 @@ SHOWCASE_GAMES=(
     mines
 )
 
-# Fetch Bevy's dev-dependencies once (for CI fallback)
-CACHE_TOML="${FIXTURES_DIR}/.bevy-cargo-toml"
+# Fetch Bevy's dev-dependencies once (for CI fallback). Version-suffixed
+# so a Cargo.lock bump invalidates the cache instead of silently
+# reusing the previous revision's dev-dependency lines.
+CACHE_TOML="${FIXTURES_DIR}/.bevy-cargo-toml-${BEVY_VERSION}"
 if [ ! -f "$CACHE_TOML" ]; then
     mkdir -p "${FIXTURES_DIR}"
     curl -sfL --retry 3 --retry-delay 2 \
