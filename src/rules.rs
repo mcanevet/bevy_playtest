@@ -88,7 +88,7 @@ declare_rules! {
     // Verification depth.
     ReplayDivergence => "replay_divergence",
 
-    // Infrastructure errors (producible; oracle_error only in BRP tier)
+    // Infrastructure errors
     OracleError => "oracle_error",
     ScenarioError => "scenario_error",
 }

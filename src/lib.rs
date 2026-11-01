@@ -2,11 +2,6 @@
 
 #[cfg(feature = "takeover")]
 pub mod battery;
-pub mod brp;
-#[cfg(feature = "brp-plugin")]
-pub mod brp_plugin;
-#[cfg(feature = "brp")]
-pub mod brp_runner;
 pub mod choice;
 pub mod driver;
 pub mod enums;

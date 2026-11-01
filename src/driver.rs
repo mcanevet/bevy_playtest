@@ -1038,7 +1038,6 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         choices,
         harness_mode: "in_process".to_string(),
         scenario_source: None,
-        brp_parity: None,
         log_capture_available: Some(log_capture_available),
     })
 }

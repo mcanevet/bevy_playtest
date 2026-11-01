@@ -3,7 +3,7 @@ name = "bevy_playtest"
 version = "0.5.0"
 edition = "2021"
 rust-version = "1.97"
-description = "Playtesting harness for Bevy games: in-process driver, oracles, external BRP validation"
+description = "Playtesting harness for Bevy games: deterministic bot, oracles, headless takeover"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/mcanevet/bevy_playtest"
 readme = "README.md"
@@ -38,14 +38,6 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 # PlaytestPlugin takeover: winit detection + headless plugin-group swap
 bevy_winit = { version = "0.20.1", optional = true, default-features = false }
 bevy = { version = "0.20.1", optional = true }
-
-# BRP client (brp feature)
-async-io = { version = "2.6.0", optional = true }
-http-body-util = { version = "0.1.5", optional = true }
-hyper = { version = "1.12.0", optional = true, features = ["client", "http1"] }
-smol-hyper = { version = "0.1.1", optional = true }
-bevy_remote = { version = "0.20.1", optional = true, default-features = false, features = ["http"] }
-futures-lite = { version = "2.6.1", optional = true }
 
 [[bin]]
 name = "takeover_demo"
@@ -93,14 +85,6 @@ default = ["in-process", "takeover"]
 in-process = []
 takeover = ["in-process", "takeover-winit"]
 takeover-winit = ["takeover", "dep:bevy_winit", "dep:bevy"]
-brp = [
-    "dep:hyper",
-    "dep:smol-hyper",
-    "dep:async-io",
-    "dep:http-body-util",
-    "dep:futures-lite",
-]
-brp-plugin = ["dep:bevy_remote"]
 
 # Local dev speedup: line-tables-only debuginfo (fast link, much
 # smaller target/ — full debuginfo made each Bevy rlib 190-370 MB).

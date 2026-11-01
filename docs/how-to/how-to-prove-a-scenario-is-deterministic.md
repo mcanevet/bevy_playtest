@@ -18,8 +18,6 @@ Two constraints:
 
 - **Requires `single_threaded: true`** (the default) — multithreaded
   system order is not stable enough to fingerprint.
-- **In-process only.** External-BRP mode rejects the flag explicitly:
-  wall-clock pacing makes honest replay verification impossible there.
 
 On divergence, the report fails with `replay_divergence` and the first
 frame where the two passes disagreed — the signature of hidden

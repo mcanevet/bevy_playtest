@@ -98,21 +98,14 @@ pub struct PlaytestReport {
     pub harness_mode: String,
     /// Provenance of the executed scenario: `"file"`, `"builtin_smoke"`, or
     /// `"builtin_battery"` (the zero-config battery literal). Absent for
-    /// non-takeover producers that never had a source path.
+    /// report stubs that never executed a sourced scenario.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scenario_source: Option<String>,
-    /// External-BRP parity: "full" when the game serves the
-    /// bevy_playtest/* BRP methods, "degraded" otherwise. Absent for
-    /// in-process runs (inherently full parity).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub brp_parity: Option<String>,
     /// Whether log capture was active for the producing process.
     /// `Some(false)` = another tracing subscriber won the write-once
     /// global default (typically DefaultPlugins' LogPlugin), so
     /// log_error/log_warn findings are under-reported. The run also
-    /// carries an informational `log_capture_lost` violation. Absent
-    /// for producers where the concept does not apply (BRP children
-    /// never capture logs by design).
+    /// carries an informational `log_capture_lost` violation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_capture_available: Option<bool>,
 }
@@ -133,7 +126,6 @@ impl PlaytestReport {
             choices: vec![],
             harness_mode: "in_process".to_string(),
             scenario_source: None,
-            brp_parity: None,
             log_capture_available: None,
         }
     }

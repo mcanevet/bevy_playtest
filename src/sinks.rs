@@ -176,8 +176,7 @@ pub fn subscriber_won() -> bool {
 /// under-reported. Setting this silences the loud warning and the
 /// report's informational `log_capture_lost` entry. The install-time
 /// WARNING is decided once (the first subscriber install); report
-/// entries consult the env var per run. Meaningless in BRP mode (no
-/// log capture there by design).
+/// entries consult the env var per run.
 ///
 /// Lives here (not plugin.rs) because sinks is compiled under every
 /// feature combination.

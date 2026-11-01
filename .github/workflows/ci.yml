@@ -28,8 +28,6 @@ jobs:
   #   - flagless `cargo test` UX pin (breakout)
   #   - battery tier, all 7 fixtures (playtest feature, plain cargo test)
   #   - release purity guard (zero bevy_playtest bytes in plain builds)
-  #   - external-BRP acceptance, all 7 fixtures (inline, was the
-  #     7-way test matrix: 5s tests don't justify a job class)
   #   - clippy -D warnings, fmt, rustdoc
   ci:
     runs-on: ubuntu-26.04
@@ -118,15 +116,12 @@ jobs:
       - name: Format check
         run: cargo fmt --all --check
 
-      # Build everything ONCE with --all-features, then run all test
-      # suites against the same artifacts. This avoids recompiling Bevy
-      # for each test step (the old flow built with --features brp, then
-      # unit tests demanded --all-features, forcing a full rebuild).
+      # Build everything ONCE, then run all test suites against the same
+      # artifacts. This avoids recompiling Bevy for each test step.
       - name: Build everything
         run: |
           df -h /
           cargo test --manifest-path fixtures/Cargo.toml --workspace --no-run
-          cargo test --locked --features brp --no-run
           cargo test --locked --workspace --all-features --lib --tests --no-run
 
       # UX pin: plain `cargo test` on breakout must activate the
@@ -143,13 +138,11 @@ jobs:
       - name: Fault-injection oracle tests
         run: cargo test --locked --test fault_injection
 
-      # Full unit + integration battery (skips acceptance tests that
-      # need fixture binaries; those run inline below). Uses cached
-      # artifacts from the "Build everything" step.
+      # Full unit + integration battery (no exclusions needed now).
+      # Uses cached artifacts from the "Build everything" step.
       - name: Workspace unit tests
         run: >
-          cargo test --locked --workspace --all-features --lib --tests --
-          --skip fixtures_run_under_external_brp
+          cargo test --locked --workspace --all-features --lib --tests
 
       # Battery tier for ALL fixtures (playtest feature). The
       # self-dev-dependency pattern activates `playtest` only for test
@@ -168,20 +161,6 @@ jobs:
             echo "ERROR: bevy_playtest resolved in a plain bin build (feature leak)" >&2
             exit 1
           fi
-
-      # External-BRP acceptance: drive the feature-enabled fixture
-      # binaries over BRP. Binaries were built in the "Build everything"
-      # step; no recompilation here.
-      - name: External-BRP acceptance (all fixtures)
-        env:
-          WGPU_BACKEND: vulkan
-        run: |
-          set -e
-          for fixture in alien_cake_addict breakout contributors desk_toy game_menu loading_screen mines; do
-            echo "=== BRP acceptance: $fixture"
-            BEVY_PLAYTEST_FIXTURE=$fixture \
-              timeout 120 cargo test --locked --test acceptance -- --exact fixtures_run_under_external_brp --nocapture
-          done
 
       # Clippy reuses the artifacts compiled above.
       - name: Clippy (deny warnings)

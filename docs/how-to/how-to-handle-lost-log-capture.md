@@ -26,4 +26,4 @@ To fix it:
    a silent hole.
 
 The run is never failed on lost log capture alone; acknowledgment only
-suppresses the warning. BRP children never capture logs by design.
+suppresses the warning.

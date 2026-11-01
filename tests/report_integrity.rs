@@ -28,8 +28,8 @@ fn scenario_json(bot: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// An app where NOTHING ever happens (no entities, no transforms) must
-/// not pass silently. The BRP runner has a zero-row vacuity guard; the
-/// in-process driver must have one too (undocumented contract).
+/// not pass silently. The in-process driver must have a zero-row vacuity
+/// guard (undocumented contract).
 #[test]
 fn zero_entity_game_must_not_pass_vacuously() {
     let _slot = common::run_slot();

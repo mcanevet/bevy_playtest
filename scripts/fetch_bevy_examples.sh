@@ -277,12 +277,11 @@ unexpected_cfgs = { level = "allow" }
 playtest = [
     "dep:bevy_playtest",
     "bevy_playtest/takeover",
-    "bevy_playtest/brp-plugin",
     "bevy_playtest/takeover-winit",
 ]
 
 [dependencies]
-bevy = { version = "0.20.0", features = ["bevy_remote"] }
+bevy = { version = "0.20.0" }
 bevy_playtest = { path = "../..", optional = true }
 $(fixture_extra_deps "${target_dir}/src/main.rs")
 
@@ -368,7 +367,6 @@ self-dev-dep and runs the default battery.
 - Debugging only (live logs, quick re-runs): `BEVY_PLAYTEST_SCENARIO=
   <scenario> cargo run --features playtest` — the default build is
   playtest-free
-- External-BRP: `BRP_PORT=4570 cargo run --features playtest`
 EOF
     sed "s/NAME/${name}/g" "${target_dir}/README.md" > "${target_dir}/README.md.tmp"
     mv "${target_dir}/README.md.tmp" "${target_dir}/README.md"
@@ -391,7 +389,7 @@ members = [
 ]
 
 [workspace.dependencies]
-bevy = { version = "0.20.0", features = ["bevy_remote"] }
+bevy = { version = "0.20.0" }
 
 # Standard Bevy CI practice: no debug info for dev/profile builds
 # cuts linker memory and build time dramatically.
