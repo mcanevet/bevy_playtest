@@ -105,8 +105,12 @@ jobs:
         with:
           # Both workspaces share ONE physical target dir
           # (.cargo/config.toml), so one path covers everything.
+          # The fetch-script hash is part of the key: a changed
+          # script changes what fixtures/targets get generated, and a
+          # stale cache restored on top of fresh generation is what
+          # blew the runner disk (ENOSPC, twice) on 2026-10-31.
           path: target/
-          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}-lld
+          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml', 'scripts/fetch_bevy_examples.sh') }}-lld
           restore-keys: |
             ${{ runner.os }}-target-
 
