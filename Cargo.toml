@@ -64,6 +64,14 @@ name = "takeover_demo_default"
 path = "src/bin/takeover_demo_default.rs"
 required-features = ["takeover"]
 
+# Input-delivery regression demo: world moves only on
+# `just_pressed` under a DefaultPlugins-equivalent graph (see
+# tests/input_delivery.rs).
+[[bin]]
+name = "takeover_demo_input"
+path = "src/bin/takeover_demo_input.rs"
+required-features = ["takeover"]
+
 [features]
 default = ["in-process", "takeover"]
 in-process = []

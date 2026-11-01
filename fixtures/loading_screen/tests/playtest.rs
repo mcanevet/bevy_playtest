@@ -10,9 +10,12 @@ fn playtest_battery() {
         bevy_playtest::battery::BUILTIN_BATTERY,
     )
     .expect("battery infrastructure failure");
-    // Known finding: static loading screen screens trip the liveness oracle.
-    // Once PR #23 (synthetic_pointer bot) drives pointer input through
-    // the UI, this should assert empty instead.
+    // Known finding: static loading screen screens trip the liveness
+    // oracle. Keyboard delivery is healthy post just_pressed fix —
+    // verified 200+ delivered press transitions — but the level-select
+    // scene holds no animating transforms, so the static-scene verdict
+    // is CORRECT for now. Once the harness emits CursorMoved (pointer
+    // path), menu interaction may animate the scene; re-check then.
     assert_eq!(report.violation_pairs(), [("frozen_world", "world")]);
 }
 

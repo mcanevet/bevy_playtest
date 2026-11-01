@@ -740,13 +740,29 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     app.init_resource::<ButtonInput<bevy_input::mouse::MouseButton>>();
     // Order: translate BEFORE game systems in Update so games observe the
     // same-frame state (matching InputPlugin's placement in PreUpdate).
-    app.add_systems(
-        bevy_app::prelude::PreUpdate,
-        (
-            bevy_input::keyboard::keyboard_input_system,
-            bevy_input::mouse::mouse_button_input_system,
-        ),
-    );
+    // ONLY register when the app has no input plugin of its own: a second
+    // copy of `keyboard_input_system` in PreUpdate is not harmless —
+    // `ButtonInput::clear()` in the second copy wipes the first copy's
+    // fresh `just_pressed` state before Update runs. Both copies read the
+    // same message queue, so a release+repress batch in one frame
+    // self-heals (the re-press re-inserts `just_pressed`) — but an
+    // ISOLATED press on a key already in `pressed` is a no-op in the
+    // second copy, and the transition is lost. Games polling
+    // `just_pressed` — the standard Bevy idiom — then never see isolated
+    // presses, silently: `pressed` still works, so movement bots look
+    // fine while menu/selection logic is deaf. Guarding on the plugin
+    // (rather than probing schedules) keeps MinimalPlugins apps working:
+    // the resource seeding above still applies, and the translation
+    // systems run exactly once regardless of plugin graph.
+    if !app.is_plugin_added::<bevy_input::InputPlugin>() {
+        app.add_systems(
+            bevy_app::prelude::PreUpdate,
+            (
+                bevy_input::keyboard::keyboard_input_system,
+                bevy_input::mouse::mouse_button_input_system,
+            ),
+        );
+    }
     // Oracles read wall-clock delta; Time may be absent on minimal apps.
     if app.world().get_resource::<Time>().is_none() {
         app.insert_resource(Time::<()>::default());
