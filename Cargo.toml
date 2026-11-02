@@ -15,7 +15,11 @@ categories = ["game-development", "development-tools::testing"]
 # only unifies bevy_ecs/app/transform/input into the consumer's graph.
 bevy_app = { version = "0.20.1", default-features = false, features = ["std"] }
 bevy_reflect = { version = "0.20.1", default-features = false, features = ["std"] }
-bevy_ecs = { version = "0.20.1", default-features = false, features = ["std"] }
+# bevy_ecs gets an explicit "bevy_reflect": the always-compiled state-digest
+# module uses `bevy_ecs::reflect` (AppTypeRegistry, ReflectComponent).
+# Today the feature is also enabled transitively via bevy_input/bevy_reflect,
+# but the digest must not rely on another crate's feature wiring to compile.
+bevy_ecs = { version = "0.20.1", default-features = false, features = ["std", "bevy_reflect"] }
 bevy_transform = { version = "0.20.1", default-features = false, features = ["std", "bevy-support"] }
 bevy_tasks = { version = "0.20.1", default-features = false }
 bevy_time = { version = "0.20.1", default-features = false, features = ["std"] }
@@ -46,6 +50,13 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 bevy_winit = { version = "0.20.1", optional = true, default-features = false }
 bevy = { version = "0.20.1", optional = true }
 
+[dev-dependencies]
+# Register an engine resource (bevy_time::Time<Virtual>) as REFLECTED in
+# the exclusion test: the harness's narrow bevy_time dep (no reflect)
+# covers runtime use, but the test must prove the bevy_* filter drops a
+# genuinely registered engine type. Dev-deps do not taint consumers.
+bevy_time = { version = "0.20.1", features = ["bevy_reflect"] }
+
 [[bin]]
 name = "takeover_demo"
 path = "src/bin/takeover_demo.rs"
@@ -64,6 +75,11 @@ required-features = ["takeover"]
 [[bin]]
 name = "takeover_demo_nondet"
 path = "src/bin/takeover_demo_nondet.rs"
+required-features = ["takeover"]
+
+[[bin]]
+name = "takeover_demo_nondet_resource"
+path = "src/bin/takeover_demo_nondet_resource.rs"
 required-features = ["takeover"]
 
 [[bin]]

@@ -513,6 +513,90 @@ fn replay_divergence_fails_on_nondeterministic_stock_game() {
     );
 }
 
+/// Takeover-mode digest handoff, end to end: a game whose only
+/// nondeterminism is a wall-clock-driven REFLECTED RESOURCE must be
+/// flagged when `record_digest: true` (pass-B child writes the digest
+/// series, parent reads and compares it) — while the narrow
+/// fingerprint-only run of the same game stays blind and passes.
+/// Guards the child->parent digest file handoff; a regression there
+/// would leave takeover reports blind while in-process tests stay
+/// green.
+#[test]
+fn digest_divergence_fires_on_resource_nondeterminism_in_takeover() {
+    let _slot = common::run_slot();
+    let nondet_resource = PathBuf::from(env!("CARGO_BIN_EXE_takeover_demo_nondet_resource"));
+    let dir = unique_dir("replay_digest_div");
+
+    // Control: without record_digest, the narrow fingerprint is blind
+    // to resource-only nondeterminism, so the run passes.
+    let scenario_control = dir.join("scenario_control.json");
+    let report_control = dir.join("report_control.json");
+    std::fs::write(
+        &scenario_control,
+        r#"{"bot":{"type":"chaos","seed":42},"duration_s":0.05,"tps":60,
+            "verify_replay":true,"record_digest":false}"#,
+    )
+    .unwrap();
+    let out = Command::new(&nondet_resource)
+        .env(ENV_SCENARIO, &scenario_control)
+        .env(ENV_REPORT, &report_control)
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(exit_code::PASS),
+        "control: fingerprint-only replay must stay blind to resource-only \
+         nondeterminism: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+
+    // With record_digest, the digest series comparison must catch the
+    // divergence the fingerprint missed.
+    let scenario_digest = dir.join("scenario_digest.json");
+    let report_digest = dir.join("report_digest.json");
+    std::fs::write(
+        &scenario_digest,
+        r#"{"bot":{"type":"chaos","seed":42},"duration_s":0.05,"tps":60,
+            "verify_replay":true,"record_digest":true}"#,
+    )
+    .unwrap();
+    let out = Command::new(&nondet_resource)
+        .env(ENV_SCENARIO, &scenario_digest)
+        .env(ENV_REPORT, &report_digest)
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(exit_code::FAIL),
+        "record_digest must flag resource-only nondeterminism in takeover: \
+         stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&report_digest).unwrap()).unwrap();
+    assert_eq!(report["status"], "fail", "{report}");
+    let rules: Vec<&str> = report["violations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["rule"].as_str().unwrap())
+        .collect();
+    assert!(
+        rules.contains(&"replay_divergence"),
+        "expected replay_divergence among {rules:?}"
+    );
+    // The digest series must be attached to the report (handoff worked
+    // end to end, and the failure evidence cites the digest, not just
+    // the fingerprint).
+    let has_digest = report["state_digest"]
+        .as_array()
+        .map(|a| !a.is_empty())
+        .unwrap_or(false);
+    assert!(has_digest, "state_digest series missing from report");
+}
+
 /// A game whose only entity despawns just before the run ends is NOT
 /// vacuous: the oracles observed it during the run. Regression test
 /// for the post-hoc world-query vacuity guard (false positive).

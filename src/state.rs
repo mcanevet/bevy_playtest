@@ -108,6 +108,12 @@ pub struct PlaytestReport {
     /// carries an informational `log_capture_lost` violation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_capture_available: Option<bool>,
+    /// Per-frame broadened state digests (opt-in via `record_digest: true`).
+    /// Covers entity/archetype counts, Transform/UiTransform translations,
+    /// and reflected game resources. Skipped when empty to keep reports
+    /// compact for runs that didn't record.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub state_digest: Vec<crate::digest::StateDigest>,
 }
 
 impl PlaytestReport {
@@ -127,6 +133,7 @@ impl PlaytestReport {
             harness_mode: "in_process".to_string(),
             scenario_source: None,
             log_capture_available: None,
+            state_digest: vec![],
         }
     }
 

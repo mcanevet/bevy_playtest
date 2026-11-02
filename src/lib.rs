@@ -3,6 +3,7 @@
 #[cfg(feature = "takeover")]
 pub mod battery;
 pub mod choice;
+pub mod digest;
 pub mod driver;
 pub mod enums;
 pub mod invariant_eval;

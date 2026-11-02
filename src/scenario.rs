@@ -78,6 +78,15 @@ pub struct Scenario {
     /// false.
     #[serde(default)]
     pub verify_replay: bool,
+    /// Broadened state digest recording: when true, record a u64
+    /// per-frame digest covering entity/archetype counts, Transform/
+    /// UiTransform translations, and reflected game resources, and
+    /// attach the series to the report as `state_digest`. Default
+    /// false (zero-cost opt-in). When combined with `verify_replay`,
+    /// the digest series of both passes are additionally compared and
+    /// a divergence fails the run.
+    #[serde(default)]
+    pub record_digest: bool,
 }
 
 /// Bot configuration.

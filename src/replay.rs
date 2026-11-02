@@ -145,30 +145,66 @@ pub fn run_scenario_verified(
     let mut report = report_b;
 
     // A crash exempts the divergence check — it applies only to
-    // completed runs.
-    if report_a.status != crate::enums::PlaytestStatus::Crash
-        && status_b != crate::enums::PlaytestStatus::Crash
-    {
+    // completed runs. Compare fingerprint and digest (opt-in) together;
+    // if either diverges, append ONE combined `replay_divergence`
+    // violation so aggregated reports and JUnit don't have duplicate
+    // (rule, target) pairs.
+    let mut digests_diverged = false;
+    let mut fingerprint_diverged = false;
+    let mut first_divergent_frame = u64::MAX;
+    let mut fingerprint_detail = None;
+    let mut digest_detail = None;
+
+    let crashes_exempt = report_a.status == crate::enums::PlaytestStatus::Crash
+        || status_b == crate::enums::PlaytestStatus::Crash;
+
+    // Fingerprint comparison
+    if !crashes_exempt {
         if let Err(div) = compare(&series_a, &series_b) {
-            report.violations.push(crate::state::ViolationEntry {
-                rule: crate::rules::Rule::ReplayDivergence.name().to_string(),
-                target: "run".to_string(),
-                first_frame: div.frame,
-                last_frame: div.frame,
-                count: 1,
-                detail: format!(
-                    "first divergent frame {}: pass A fingerprint {:#018x}, \
-                     pass B fingerprint {:#018x} — hidden nondeterminism \
-                     (wall clock, unseeded RNG, or unordered iteration)",
-                    div.frame, div.pass_a_hash, div.pass_b_hash
-                ),
-                last_detail: format!(
-                    "divergent frame {} ({:#018x} vs {:#018x})",
-                    div.frame, div.pass_a_hash, div.pass_b_hash
-                ),
-            });
-            report.status = crate::enums::PlaytestStatus::Fail;
+            fingerprint_diverged = true;
+            first_divergent_frame = first_divergent_frame.min(div.frame);
+            fingerprint_detail = Some(format!(
+                "frame {}: {:#018x} vs {:#018x}",
+                div.frame, div.pass_a_hash, div.pass_b_hash
+            ));
         }
+    }
+
+    // Broad-digest comparison (opt-in via record_digest)
+    if !crashes_exempt && scenario.record_digest {
+        if let Err(div) = crate::digest::compare(&report_a.state_digest, &report.state_digest) {
+            digests_diverged = true;
+            first_divergent_frame = first_divergent_frame.min(div.frame);
+            digest_detail = Some(format!(
+                "state-digest frame {}: {:#018x} vs {:#018x}",
+                div.frame, div.hash_a, div.hash_b
+            ));
+        }
+    }
+
+    if fingerprint_diverged || digests_diverged {
+        let detail_parts: Vec<String> = [fingerprint_detail, digest_detail]
+            .into_iter()
+            .flatten()
+            .collect();
+        report.violations.push(crate::state::ViolationEntry {
+            rule: crate::rules::Rule::ReplayDivergence.name().to_string(),
+            target: "run".to_string(),
+            first_frame: first_divergent_frame,
+            last_frame: first_divergent_frame,
+            count: 1,
+            detail: format!(
+                "{} — hidden nondeterminism{}",
+                detail_parts.join("; "),
+                if digests_diverged && !fingerprint_diverged {
+                    " (in a signal the narrow fingerprint does not cover)"
+                } else {
+                    ""
+                }
+            ),
+            last_detail: detail_parts.join("; "),
+        });
+        report.status = crate::enums::PlaytestStatus::Fail;
     }
 
     // Both runs must agree on status; a Pass/Fail split is itself a
