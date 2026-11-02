@@ -54,11 +54,12 @@ pub const ENV_REPORT: &str = "BEVY_PLAYTEST_REPORT";
 /// schedule loop so no window opens and no display is needed.
 pub const ENV_HEADLESS: &str = "BEVY_PLAYTEST_HEADLESS";
 pub use crate::sinks::ENV_ALLOW_MISSING_LOG_CAPTURE;
-const KNOWN_ENV_VARS: [&str; 6] = [
+const KNOWN_ENV_VARS: [&str; 7] = [
     ENV_SCENARIO,
     ENV_REPORT,
     ENV_HEADLESS,
     ENV_REPLAY_PASS_B,
+    ENV_REPLAY_PASS_B_DIGEST,
     ENV_ALLOW_MISSING_LOG_CAPTURE,
     // Test-selection var (set by the acceptance suite / CI matrix to
     // pick one fixture); inherited by the game process harmlessly.
@@ -330,6 +331,7 @@ pub fn battery_scenario() -> Result<crate::scenario::Scenario, String> {
 /// takeover skips verification (avoiding recursion), runs one pass,
 /// writes the fingerprint series to the path in the value, and exits.
 const ENV_REPLAY_PASS_B: &str = "BEVY_PLAYTEST_REPLAY_PASS_B_SERIES";
+const ENV_REPLAY_PASS_B_DIGEST: &str = "BEVY_PLAYTEST_REPLAY_PASS_B_DIGEST";
 
 /// Replay verification on the takeover path: pass A runs in this
 /// process, writing its fingerprint series to a file; a child process
@@ -364,6 +366,17 @@ fn verify_replay_subprocess(
             .map_err(|err| format!("cannot serialize replay series: {err}"))?;
         std::fs::write(&series_path, bytes)
             .map_err(|err| format!("cannot write replay series '{series_path}': {err}"))?;
+        // Opt-in broad digest series travels alongside the fingerprint
+        // series so takeover replay verification covers the same widened
+        // state surface as the in-process path.
+        if let Some(digest_path) = std::env::var_os(ENV_REPLAY_PASS_B_DIGEST) {
+            let digest_bytes = serde_json::to_vec(&digest_series(&report.state_digest))
+                .map_err(|err| format!("cannot serialize digest series: {err}"))?;
+            let digest_path = digest_path.to_string_lossy();
+            std::fs::write(&*digest_path, digest_bytes).map_err(|err| {
+                format!("cannot write replay digest series '{digest_path}': {err}")
+            })?;
+        }
         std::process::exit(0);
     }
 
@@ -371,6 +384,7 @@ fn verify_replay_subprocess(
     let exe = std::env::current_exe()
         .map_err(|err| format!("cannot locate current executable for replay pass B: {err}"))?;
     let series_path = format!("{report_path}.replay-series-b.json");
+    let digest_path = format!("{report_path}.digest-series-b.json");
     let output = std::process::Command::new(&exe)
         // Pass-B child must behave identically to a fresh run: strip
         // OUR report target (set explicitly below) and never inherit
@@ -378,6 +392,7 @@ fn verify_replay_subprocess(
         .env_remove("BEVY_PLAYTEST_REPORT")
         .env_remove("BEVY_PLAYTEST_HEADLESS")
         .env(ENV_REPLAY_PASS_B, &series_path)
+        .env(ENV_REPLAY_PASS_B_DIGEST, &digest_path)
         .output()
         .map_err(|err| format!("cannot spawn replay pass B ({exe:?}): {err}"))?;
     if !output.status.success() {
@@ -397,33 +412,70 @@ fn verify_replay_subprocess(
         .into_iter()
         .map(|(frame, hash)| crate::replay::FrameFingerprint { frame, hash })
         .collect();
+
+    // Compare the fingerprint series, then (opt-in) the digest series.
+    // Evidence from both merges into a single replay_divergence
+    // violation so aggregated reports keep one (rule, target) pair.
+    let mut diverged_details: Vec<String> = vec![];
+    // Actual first mismatching frame across both comparisons, so violation
+    // frame ranges point consumers at the divergence, not at run start.
+    let mut first_divergent_frame: Option<u64> = None;
     if report.status != crate::enums::PlaytestStatus::Crash {
         if let Err(div) = crate::replay::compare(&series_a, &frames_b) {
-            report.violations.push(crate::state::ViolationEntry {
-                rule: crate::rules::Rule::ReplayDivergence.name().to_string(),
-                target: "run".to_string(),
-                first_frame: div.frame,
-                last_frame: div.frame,
-                count: 1,
-                detail: format!(
-                    "first divergent frame {}: pass A fingerprint {:#018x}, pass B \
-                     fingerprint {:#018x} — hidden nondeterminism (wall clock, \
-                     unseeded RNG, or unordered iteration)",
-                    div.frame, div.pass_a_hash, div.pass_b_hash
-                ),
-                last_detail: format!(
-                    "divergent frame {} ({:#018x} vs {:#018x})",
-                    div.frame, div.pass_a_hash, div.pass_b_hash
-                ),
-            });
-            report.status = crate::enums::PlaytestStatus::Fail;
+            diverged_details.push(format!(
+                "first divergent frame {}: pass A fingerprint {:#018x}, pass B \
+                 fingerprint {:#018x} — hidden nondeterminism (wall clock, \
+                 unseeded RNG, or unordered iteration)",
+                div.frame, div.pass_a_hash, div.pass_b_hash
+            ));
+            first_divergent_frame = Some(first_divergent_frame.unwrap_or(u64::MAX).min(div.frame));
         }
+        if scenario.record_digest {
+            let bytes = std::fs::read(&digest_path)
+                .map_err(|err| format!("cannot read replay pass B digest series: {err}"))?;
+            // Wire format matches the child writer: Vec<(frame, hash)>.
+            let pairs: Vec<(u64, u64)> = serde_json::from_slice(&bytes)
+                .map_err(|err| format!("corrupt replay pass B digest series: {err}"))?;
+            let digests_b: Vec<crate::digest::StateDigest> = pairs
+                .into_iter()
+                .map(|(frame, hash)| crate::digest::StateDigest { frame, hash })
+                .collect();
+            if let Err(div) = crate::digest::compare(&report.state_digest, &digests_b) {
+                diverged_details.push(format!(
+                    "first state-digest divergence at frame {}: pass A hash \
+                     {:#018x}, pass B hash {:#018x} — hidden nondeterminism \
+                     in a signal the narrow fingerprint does not cover \
+                     (resource values, entity/archetype counts, or UI state)",
+                    div.frame, div.hash_a, div.hash_b
+                ));
+                first_divergent_frame =
+                    Some(first_divergent_frame.unwrap_or(u64::MAX).min(div.frame));
+            }
+        }
+    }
+    let _ = std::fs::remove_file(&digest_path);
+    if !diverged_details.is_empty() {
+        let first = first_divergent_frame.unwrap_or(0);
+        report.violations.push(crate::state::ViolationEntry {
+            rule: crate::rules::Rule::ReplayDivergence.name().to_string(),
+            target: "run".to_string(),
+            first_frame: first,
+            last_frame: first,
+            count: 1,
+            detail: diverged_details.join("; "),
+            last_detail: diverged_details.last().cloned().unwrap_or_default(),
+        });
+        report.status = crate::enums::PlaytestStatus::Fail;
     }
     Ok(report)
 }
 
 fn series_fingerprints(series: &[crate::replay::FrameFingerprint]) -> Vec<(u64, u64)> {
     series.iter().map(|f| (f.frame, f.hash)).collect()
+}
+
+fn digest_series(series: &[crate::digest::StateDigest]) -> Vec<(u64, u64)> {
+    series.iter().map(|d| (d.frame, d.hash)).collect()
 }
 
 fn load_scenario(path: &str) -> Result<crate::scenario::Scenario, String> {

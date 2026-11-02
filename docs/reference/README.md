@@ -30,6 +30,7 @@ Public API surface for integrators.
   "strict_warnings": boolean,     // default false
   "duration_s": number,           // default 15.0; max 3600
   "verify_replay": boolean,       // default false; in-process only, needs single_threaded
+  "record_digest": boolean,       // default false; record per-frame broadened state digest
   "invariants": [
     {
       "name": "string",
@@ -135,6 +136,9 @@ Two distinct error classes, at different stages:
 - `action_log`: `[{ frame, source, action, details }]` — audited bot
   inputs
 - `choices` (the bot's recorded random draws)
+- `state_digest`: `[{ frame, hash }]` — per-frame broadened state digests,
+  present only when the scenario sets `record_digest: true`; omitted
+  (empty) otherwise
 - `harness_mode`: `"in_process"`
 - `scenario_source`: `"file"`, `"builtin_smoke"`, or `"builtin_battery"`
 - `log_capture_available` (absent when not applicable; `log_capture_available: false` also produces an
@@ -155,6 +159,7 @@ Report helpers on `PlaytestReport`:
 - `bevy_playtest::replay::run_scenario_verified(build: impl Fn() -> App,
   &Scenario) -> Result<PlaytestReport, ScenarioError>` — runs the scenario
   twice on freshly built apps and compares per-frame fingerprints
+  (and, when `record_digest: true`, the broadened per-frame state digests)
 - `bevy_playtest::junit::reports_to_junit(&[(String, PlaytestReport)],
   &str) -> String`
 

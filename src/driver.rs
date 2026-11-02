@@ -844,11 +844,6 @@ pub struct FrameTimingStats {
     pub anomalies: u64,
 }
 
-/// Run condition: fingerprint only when the scenario opted in.
-fn verify_replay_enabled(scenario: Res<ScenarioResource>) -> bool {
-    scenario.0.verify_replay
-}
-
 impl FrameTimingStats {
     pub fn observe(&mut self, value: f64) {
         self.count += 1;
@@ -1005,6 +1000,12 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     if scenario.verify_replay {
         app.insert_resource(crate::replay::ReplaySeries::default());
     }
+    if scenario.record_digest {
+        // Opt-in per-frame state digest recording. Cheap when present
+        // (a few queries + a reflection walk per frame), zero cost when
+        // the resource is absent.
+        app.insert_resource(crate::digest::StateDigestRecorder::default());
+    }
 
     app.add_systems(
         Update,
@@ -1018,9 +1019,19 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             crate::invariant_eval::evaluate_invariants_system,
             crate::oracles::nan_oracle_system,
             crate::oracles::bounds_oracle_system,
-            crate::replay::fingerprint_system.run_if(verify_replay_enabled),
         ),
     );
+
+    // Per-frame RECORDERS (replay fingerprint + state digest) are NOT
+    // scheduled systems: they are invoked by the driver loop directly
+    // after `app.update()` returns. No schedule placement — not even
+    // `Last` — can guarantee ordering relative to the game's OWN
+    // systems (a game may register mutating systems in `Last` too),
+    // so the only guaranteed end-of-frame observation point is outside
+    // all schedules. Recording here means the series capture the fully
+    // settled post-update world every frame, including the final frame.
+    let record_fingerprint = scenario.verify_replay;
+    let record_digest = scenario.record_digest;
 
     // UI liveness watcher must observe this frame's changes BEFORE the
     // oracle consumes them. Registered separately so the whole system
@@ -1038,6 +1049,14 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         for i in 0..total_ticks {
             sinks::set_current_frame(i);
             app.update();
+            // Guaranteed end-of-frame recording (see comment above): after
+            // ALL schedules (incl. the game's own `Last` systems) ran.
+            if record_fingerprint {
+                crate::replay::fingerprint_system(app.world_mut());
+            }
+            if record_digest {
+                crate::digest::record_digest_system(app.world_mut());
+            }
             if let Some(mut state) = app.world_mut().get_resource_mut::<RunState>() {
                 state.frame += 1;
             }
@@ -1060,6 +1079,13 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         .world_mut()
         .remove_resource::<RunViolations>()
         .map(|v| v.0)
+        .unwrap_or_default();
+
+    // Extract the per-frame state digest series if the scenario opted in.
+    let state_digest = app
+        .world_mut()
+        .remove_resource::<crate::digest::StateDigestRecorder>()
+        .map(|r| r.digests)
         .unwrap_or_default();
 
     let drained = sinks::drain();
@@ -1198,6 +1224,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         harness_mode: "in_process".to_string(),
         scenario_source: None,
         log_capture_available: Some(log_capture_available),
+        state_digest,
     })
 }
 
