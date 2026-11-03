@@ -4,6 +4,7 @@
 pub mod battery;
 pub mod choice;
 pub mod digest;
+pub mod discovery;
 pub mod driver;
 pub mod enums;
 pub mod invariant_eval;

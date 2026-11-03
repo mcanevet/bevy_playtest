@@ -47,6 +47,7 @@
 //! `cargo build --release` compiles the game WITHOUT the feature: the
 //! plugin lines are cfg'd out and zero playtest bytes ship.
 
+use crate::discovery::flow;
 use crate::plugin::ENV_REPORT;
 use crate::plugin::ENV_SCENARIO;
 use crate::state::PlaytestReport;
@@ -105,6 +106,11 @@ pub enum BatteryError {
     NoReport { exit_code: Option<i32> },
     /// A report was written but could not be parsed.
     ReportParse(String),
+    /// Opt-in input-surface discovery failed (probe matrix or setup).
+    /// Discovery is infrastructure, not a game finding — a game that
+    /// crashes under probing surfaces here, while a game that is
+    /// merely NONDETERMINISTIC still gets a (statistical) surface.
+    Discovery(String),
 }
 
 impl std::fmt::Display for BatteryError {
@@ -122,6 +128,9 @@ impl std::fmt::Display for BatteryError {
                  interleaving hides them)."
             ),
             Self::ReportParse(e) => write!(f, "playtest report is not valid JSON: {e}"),
+            Self::Discovery(e) => {
+                write!(f, "input-surface discovery failed: {e}")
+            }
         }
     }
 }
@@ -132,6 +141,15 @@ impl std::error::Error for BatteryError {}
 /// completed run — INCLUDING failing ones (findings are the report's
 /// content, not an infrastructure error). Inspect `report.status` /
 /// `report.violations`, or use [`run_and_expect_clean`].
+///
+/// With `BEVY_PLAYTEST_DISCOVER=1` in the environment, the returned
+/// report additionally carries a discovered input surface
+/// (`report.discovered_surface`, frozen-world findings annotated with
+/// probe statistics via `_meta`). Discovery runs AFTER the game child
+/// completes, as a report-annotation step — it does not touch the
+/// run itself; the game child never sees the opt-in variables. See
+/// [`crate::discovery::flow`] for the full opt-in contract (candidate
+/// and cache-dir overrides).
 pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, BatteryError> {
     let dir = std::env::temp_dir().join(format!(
         "bevy_playtest_battery_{}_{}",
@@ -198,8 +216,31 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
     let bytes = std::fs::read(&report_path).map_err(|_| BatteryError::NoReport {
         exit_code: status.code(),
     })?;
-    let report: PlaytestReport =
+    let mut report: PlaytestReport =
         serde_json::from_slice(&bytes).map_err(|e| BatteryError::ReportParse(e.to_string()))?;
+
+    // Opt-in input-surface discovery (env contract in
+    // `discovery::flow`): the game child never sees these variables
+    // (stripped above), so this is purely a parent-side decision.
+    // A cache hit makes this a no-op cost-wise; a cold run probes
+    // the matrix (~35s at pool=8) before returning.
+    if flow::env_requested() {
+        // The scenario string IS the battery's identity for cache
+        // purposes: a scenario FILE is per-game-authored (its path
+        // distinguishes same-binary runs; a lossy transform like the
+        // file stem would let two same-stem scenarios collide), while
+        // the built-in battery literal covers every fixture
+        // identically. Threading it into the cache key stops one
+        // scenario's surface leaking into another's entry when they
+        // share the compiled binary.
+        let outcome = flow::discover_from_env(
+            std::path::Path::new(&config.binary),
+            Some(config.scenario.as_str()),
+        )
+        .map_err(|e| BatteryError::Discovery(e.to_string()))?;
+        report.discovered_surface = Some(outcome.surface);
+        report.annotate_frozen_world_with_surface();
+    }
     Ok(report)
 }
 

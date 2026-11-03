@@ -176,6 +176,7 @@ mod tests {
             count: 1,
             detail: "out of bounds (10012.0)".into(),
             last_detail: "out of bounds (10012.0)".into(),
+            meta: None,
         });
         r
     }

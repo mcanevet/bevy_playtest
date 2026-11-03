@@ -126,6 +126,21 @@ input).
 Opt-outs: `mouse_buttons: []` under a scenario's `bot.raw_surface`
 drops clicks; `"keys": []` there drops chaos keys (mouse-only chaos).
 
+## Discovering the input surface
+
+Declared-nothing cuts both ways: sometimes you want to know what the
+game actually consumes. Set `BEVY_PLAYTEST_DISCOVER=1` when running
+the battery and the harness probes a candidate key set itself — a
+pool of subprocess runs taps each key once and diffs the resulting
+state-digest traces against control runs. The report then carries a
+`discovered_surface` (effective keys, probed-but-inert keys, per-key
+and whole-surface confidence), and frozen-world findings gain a
+`_meta` block with the probe statistics ("probed 30 keys, 1
+effective"). The first run costs ~35s; the result is cached in
+`.bevy_playtest/cache/` and reused until the binary or harness
+changes. See [discover your input
+surface](docs/how-to/how-to-discover-your-input-surface.md).
+
 ## How in-process takeover works
 
 When `BEVY_PLAYTEST_SCENARIO` is set, your binary becomes its own

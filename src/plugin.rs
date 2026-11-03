@@ -53,14 +53,25 @@ pub const ENV_REPORT: &str = "BEVY_PLAYTEST_REPORT";
 /// plugin (added after DefaultPlugins) replaces winit's runner with a
 /// schedule loop so no window opens and no display is needed.
 pub const ENV_HEADLESS: &str = "BEVY_PLAYTEST_HEADLESS";
+/// Optional static input-surface scan export path (takeover runs):
+/// when set, the takeover writes the serialized
+/// [`crate::discovery::static_scan::StaticScanResult`] — captured by
+/// [`crate::driver::run_scenario`] BEFORE the harness installs its
+/// bot and oracle systems, so the counts describe the GAME, not the
+/// harness — to this path after the scenario completes. Set by the
+/// discovery probe pool on its first control run so the parent-side
+/// flow can merge real reader data into the surface (fail-open: a
+/// missing/failed export never fails the run).
+pub const ENV_DISCOVER_SCAN: &str = "BEVY_PLAYTEST_DISCOVER_SCAN";
 pub use crate::sinks::ENV_ALLOW_MISSING_LOG_CAPTURE;
-const KNOWN_ENV_VARS: [&str; 7] = [
+const KNOWN_ENV_VARS: [&str; 8] = [
     ENV_SCENARIO,
     ENV_REPORT,
     ENV_HEADLESS,
     ENV_REPLAY_PASS_B,
     ENV_REPLAY_PASS_B_DIGEST,
     ENV_ALLOW_MISSING_LOG_CAPTURE,
+    ENV_DISCOVER_SCAN,
     // Test-selection var (set by the acceptance suite / CI matrix to
     // pick one fixture); inherited by the game process harmlessly.
     "BEVY_PLAYTEST_FIXTURE",
@@ -279,6 +290,40 @@ fn run_takeover(app: &mut App, config: &TakeoverConfig) -> ! {
             std::process::exit(exit_code::CONFIG_ERROR);
         }
     }
+    // Opt-in static input-surface scan export (set by the discovery
+    // probe pool on its first control run). The scan was CAPTURED by
+    // `run_scenario` BEFORE the harness registered its bot and oracle
+    // systems: the bots write `KeyboardInput`/`MouseButtonInput`/
+    // `WindowEvent`, and writes count as observing — a scan taken
+    // after the scenario would attribute those harness WRITES to the
+    // game and inflate every device class with phantom readers. The
+    // captured result was parked OUTSIDE the world (a resource would
+    // shift the digest's entity/archetype counts and break the
+    // byte-identity the discovery diff needs between the exporting
+    // control run and every other run); drain it and export verbatim.
+    // Fail-open by contract: an export failure costs the parent its
+    // reader annotations, never the run its report (the flow's
+    // fail-open note covers the absence).
+    if let Some(scan_path) = std::env::var_os(ENV_DISCOVER_SCAN) {
+        match crate::discovery::static_scan::take_captured_scan() {
+            Some(scan) => match serde_json::to_vec(&scan) {
+                Ok(bytes) => {
+                    if let Err(err) = std::fs::write(&scan_path, bytes) {
+                        eprintln!(
+                            "bevy_playtest: static scan export failed ('{}'): {err}",
+                            scan_path.to_string_lossy()
+                        );
+                    }
+                }
+                Err(err) => {
+                    eprintln!("bevy_playtest: static scan serialization failed: {err}")
+                }
+            },
+            None => {
+                eprintln!("bevy_playtest: static scan export skipped (no captured scan was parked)")
+            }
+        }
+    }
     println!("bevy_playtest: report written to {}", config.report_path);
     let code = match report.status {
         crate::enums::PlaytestStatus::Pass => exit_code::PASS,
@@ -464,6 +509,7 @@ fn verify_replay_subprocess(
             count: 1,
             detail: diverged_details.join("; "),
             last_detail: diverged_details.last().cloned().unwrap_or_default(),
+            meta: None,
         });
         report.status = crate::enums::PlaytestStatus::Fail;
     }

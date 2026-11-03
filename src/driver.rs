@@ -985,6 +985,32 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         app.insert_resource(Time::<()>::default());
     }
 
+    // CAPTURE the static input-surface scan for discovery runs ONLY:
+    // the probe pool sets `ENV_DISCOVER_SCAN` before spawning the
+    // game child, so this gate keeps the cost (schedule
+    // force-initialization + a full access-set walk) off ordinary
+    // playtests, which never read the captured resource. Inside a
+    // discovery run, the capture point matters: every input signal
+    // type is registered (seeding above) and every harness SYSTEM
+    // that touches input signals — the engine fallback translators
+    // above excepted, which stay visible for parity with
+    // InputPlugin graphs — is still absent. The bots below WRITE
+    // `KeyboardInput`, `MouseButtonInput` and the umbrella
+    // `WindowEvent` (attributed to keyboard, button, motion AND
+    // wheel classes), so a scan taken after their registration
+    // would count the harness itself as a reader of every device
+    // class and block wheel pruning forever. The captured scan rides
+    // OUTSIDE the world — a planted resource is an entity and would
+    // shift the digest counts the discovery diff compares — in a
+    // process-global slot until the takeover exports it; schedules
+    // are force-initialized inside the capture, not run —
+    // `Schedule::run` re-initializes whenever the graph changed, so
+    // the bot systems added below still take effect.
+    #[cfg(feature = "takeover")]
+    if std::env::var_os(crate::plugin::ENV_DISCOVER_SCAN).is_some() {
+        let _ = crate::discovery::static_scan::capture_static_scan(app);
+    }
+
     // Register bot + oracle systems once. The keyboard modifier state
     // is RESET each run so a previous run's held Shift cannot leak
     // into a fresh scenario's logical-key case mapping.
@@ -1141,6 +1167,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             count: 1,
             detail: format!("no entities to observe — the run is vacuous; {remedy}"),
             last_detail: "no entities to observe — the run is vacuous".to_string(),
+            meta: None,
         });
         status = PlaytestStatus::Fail;
     }
@@ -1162,6 +1189,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
                     inv.name
                 ),
                 last_detail: format!("invariant '{}' matched zero entities", inv.name),
+                meta: None,
             });
         }
         if !scenario.invariants.is_empty() && status == PlaytestStatus::Pass {
@@ -1206,6 +1234,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
                      findings are under-reported"
                 .to_string(),
             last_detail: "log capture OFF".to_string(),
+            meta: None,
         });
     }
 
@@ -1225,6 +1254,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         scenario_source: None,
         log_capture_available: Some(log_capture_available),
         state_digest,
+        discovered_surface: None,
     })
 }
 

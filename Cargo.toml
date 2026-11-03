@@ -24,7 +24,7 @@ bevy_transform = { version = "0.20.1", default-features = false, features = ["st
 bevy_tasks = { version = "0.20.1", default-features = false }
 bevy_time = { version = "0.20.1", default-features = false, features = ["std"] }
 tracing = "0.1.44"
-bevy_input = { version = "0.20.1", default-features = false, features = ["std", "keyboard", "mouse"] }
+bevy_input = { version = "0.20.1", default-features = false, features = ["std", "keyboard", "mouse", "gamepad"] }
 # Vec2 for cursor positions. Already in every consumer graph via bevy_input;
 # a direct dependency only adds the type, no new crates.
 bevy_math = { version = "0.20.1", default-features = false }
@@ -56,6 +56,11 @@ bevy = { version = "0.20.1", optional = true }
 # covers runtime use, but the test must prove the bevy_* filter drops a
 # genuinely registered engine type. Dev-deps do not taint consumers.
 bevy_time = { version = "0.20.1", features = ["bevy_reflect"] }
+# Spike-only: unmask system names (bevy_utils/debug) so the discovery
+# spike can attribute keyboard reads to named systems. Not part of the
+# public feature surface; the production discovery scanner must NOT
+# depend on names (consumer builds usually mask them).
+bevy_ecs = { version = "0.20.1", default-features = false, features = ["std", "debug"] }
 
 [[bin]]
 name = "takeover_demo"
