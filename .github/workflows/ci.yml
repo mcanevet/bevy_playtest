@@ -162,6 +162,15 @@ jobs:
             exit 1
           fi
 
+      # Feature-combination guard: the documented minimal in-process
+      # configuration must stay compilable. The state-digest module uses
+      # bevy_ecs::reflect unconditionally, so this pins that the explicit
+      # `bevy_reflect` feature on bevy_ecs (Cargo.toml) is never dropped
+      # and the in-process-only build path cannot regress silently
+      # (the --all-features gate alone would not catch it).
+      - name: Feature combination guard (no-default-features in-process)
+        run: cargo check --locked --no-default-features --features in-process
+
       # Clippy reuses the artifacts compiled above.
       - name: Clippy (deny warnings)
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
