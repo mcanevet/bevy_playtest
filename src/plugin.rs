@@ -464,6 +464,7 @@ fn verify_replay_subprocess(
             count: 1,
             detail: diverged_details.join("; "),
             last_detail: diverged_details.last().cloned().unwrap_or_default(),
+            meta: None,
         });
         report.status = crate::enums::PlaytestStatus::Fail;
     }

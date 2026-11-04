@@ -389,6 +389,7 @@ pub fn to_violation_entries(
                 count,
                 detail: format!("{message} (x{count})"),
                 last_detail: message,
+                meta: None,
             },
         )
         .collect()
