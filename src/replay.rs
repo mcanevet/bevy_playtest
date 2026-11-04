@@ -203,6 +203,7 @@ pub fn run_scenario_verified(
                 }
             ),
             last_detail: detail_parts.join("; "),
+            meta: None,
         });
         report.status = crate::enums::PlaytestStatus::Fail;
     }
@@ -223,6 +224,7 @@ pub fn run_scenario_verified(
                 report_a.status, status_b
             ),
             last_detail: "pass statuses differ".to_string(),
+            meta: None,
         });
         report.status = crate::enums::PlaytestStatus::Fail;
     }

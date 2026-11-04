@@ -1141,6 +1141,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             count: 1,
             detail: format!("no entities to observe — the run is vacuous; {remedy}"),
             last_detail: "no entities to observe — the run is vacuous".to_string(),
+            meta: None,
         });
         status = PlaytestStatus::Fail;
     }
@@ -1162,6 +1163,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
                     inv.name
                 ),
                 last_detail: format!("invariant '{}' matched zero entities", inv.name),
+                meta: None,
             });
         }
         if !scenario.invariants.is_empty() && status == PlaytestStatus::Pass {
@@ -1206,6 +1208,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
                      findings are under-reported"
                 .to_string(),
             last_detail: "log capture OFF".to_string(),
+            meta: None,
         });
     }
 
@@ -1225,6 +1228,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         scenario_source: None,
         log_capture_available: Some(log_capture_available),
         state_digest,
+        discovered_surface: None,
     })
 }
 

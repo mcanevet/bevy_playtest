@@ -20,6 +20,13 @@ pub struct ViolationEntry {
     pub detail: String,
     /// Detail at the most recent occurrence (trend/debug).
     pub last_detail: String,
+    /// Structured annotation (serialized as `_meta`), present when
+    /// discovery ran and has context for this finding (e.g.
+    /// frozen-world probe statistics). Sits NEXT TO the verbatim
+    /// `detail` — never inside it — so consumers parsing details as
+    /// raw text are unaffected.
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none", default)]
+    pub meta: Option<crate::discovery::surface::ViolationMeta>,
 }
 
 /// Runtime violation tracker.
@@ -42,6 +49,7 @@ impl Violations {
             count: 0,
             detail: prefixed.clone(),
             last_detail: prefixed.clone(),
+            meta: None,
         });
         entry.count += 1;
         entry.last_frame = frame;
@@ -114,6 +122,12 @@ pub struct PlaytestReport {
     /// compact for runs that didn't record.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub state_digest: Vec<crate::digest::StateDigest>,
+    /// Discovered input surface (present only when discovery ran for
+    /// this report). Structured data for renderers and dashboards;
+    /// kept separate from violation details, which consumers parse
+    /// as raw text.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub discovered_surface: Option<crate::discovery::surface::DiscoveredSurface>,
 }
 
 impl PlaytestReport {
@@ -134,6 +148,27 @@ impl PlaytestReport {
             scenario_source: None,
             log_capture_available: None,
             state_digest: vec![],
+            discovered_surface: None,
+        }
+    }
+
+    /// Attach discovery context (`_meta`) to this report's
+    /// `frozen_world` findings, using the report's own
+    /// `discovered_surface`. Idempotent and a no-op when no surface
+    /// is attached — the annotation must never invent data.
+    ///
+    /// Called by the battery after discovery ran (Phase 7 wires the
+    /// flow; the annotation is report-local so cache-loaded surfaces
+    /// work identically to freshly-probed ones).
+    pub fn annotate_frozen_world_with_surface(&mut self) {
+        let Some(surface) = &self.discovered_surface else {
+            return;
+        };
+        let meta = surface.frozen_world_meta();
+        for v in &mut self.violations {
+            if v.rule == "frozen_world" && v.meta.is_none() {
+                v.meta = Some(meta.clone());
+            }
         }
     }
 
@@ -179,6 +214,7 @@ impl PlaytestReport {
             count: 1,
             detail: msg.to_string(),
             last_detail: msg.to_string(),
+            meta: None,
         }];
         rep
     }
@@ -200,6 +236,7 @@ mod tests {
                 count: 1,
                 detail: String::new(),
                 last_detail: String::new(),
+                meta: None,
             })
             .collect();
         rep
