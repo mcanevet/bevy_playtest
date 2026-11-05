@@ -205,7 +205,14 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
 
 /// Kill a hung child and reap it (avoid a zombie and — on Windows —
 /// a still-running process outliving the test).
-fn kill_process(child: &mut std::process::Child) {
+///
+/// `pub(crate)` because the discovery probe pool
+/// (`crate::discovery::probe_pool`) kills the SAME class of children
+/// — arbitrary game binaries under a timeout kill switch — and must
+/// not diverge from this proven sequence: on Windows, a game that
+/// spawned grandchildren (launcher shim, asset compiler, crash
+/// handler) leaks them if only the root PID dies.
+pub(crate) fn kill_process(child: &mut std::process::Child) {
     #[cfg(windows)]
     {
         // TASKKILL with /T must run BEFORE the root PID is terminated,

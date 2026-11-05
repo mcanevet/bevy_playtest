@@ -16,6 +16,10 @@
 !/fixtures/*/tests/playtest.rs
 bevy_playtest-smoke.report.json
 
+# Discovery cache (bevy_playtest::discovery): re-probing after
+# `rm -rf` is always safe.
+.bevy_playtest/
+
 # Local-only: never commit internal analysis or agent instructions.
 /.local/
 /AGENTS.md

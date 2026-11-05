@@ -113,6 +113,41 @@ name = "takeover_demo_picking"
 path = "src/bin/takeover_demo_picking.rs"
 required-features = ["takeover"]
 
+# Minimal no-op child for probe-pool tests: runs, exits 0, never
+# writes any file — the platform-neutral stand-in for "a game that
+# exits without reporting" (see tests/probe_pool.rs,
+# stale_report_cannot_masquerade_as_a_fresh_success).
+[[bin]]
+name = "takeover_demo_noop"
+path = "src/bin/takeover_demo_noop.rs"
+required-features = ["takeover"]
+
+# Runaway child for probe-pool tests: never exits on its own — the
+# watchdog-kills-a-stuck-game test needs a child GUARANTEED to still
+# be alive at the 1s deadline on every machine (simulated-time demos
+# are CPU-bound and machine-speed dependent; see the bin's module
+# docs). See tests/probe_pool.rs:
+# runaway_child_is_killed_by_the_wall_clock_watchdog.
+[[bin]]
+name = "takeover_demo_hang"
+path = "src/bin/takeover_demo_hang.rs"
+required-features = ["takeover"]
+
+[[bin]]
+name = "takeover_demo_raw_winit"
+path = "src/bin/takeover_demo_raw_winit.rs"
+required-features = ["takeover"]
+
+[[bin]]
+name = "takeover_demo_transient"
+path = "src/bin/takeover_demo_transient.rs"
+required-features = ["takeover"]
+
+[[bin]]
+name = "takeover_demo_empty"
+path = "src/bin/takeover_demo_empty.rs"
+required-features = ["takeover"]
+
 [features]
 default = ["in-process", "takeover"]
 in-process = []
@@ -131,17 +166,3 @@ debug = "line-tables-only"
 
 [profile.test]
 debug = "line-tables-only"
-
-[[bin]]
-name = "takeover_demo_raw_winit"
-path = "src/bin/takeover_demo_raw_winit.rs"
-required-features = ["takeover"]
-
-[[bin]]
-name = "takeover_demo_transient"
-path = "src/bin/takeover_demo_transient.rs"
-required-features = ["takeover"]
-[[bin]]
-name = "takeover_demo_empty"
-path = "src/bin/takeover_demo_empty.rs"
-required-features = ["takeover"]
