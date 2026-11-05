@@ -10,3 +10,4 @@ Task-focused recipes, one per page. Each assumes the
 - [Handle a rejected scenario](how-to-handle-a-rejected-scenario.md) — Decode load-time rejections and fix them
 - [Handle lost log capture](how-to-handle-lost-log-capture.md) — Recover when another tracing subscriber wins the process global
 - [Prove a scenario is deterministic](how-to-prove-a-scenario-is-deterministic.md) — Verify replay divergence
+- [Discover your input surface](how-to-discover-your-input-surface.md) — Learn which keys your game actually consumes, with cached probe results
