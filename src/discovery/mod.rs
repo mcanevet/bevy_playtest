@@ -1,23 +1,24 @@
 //! Input-surface discovery: automatically determine which inputs a
 //! game actually consumes, without requiring authors to declare them.
 //!
-//! Shipped so far: the TYPE layer ([`surface`], [`diff`],
-//! [`group_completion`]) plus [`static_scan`] — the first PRODUCER
-//! of surface annotations: a schedule walk that classifies systems
-//! by the input-signal ComponentIds their access sets touch (never
-//! by system names) and emits reader counts per device class, with a
-//! fail-open completeness contract (zero counts only license
-//! pruning from a scan that saw the whole world). The PROBE
-//! machinery is now live too: [`probe_scenarios`] (normalized
-//! control/probe pair generation, deterministic validated probe
-//! points), the takeover-gated [`probe_pool`] (subprocess worker
-//! pool on the plugin env contract), and [`cache`] (the on-disk
-//! surface cache). Only the orchestration FLOW remains.
+//! The four-slice implementation is COMPLETE, each layer feeding the
+//! next: the TYPE layer ([`surface`], [`diff`],
+//! [`group_completion`]) plus [`static_scan`] (the schedule walk
+//! that classifies systems by input-signal ComponentIds, never
+//! names); [`probe_scenarios`] (normalized control/probe pair
+//! generation, deterministic validated probe points) and [`cache`]
+//! (the on-disk surface cache); the takeover-gated [`probe_pool`]
+//! (subprocess worker pool on the plugin env contract); and
+//! [`flow`] — the orchestrator that ties them together
+//! (cache lookup → probe pool → determinism gate → diff aggregation
+//! → group completion → cache persist). See
+//! `docs/explanation/input-surface-discovery.md` for the design and
+//! [`flow::discover`] for the one-call entry point.
 //!
-//! Feature split: `probe_pool` drives TAKEOVER SUBPROCESSES (it
-//! builds on `crate::plugin`'s env contract, which only exists
-//! with the `takeover` feature) and is gated behind it, exactly
-//! like its crate consumer, `crate::battery`. The pure layers —
+//! Feature split: `flow` and `probe_pool` drive TAKEOVER SUBPROCESSES
+//! (they build on `crate::plugin`'s env contract, which only exists
+//! with the `takeover` feature) and are gated behind it, exactly like
+//! their only crate consumer, `crate::battery`. The pure layers —
 //! `cache`, `diff`, `group_completion`, `probe_scenarios`,
 //! `static_scan`, `surface` — compile everywhere so report types
 //! like `DiscoveredSurface`/`ViolationMeta` stay available to
@@ -25,6 +26,8 @@
 
 pub mod cache;
 pub mod diff;
+#[cfg(feature = "takeover")]
+pub mod flow;
 pub mod group_completion;
 #[cfg(feature = "takeover")]
 pub mod probe_pool;
