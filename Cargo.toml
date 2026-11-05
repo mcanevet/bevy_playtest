@@ -24,7 +24,7 @@ bevy_transform = { version = "0.20.1", default-features = false, features = ["st
 bevy_tasks = { version = "0.20.1", default-features = false }
 bevy_time = { version = "0.20.1", default-features = false, features = ["std"] }
 tracing = "0.1.44"
-bevy_input = { version = "0.20.1", default-features = false, features = ["std", "keyboard", "mouse"] }
+bevy_input = { version = "0.20.1", default-features = false, features = ["std", "keyboard", "mouse", "gamepad"] }
 # Vec2 for cursor positions. Already in every consumer graph via bevy_input;
 # a direct dependency only adds the type, no new crates.
 bevy_math = { version = "0.20.1", default-features = false }
@@ -56,6 +56,16 @@ bevy = { version = "0.20.1", optional = true }
 # covers runtime use, but the test must prove the bevy_* filter drops a
 # genuinely registered engine type. Dev-deps do not taint consumers.
 bevy_time = { version = "0.20.1", features = ["bevy_reflect"] }
+# Unmask system names in the TEST graph (bevy_utils/debug: without it
+# `DebugName` displays a placeholder for every system). The static scan's
+# ENGINE_DRIVER_NAMES filter is name-based, so the exact-count
+# scan_purity tests need real names for the engine's exclusive drivers
+# (Main/FixedMain runners, message_update_system); with names masked
+# those drivers over-count every device class — fail-open, but the
+# pinned counts assume this dep. Load-bearing for tests only:
+# dev-deps never unify into the published crate's normal graph, so
+# consumers keep masked names and degrade fail-open to over-counting.
+bevy_ecs = { version = "0.20.1", default-features = false, features = ["std", "debug"] }
 
 [[bin]]
 name = "takeover_demo"
