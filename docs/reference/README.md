@@ -152,6 +152,11 @@ Report helpers on `PlaytestReport`:
   (rule, target) pairs
 - `has_violation(rule, target) -> bool`
 
+Discovery-annotated reports also carry `discovered_surface` (and, on
+injection runs, `injected_surface_keys`); the discovery IR that
+fills them is specified in
+[the SurfaceEntry schema page](surface-entry-schema.md).
+
 ## Entry points
 
 - `bevy_playtest::run_scenario(&mut App, &Scenario) ->
