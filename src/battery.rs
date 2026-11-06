@@ -150,6 +150,16 @@ impl std::error::Error for BatteryError {}
 /// run itself; the game child never sees the opt-in variables. See
 /// [`crate::discovery::flow`] for the full opt-in contract (candidate
 /// and cache-dir overrides).
+///
+/// With `BEVY_PLAYTEST_DISCOVER_INJECT=1`, discovery changes the
+/// run itself: the parent discovers FIRST (cache-first, ~40s cold
+/// at pool=8), and when the scenario is the built-in battery literal
+/// (whose key surface is undeclared — the default WASD+arrows set
+/// the game may ignore), it writes a scenario variant whose chaos
+/// bot samples exactly the discovered effective keys and drives the
+/// child with it, recording `report.injected_surface_keys`. An
+/// authored scenario file is never injected into — declaration beats
+/// inference; discovery then describes rather than replaces.
 pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, BatteryError> {
     let dir = std::env::temp_dir().join(format!(
         "bevy_playtest_battery_{}_{}",
@@ -171,6 +181,51 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
     }
     let _guard = TempDirGuard(dir.clone());
     let report_path = dir.join("report.json");
+
+    // Discovery-driven scenario injection (see
+    // `discovery::flow::ENV_DISCOVER_INJECT`). Precedence rules:
+    // - An authored scenario FILE always wins — declaration beats
+    //   inference, exactly as the report-annotation path treats a
+    //   declared `raw_surface`.
+    // - Injection targets only the built-in battery literal, whose
+    //   surface is undeclared (the default WASD+arrows set).
+    // - `inject_requested` implies discovery: the surface feeding
+    //   the injected scenario is the very surface annotated onto
+    //   the report, so discovery runs ONCE here (cache-first) and
+    //   the post-run annotation step reuses it — never re-probes.
+    let mut scenario_arg = config.scenario.clone();
+    let mut pre_discovered: Option<crate::discovery::surface::DiscoveredSurface> = None;
+    let mut injected_keys: Option<Vec<String>> = None;
+    if flow::inject_requested() && scenario_arg == BUILTIN_BATTERY {
+        let outcome = flow::discover_from_env(
+            std::path::Path::new(&config.binary),
+            Some(config.scenario.as_str()),
+        )
+        .map_err(|e| BatteryError::Discovery(e.to_string()))?;
+        let keys = outcome.surface.chaos_keys();
+        // The injected scenario is the built-in battery with exactly
+        // one field added: the chaos bot's key surface, so the bot
+        // samples only keys the game demonstrably consumes. Mouse
+        // buttons stay at their default (three primaries): the MVP
+        // probe matrix is keyboard-only, so there is no discovered
+        // mouse surface to inject — an explicitly empty mouse list
+        // would DISABLE mouse chaos, which discovery never licensed.
+        let mut scenario = crate::plugin::battery_scenario()
+            .map_err(|e| BatteryError::Spawn(format!("injected battery scenario: {e}")))?;
+        scenario.bot.raw_surface = Some(crate::scenario::RawSurface {
+            keys: keys.clone(),
+            ..Default::default()
+        });
+        let injected_path = dir.join("scenario.injected.json");
+        let json = serde_json::to_string_pretty(&scenario)
+            .map_err(|e| BatteryError::Spawn(format!("serialize injected scenario: {e}")))?;
+        std::fs::write(&injected_path, json)
+            .map_err(|e| BatteryError::Spawn(format!("write injected scenario: {e}")))?;
+        scenario_arg = injected_path.to_string_lossy().into_owned();
+        pre_discovered = Some(outcome.surface);
+        injected_keys = Some(keys);
+    }
+
     let mut cmd = std::process::Command::new(&config.binary);
     // Isolate the run from the developer's shell FIRST. The takeover
     // REJECTS unknown BEVY_PLAYTEST_* variables (strict env contract),
@@ -185,7 +240,7 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
             }
         }
     }
-    cmd.env(ENV_SCENARIO, &config.scenario)
+    cmd.env(ENV_SCENARIO, &scenario_arg)
         .env(ENV_REPORT, &report_path);
 
     let mut child = cmd
@@ -223,22 +278,34 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
     // `discovery::flow`): the game child never sees these variables
     // (stripped above), so this is purely a parent-side decision.
     // A cache hit makes this a no-op cost-wise; a cold run probes
-    // the matrix (~35s at pool=8) before returning.
-    if flow::env_requested() {
-        // The scenario string IS the battery's identity for cache
-        // purposes: a scenario FILE is per-game-authored (its path
-        // distinguishes same-binary runs; a lossy transform like the
-        // file stem would let two same-stem scenarios collide), while
-        // the built-in battery literal covers every fixture
-        // identically. Threading it into the cache key stops one
-        // scenario's surface leaking into another's entry when they
-        // share the compiled binary.
-        let outcome = flow::discover_from_env(
-            std::path::Path::new(&config.binary),
-            Some(config.scenario.as_str()),
-        )
-        .map_err(|e| BatteryError::Discovery(e.to_string()))?;
-        report.discovered_surface = Some(outcome.surface);
+    // the matrix (~40s at pool=8) before returning.
+    //
+    // INJECT implies discovery — even when injection itself refuses
+    // (an authored scenario file): the promised annotation must not
+    // vanish with it. When injection RAN, discovery already
+    // happened BEFORE the child (the surface fed the injected
+    // scenario) — reuse it; the scenario string would otherwise name
+    // the INJECTED file and cold-miss the "battery"-keyed cache
+    // entry, re-probing the whole matrix for a surface we already
+    // hold.
+    if flow::env_requested() || flow::inject_requested() {
+        let surface = match pre_discovered {
+            Some(surface) => surface,
+            None => {
+                flow::discover_from_env(
+                    std::path::Path::new(&config.binary),
+                    Some(config.scenario.as_str()),
+                )
+                .map_err(|e| BatteryError::Discovery(e.to_string()))?
+                .surface
+            }
+        };
+        // Honesty: record WHICH keys injection put in the bot's
+        // surface (None ⇒ injection did not happen — e.g. an authored
+        // scenario file, or inject not requested). The recorded list
+        // is exactly what the injected scenario carried.
+        report.injected_surface_keys = injected_keys;
+        report.discovered_surface = Some(surface);
         report.annotate_frozen_world_with_surface();
     }
     Ok(report)

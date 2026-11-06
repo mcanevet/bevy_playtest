@@ -128,6 +128,15 @@ pub struct PlaytestReport {
     /// as raw text.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub discovered_surface: Option<crate::discovery::surface::DiscoveredSurface>,
+    /// Keys the battery parent injected into the run's chaos bot
+    /// `raw_surface` (present only when discovery-driven injection
+    /// happened: `BEVY_PLAYTEST_DISCOVER_INJECT=1` on a battery run
+    /// whose scenario declared no surface of its own). Honesty
+    /// field: the child ran an injected scenario file, and the
+    /// report must say so rather than let `scenario_source: "file"`
+    /// imply an authored one.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub injected_surface_keys: Option<Vec<String>>,
 }
 
 impl PlaytestReport {
@@ -149,6 +158,7 @@ impl PlaytestReport {
             log_capture_available: None,
             state_digest: vec![],
             discovered_surface: None,
+            injected_surface_keys: None,
         }
     }
 

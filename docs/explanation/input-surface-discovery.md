@@ -54,11 +54,66 @@ from every spawned child; the contract is parent-side only).
 
 An earlier draft of this design depicted discovery as a battery
 PRELUDE — a phase that ran BEFORE the game run and injected the
-discovered surface into an undeclared scenario. That flow was never
-implemented; the shipped integration is the report-annotation flow
-above. Scenario injection (feeding discovered keys into the chaos
-bot's `raw_surface`) remains plausible follow-up work, but nothing
-today consumes the surface that way.
+discovered surface into an undeclared scenario. That flow is now
+implemented as **discovery-driven scenario injection**
+(`BEVY_PLAYTEST_DISCOVER_INJECT=1`) — see the section below.
+
+## Discovery-Driven Scenario Injection
+
+The report-annotation flow above describes the run; it cannot save
+one. The motivating case: a loading screen whose whole interactive
+surface is `Digit1`/`Digit2` level selection. The default chaos bot
+samples WASD+arrows, never presses Digit keys, the level never
+loads, and the battery correctly pins a `frozen_world` finding —
+about a bot that was never playing the game. Discovery knew better
+(it had watched Digit1 and Digit2 diverge) but the finding shipped
+anyway, because nothing consumed the surface.
+
+`BEVY_PLAYTEST_DISCOVER_INJECT=1` closes that loop, and it is what
+the "battery PRELUDE" of an earlier draft of this design turned
+into. Semantics:
+
+- **Implies discovery.** The injection needs a surface; the
+  annotation rides along free (the same surface feeds the bot and
+  the report). Setting both flags is harmless; the inject flag
+  alone is enough.
+- **Declaration beats inference.** Injection targets ONLY the
+  built-in battery literal, whose key surface is undeclared (the
+  default WASD+arrows set). An authored scenario file — with or
+  without its own `raw_surface` — is never injected into;
+  discovery then describes rather than replaces.
+- **Injectable keys** (`DiscoveredSurface::chaos_keys`): every key
+  with an observed effect, plus group-completed `Inferred`
+  siblings (likely-bound movement clusters; pressing them costs
+  nothing, omitting them starves the bot of exactly the coverage
+  the group phase exists to provide). NEVER `Unclassified` (the
+  control key — no differential verdict exists about it) and
+  never inert keys (pressing keys the game demonstrably ignores
+  recreates the declared-surface hole injection exists to close).
+  Sorted and deduplicated — the list becomes a scenario file
+  verbatim.
+- **Mouse stays default.** The MVP probe matrix is keyboard-only,
+  so there is no discovered mouse surface; an explicitly empty
+  mouse list would DISABLE mouse chaos, which discovery never
+  licensed. The injected scenario keeps the default buttons.
+- **Runs discovery exactly once.** The parent discovers BEFORE
+  the child (cache-first, ~40s cold at pool=8), writes
+  `scenario.injected.json` (the battery literal plus
+  `bot.raw_surface.keys`) into the run's temp dir, and drives the
+  child with that path. The post-run annotation step reuses the
+  pre-run surface — it never re-probes (the injected file path
+  would otherwise cold-miss the `"battery"`-keyed cache entry).
+- **Honest reporting.** The report carries
+  `injected_surface_keys` (absent when no injection happened),
+  because the child honestly reports `scenario_source: "file"`
+  for the injected scenario — the field is what distinguishes
+  "an authored scenario" from "the battery, aimed".
+
+On the motivating fixture the effect is decisive: the bot plays
+the game (periodic Digit1/Digit2 level reloads keep
+`Changed<Transform>` flowing well within the liveness budget) and
+the run goes clean for the full duration where the undiscovered
+battery pinned a `frozen_world` finding at frame ~521.
 
 ## Static Scan: Annotation + Conservative Pruning Only
 

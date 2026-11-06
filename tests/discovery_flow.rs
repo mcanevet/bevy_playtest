@@ -32,10 +32,10 @@ mod common;
 
 use std::path::PathBuf;
 
-use bevy_playtest::battery::{run_with_config, BatteryConfig};
+use bevy_playtest::battery::{run_with_config, BatteryConfig, BUILTIN_BATTERY};
 use bevy_playtest::discovery::flow::{
     discover, discover_from_env, DiscoveryConfig, DiscoveryError, ENV_DISCOVER, ENV_DISCOVER_CACHE,
-    ENV_DISCOVER_KEYS,
+    ENV_DISCOVER_INJECT, ENV_DISCOVER_KEYS,
 };
 use bevy_playtest::discovery::surface::{KeyConfidence, SurfaceConfidence};
 
@@ -457,6 +457,129 @@ fn battery_opt_in_attaches_surface_and_annotates_findings() {
             .any(|n| n.to_string_lossy().contains("quiet")),
         "battery cache entry must carry the scenario identity: {:?}",
         entries
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn injection_feeds_discovered_keys_to_the_builtin_battery() {
+    let _slot = common::run_slot();
+
+    // The e2e of discovery-driven injection, on the game shaped
+    // exactly like the finding that motivated it: with
+    // DISCOVER_INJECT on and the BUILT-IN battery literal (an
+    // undeclared surface), the parent must discover first, feed the
+    // effective keys to the chaos bot via an injected scenario, and
+    // say so on the report.
+    let dir = temp_dir();
+    let _env = EnvGuard::set(&[
+        (ENV_DISCOVER_INJECT, "1"),
+        (ENV_DISCOVER_KEYS, "Digit1,KeyQ"),
+        (ENV_DISCOVER_CACHE, dir.join("cache").to_str().unwrap()),
+    ]);
+
+    let report = run_with_config(&BatteryConfig {
+        binary: demo_binary().to_string(),
+        scenario: BUILTIN_BATTERY.to_string(),
+        timeout_secs: 300,
+    })
+    .expect("battery run with injection");
+
+    // Injected exactly the discovered surface: Digit1 (the one bound,
+    // effective key) — and NOT KeyQ (control key, never injectable)
+    // nor any inert default (WASD+arrows would have been the blind
+    // set this feature exists to replace).
+    assert_eq!(
+        report.injected_surface_keys,
+        Some(vec!["Digit1".to_string()]),
+        "injection must record the discovered surface on the report"
+    );
+    // The surface rides along (injection implies discovery — the
+    // same surface feeds the bot and annotates the report).
+    let surface = report
+        .discovered_surface
+        .as_ref()
+        .expect("injection implies discovery annotation");
+    assert_eq!(surface.confidence_for("Digit1"), Some(KeyConfidence::Exact));
+    // The injected run played the game instead of ignoring it: the
+    // chaos bot drew key presses during the run. Action-log entries
+    // record the SURFACE INDEX (`key_press:<idx>`) — with the
+    // injected surface being exactly ["Digit1"] (asserted above),
+    // every key draw is a Digit1 press.
+    assert!(
+        !report.action_log.is_empty(),
+        "the injected chaos bot must actually press keys during the run"
+    );
+    assert!(
+        report.action_log.iter().all(|a| a.action == "key_press:0"),
+        "every key draw must index into the injected surface: {:?}",
+        report
+            .action_log
+            .iter()
+            .map(|a| a.action.as_str())
+            .collect::<Vec<_>>()
+    );
+    // Second run on the same cache: warm — proves the discovery
+    // before injection uses the cache-first path.
+    let report = run_with_config(&BatteryConfig {
+        binary: demo_binary().to_string(),
+        scenario: BUILTIN_BATTERY.to_string(),
+        timeout_secs: 300,
+    })
+    .expect("warm battery run with injection");
+    assert_eq!(
+        report.injected_surface_keys,
+        Some(vec!["Digit1".to_string()])
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn injection_never_overrides_an_authored_scenario() {
+    let _slot = common::run_slot();
+
+    // Declaration beats inference: an authored scenario file wins
+    // even with DISCOVER_INJECT set — injection targets ONLY the
+    // built-in battery literal, whose surface is undeclared. (This
+    // is also the report-honesty negative: injected_surface_keys
+    // must be None, never a stale list.)
+    let dir = temp_dir();
+    let scenario_path = dir.join("authored.json");
+    std::fs::write(
+        &scenario_path,
+        r#"{"name":"authored","bot":{"type":"synthetic_keyboard","seed":1,
+             "key_presses":[{"frame":30,"key":"KeyQ","hold_frames":1}]},
+             "duration_s":3.0,"liveness":{"timeout_s":1.0}}"#,
+    )
+    .unwrap();
+
+    let _env = EnvGuard::set(&[
+        (ENV_DISCOVER_INJECT, "1"),
+        (ENV_DISCOVER_KEYS, "Digit1,KeyQ"),
+        (ENV_DISCOVER_CACHE, dir.join("cache").to_str().unwrap()),
+    ]);
+
+    let report = run_with_config(&BatteryConfig {
+        binary: demo_binary().to_string(),
+        scenario: scenario_path.to_string_lossy().into_owned(),
+        timeout_secs: 300,
+    })
+    .expect("battery run of an authored scenario with inject set");
+
+    // No injection: the authored file ran verbatim...
+    assert_eq!(
+        report.injected_surface_keys, None,
+        "an authored scenario file must never be injected into"
+    );
+    // ...but the IMPLIED annotation still happened (INJECT alone is
+    // set here, DISCOVER deliberately unset — "implies discovery"
+    // must survive injection refusing the authored file).
+    assert!(
+        report.discovered_surface.is_some(),
+        "BEVY_PLAYTEST_DISCOVER_INJECT implies discovery: the annotation \
+         must not vanish when injection refuses an authored scenario"
     );
 
     std::fs::remove_dir_all(&dir).unwrap();

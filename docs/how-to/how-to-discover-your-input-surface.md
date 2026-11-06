@@ -87,11 +87,49 @@ That is the diagnostic payoff: a frozen world where several keys
 provably move things looks very different from one where nothing in
 the probed set does.
 
+## Make the bot play the game (injection)
+
+Annotation tells you the bot was pressing the wrong keys; injection
+makes it press the right ones. With
+`BEVY_PLAYTEST_DISCOVER_INJECT=1`, the battery parent discovers
+the surface FIRST (same cache, same cost), then — when the
+scenario declares no surface of its own (the built-in battery
+literal) — drives the game child with an injected scenario whose
+chaos bot samples exactly the discovered effective keys. The
+report records what happened in `injected_surface_keys`.
+
+```console
+BEVY_PLAYTEST_DISCOVER_INJECT=1 cargo test --test playtest -- --nocapture
+```
+
+Rules worth knowing:
+
+- **Implies discovery** — the annotation (`discovered_surface`,
+  `_meta` probe stats) rides along free; you do not need to set
+  both flags.
+- **Declaration beats inference** — an authored scenario file is
+  never injected into, whether or not it declares its own
+  `raw_surface`. Injection targets only the zero-config battery
+  run.
+- **Mouse chaos is untouched** — the MVP probe matrix is
+  keyboard-only, so the injected scenario keeps default mouse
+  buttons; discovery never licenses disabling them.
+- A game that consumes no probed keys gets an empty injected key
+  list (mouse-only chaos) — honest, not vacuous.
+
+The canonical success story is the loading_screen fixture: its
+entire interactive surface is `Digit1`/`Digit2` level selection,
+which the default WASD+arrows chaos set never presses — the
+undiscovered battery pins a `frozen_world` finding at frame ~521.
+With injection, the bot plays the game and the same battery run
+goes clean for its full duration.
+
 ## Knobs (all optional, env vars)
 
 | Variable | Effect |
 |---|---|
 | `BEVY_PLAYTEST_DISCOVER=1` | Attach discovery to battery runs |
+| `BEVY_PLAYTEST_DISCOVER_INJECT=1` | Discovery-driven scenario injection (implies discovery; battery literal only, authored files never touched) |
 | `BEVY_PLAYTEST_DISCOVER_KEYS=Digit1,KeyQ` | Probe only these candidates (comma-separated, canonical `KeyCode` spellings). Invalid names fail the run — they never silently probe nothing. |
 | `BEVY_PLAYTEST_DISCOVER_CACHE=/path` | Cache dir override (default `.bevy_playtest/cache/`). CI jobs isolated per workspace use this. |
 

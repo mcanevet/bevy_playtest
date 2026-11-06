@@ -143,6 +143,17 @@ harness version, the active features, the fixture/scenario identity,
 and the probe plan). See [discover your input
 surface](docs/how-to/how-to-discover-your-input-surface.md).
 
+Discovery can also aim the battery itself: with
+`BEVY_PLAYTEST_DISCOVER_INJECT=1` the parent discovers the surface
+first and — when the scenario declares no key surface of its own
+(the zero-config battery run) — drives the game with an injected
+scenario whose chaos bot samples exactly the discovered effective
+keys, recording them as `injected_surface_keys` on the report. An
+authored scenario file always wins (declaration beats inference).
+Without it, a game whose bindings sit outside the default
+WASD+arrows chaos set reads as frozen even though the bot is
+healthy — it is just pressing keys the game ignores.
+
 ## How in-process takeover works
 
 When `BEVY_PLAYTEST_SCENARIO` is set, your binary becomes its own
