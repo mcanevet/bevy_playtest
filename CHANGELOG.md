@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/mcanevet/bevy_playtest/compare/v0.6.0...v0.7.0) - 2026-11-06
+
+### Added
+
+- *(discovery)* feed the discovered surface into the battery chaos bot
+- *(discovery)* [**breaking**] orchestrating flow, battery opt-in, and docs
+- *(discovery)* [**breaking**] probe scenarios, subprocess pool, and surface cache
+- *(discovery)* [**breaking**] static device-reader scan
+- *(discovery)* [**breaking**] surface types and wire layer
+- add broadened per-frame state digest module
+
+### Other
+
+- ci Update release-plz/action action to v0.5.148
+- pin the no-default-features in-process compile check
+
 ## [0.6.0](https://github.com/mcanevet/bevy_playtest/compare/v0.5.0...v0.6.0) - 2026-11-01
 
 ### Added
