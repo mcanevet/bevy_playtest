@@ -20,9 +20,9 @@
 //! with the `takeover` feature) and are gated behind it, exactly like
 //! their only crate consumer, `crate::battery`. The pure layers —
 //! `cache`, `diff`, `group_completion`, `probe_scenarios`,
-//! `static_scan`, `surface` — compile everywhere so report types
-//! like `DiscoveredSurface`/`ViolationMeta` stay available to
-//! in-process-only builds.
+//! `provenance`, `static_scan`, `surface` — compile everywhere so
+//! report types like `DiscoveredSurface`/`ViolationMeta` stay
+//! available to in-process-only builds.
 
 pub mod cache;
 pub mod diff;
@@ -32,5 +32,6 @@ pub mod group_completion;
 #[cfg(feature = "takeover")]
 pub mod probe_pool;
 pub mod probe_scenarios;
+pub mod provenance;
 pub mod static_scan;
 pub mod surface;
