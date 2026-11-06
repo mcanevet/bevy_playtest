@@ -211,11 +211,13 @@ PYEOF
     #     dir or bevy_asset logs ERROR Path-not-found in CI. Scan:
     #     - direct literals in `.load("...")`
     #     - `&str` consts referenced by `.load(CONST)`
-    #     - `.from_asset("...")` for self-contained .glb files.
-    #     .gltf is SKIPPED on purpose: it references sibling .bin /
-    #     texture files, so a single-file fetch would still be broken;
-    #     the battery tolerates the missing handle (asset loads fail
-    #     asynchronously, they do not crash the app).
+    #     - `.from_asset("...")` for .glb AND .gltf scenes. A .gltf
+    #       is JSON that references sibling files ("uri" entries:
+    #       .bin buffers, textures); the fetch loop below parses each
+    #       fetched .gltf and pulls its dependencies too, so a .gltf
+    #       is no longer "tolerated missing" — a chaos bot pressing
+    #       the level that loads it must not rack up log_error
+    #       findings for assets the fixture simply failed to fetch.
     python3 - "${target_dir}/src" > "${target_dir}/.assets.list" << 'PYEOF'
 import re, sys, pathlib
 
@@ -234,8 +236,8 @@ for f in pathlib.Path(sys.argv[1]).glob("*.rs"):
             loads.add(lit.group(1))
         elif arg in consts:
             loads.add(consts[arg])
-    # self-contained glb scenes from GltfAssetLabel::...().from_asset("...")
-    for m in re.finditer(r'from_asset\("([^"]+\.glb)"\)', src):
+    # glb/gltf scenes from GltfAssetLabel::...().from_asset("...")
+    for m in re.finditer(r'from_asset\("([^"]+\.(?:glb|gltf))"\)', src):
         loads.add(m.group(1))
 
 for p in sorted(loads):
@@ -243,12 +245,49 @@ for p in sorted(loads):
 PYEOF
 
     # Fetch each referenced asset from the Bevy repo's assets/ root.
+    # A fetched .gltf is parsed for "uri" references (buffers,
+    # textures — relative to the .gltf's own directory) and each one
+    # is fetched as well: a .gltf without its siblings is still a
+    # broken load.
+    fetch_gltf_deps() { # $1 = fetched .gltf path, $2 = repo-relative gltf dir
+        python3 - "$1" "$2" << 'PYDEPS' | while read -r dep; do
+import json, sys, pathlib
+try:
+    doc = json.loads(pathlib.Path(sys.argv[1]).read_text())
+except (json.JSONDecodeError, OSError):
+    sys.exit(0)  # tolerate: fetch_raw already warned
+uris = []
+for buffer in doc.get("buffers", []) or []:
+    if "uri" in buffer:
+        uris.append(buffer["uri"])
+for image in doc.get("images", []) or []:
+    if isinstance(image, dict) and "uri" in image:
+        uris.append(image["uri"])
+for uri in uris:
+    if isinstance(uri, str) and uri and not uri.startswith("data:"):
+        print(uri)
+PYDEPS
+            [ -n "$dep" ] || continue
+            dest_rel="${2%/}/${dep}"
+            dest="${target_dir}/assets/${dest_rel}"
+            mkdir -p "$(dirname "$dest")"
+            if fetch_raw "assets/${dest_rel}" "$dest"; then
+                echo "    (gltf dep: ${dest_rel})"
+            else
+                echo "    WARNING: gltf dependency ${dest_rel} not found at pinned Bevy rev; skipping"
+                rm -f "$dest"
+            fi
+        done
+    }
     while read -r asset; do
         [ -n "$asset" ] || continue
         dest="${target_dir}/assets/${asset}"
         mkdir -p "$(dirname "$dest")"
         if fetch_raw "assets/${asset}" "$dest"; then
             echo "    (asset: ${asset})"
+            case "$asset" in
+                *.gltf) fetch_gltf_deps "$dest" "$(dirname "$asset")" ;;
+            esac
         else
             echo "    WARNING: asset ${asset} not found at pinned Bevy rev; skipping"
             rm -f "$dest"

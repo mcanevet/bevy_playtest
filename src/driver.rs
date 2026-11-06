@@ -1255,6 +1255,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         log_capture_available: Some(log_capture_available),
         state_digest,
         discovered_surface: None,
+        injected_surface_keys: None,
     })
 }
 

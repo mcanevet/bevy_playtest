@@ -165,6 +165,34 @@ impl DiscoveredSurface {
             .map(|k| k.confidence)
     }
 
+    /// Keys worth pressing for discovery-driven scenario injection
+    /// (`BEVY_PLAYTEST_DISCOVER_INJECT=1`): every key with an
+    /// observed effect PLUS group-completed siblings
+    /// ([`KeyConfidence::Inferred`] — heuristically likely-bound, and
+    /// pressing them is cheap; leaving them out would starve the
+    /// bot of exactly the movement-cluster coverage the group phase
+    /// exists to provide). NEVER the control key
+    /// ([`KeyConfidence::Unclassified`] — no differential verdict
+    /// exists about it) and never inert keys (pressing keys the game
+    /// demonstrably ignores recreates the declared-surface hole
+    /// injection exists to close). Sorted and deduplicated: this
+    /// list becomes `bot.raw_surface.keys` verbatim, and a canonical
+    /// stable order keeps reports and cache entries comparable.
+    pub fn chaos_keys(&self) -> Vec<String> {
+        let mut keys: Vec<String> = self
+            .keys
+            .iter()
+            .filter(|k| {
+                k.confidence != KeyConfidence::Unclassified
+                    && (k.effect.is_some() || k.confidence == KeyConfidence::Inferred)
+            })
+            .map(|k| k.key.clone())
+            .collect();
+        keys.sort();
+        keys.dedup();
+        keys
+    }
+
     /// Convenience accessor for the frozen-world annotation.
     pub fn frozen_world_meta(&self) -> ViolationMeta {
         ViolationMeta {
@@ -245,6 +273,56 @@ mod tests {
         // the Inferred sibling and the Unclassified control key are
         // visible in the surface but never overstated as probed.
         assert_eq!(s.probed_key_count(), 2);
+    }
+
+    #[test]
+    fn chaos_keys_pick_effective_and_inferred_drop_the_rest() {
+        // The injection derivation in miniature: what the battery
+        // parent puts into the injected chaos bot's raw_surface.
+        let s = sample_surface();
+        // KeyW: observed effect (Exact). KeyS: Inferred sibling —
+        // included; discovery believes group completion, and the
+        // bot pressing it costs nothing. KeyA: demonstrably inert
+        // (probed, no effect) — excluded, pressing it recreates the
+        // declared-surface hole injection exists to close. KeyQ:
+        // the control key (Unclassified) — never.
+        assert_eq!(s.chaos_keys(), vec!["KeyS".to_string(), "KeyW".to_string()]);
+        // Order stability matters: the list becomes a scenario file
+        // verbatim, and dedup must survive duplicated findings.
+        let mut duped = sample_surface();
+        duped
+            .keys
+            .push(finding("KeyW", None, KeyConfidence::Inferred));
+        assert_eq!(
+            duped.chaos_keys(),
+            vec!["KeyS".to_string(), "KeyW".to_string()],
+            "duplicates collapse and the sort order is canonical"
+        );
+        // An Unclassified key is excluded even if it spuriously
+        // carries an effect (nondeterministic control-run artifact)
+        // — mirroring the effective-count exclusion.
+        let s = DiscoveredSurface {
+            keys: vec![finding(
+                "Space",
+                Some(Effect {
+                    first_divergence_frame_delta: 1,
+                }),
+                KeyConfidence::Unclassified,
+            )],
+            ..sample_surface()
+        };
+        assert!(
+            !s.chaos_keys().contains(&"Space".to_string()),
+            "the control key never enters the injected surface"
+        );
+        // Empty surface (a game that consumes no keys): injection
+        // yields an empty key list — keyboard-opt-out, mouse chaos
+        // unaffected (the battery keeps default mouse buttons).
+        let empty = DiscoveredSurface {
+            keys: vec![],
+            ..sample_surface()
+        };
+        assert_eq!(empty.chaos_keys(), Vec::<String>::new());
     }
 
     #[test]

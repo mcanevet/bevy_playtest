@@ -46,11 +46,20 @@
 //! nothing from an incomplete scan).
 //!
 //! Opt-in contract (read by the battery wiring, and stable for
-//! script/CI use). All three are stripped from spawned children by
+//! script/CI use). All four are stripped from spawned children by
 //! both the battery and the pool (strict takeover env contract), so
 //! the game never sees them:
 //!
 //! - `BEVY_PLAYTEST_DISCOVER=1` — attach discovery to battery runs.
+//! - `BEVY_PLAYTEST_DISCOVER_INJECT=1` — discovery-driven scenario
+//!   injection: the battery parent discovers FIRST (cache-first),
+//!   then — when the scenario declares no surface of its own (the
+//!   built-in battery literal) — drives the game child with an
+//!   injected scenario whose chaos bot samples exactly the
+//!   discovered effective keys, and records them as
+//!   `report.injected_surface_keys`. Implies discovery (the
+//!   annotation rides along). An authored scenario file always
+//!   wins: declaration beats inference.
 //! - `BEVY_PLAYTEST_DISCOVER_KEYS=Comma,List` — override the probe
 //!   candidates (slim targeted probes; must be canonical spellings,
 //!   invalid ones fail the run rather than probe garbage).
@@ -81,6 +90,15 @@ pub const ENV_DISCOVER: &str = "BEVY_PLAYTEST_DISCOVER";
 pub const ENV_DISCOVER_KEYS: &str = "BEVY_PLAYTEST_DISCOVER_KEYS";
 /// Discovery cache-dir override.
 pub const ENV_DISCOVER_CACHE: &str = "BEVY_PLAYTEST_DISCOVER_CACHE";
+/// Opt-in to discovery-driven scenario injection: the battery
+/// parent discovers the surface FIRST (cache-first), then — when
+/// the scenario declares no surface of its own (the built-in
+/// battery literal) — writes a scenario variant whose chaos bot
+/// samples exactly the discovered effective keys and drives the
+/// game child with it. Implies `BEVY_PLAYTEST_DISCOVER=1` (the
+/// annotation rides along free); an authored scenario file always
+/// wins (declaration beats inference).
+pub const ENV_DISCOVER_INJECT: &str = "BEVY_PLAYTEST_DISCOVER_INJECT";
 
 /// Active harness features, for the cache key: two builds of
 /// bevy_playtest with different feature sets are different harnesses
@@ -170,6 +188,14 @@ impl std::error::Error for DiscoveryError {}
 /// Is discovery requested via the environment? (Battery wiring.)
 pub fn env_requested() -> bool {
     std::env::var(ENV_DISCOVER).ok().as_deref() == Some("1")
+}
+
+/// Is discovery-driven scenario injection requested? (Battery
+/// wiring — see [`ENV_DISCOVER_INJECT`]. Implies discovery: a
+/// parent injecting a surface it never discovered is a logic bug,
+/// so the battery treats this as requesting discovery too.)
+pub fn inject_requested() -> bool {
+    std::env::var(ENV_DISCOVER_INJECT).ok().as_deref() == Some("1")
 }
 
 /// Full discovery driven by the opt-in env contract: candidate and
