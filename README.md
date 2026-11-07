@@ -154,6 +154,17 @@ harness version, the active features, the fixture/scenario identity,
 and the probe plan). See [discover your input
 surface](docs/how-to/how-to-discover-your-input-surface.md).
 
+For an authoring-time standing artifact instead of a battery-run
+annotation, the `bevy_playtest_discover` CLI writes
+`surface.draft.json` in one command — live entries (each flagged
+`discoveredButUndeclared`), pinned inert entries
+(`probe_run_inert`: probed and ruled out at boot), the coverage
+counts, and the named limitation classes the method cannot see
+(chords, debounces, context gating). The draft is deterministic
+(no timestamps; two sweeps are byte-identical) and wears
+`"draft": true` — a curation input, not a contract. See
+[draft your input surface](docs/how-to/discover-input-surface.md).
+
 Discovery can also aim the battery itself: with
 `BEVY_PLAYTEST_DISCOVER_INJECT=1` the parent discovers the surface
 first and — when the scenario declares no key surface of its own

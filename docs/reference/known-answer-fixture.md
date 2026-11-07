@@ -127,10 +127,11 @@ for why the var is deliberately not `BEVY_PLAYTEST_`-prefixed):
 
 - `P1_dead` — P1's system early-outs while ground truth still
   declares KeyU live: the **declared-but-dead** drift direction.
-  The sweep must report KeyU inert.
+  The sweep must report KeyU inert — as a pinned `probe_run_inert`
+  entry with no `discoveredButUndeclared` finding claiming it live
+  (today's best observable stand-in for the alarm).
   TODO(D1-d): assert a `DeclaredButDead` finding once the
-  declared-binding reader lens exists; today only the sweep-side
-  inertness is observable.
+  declared-binding reader lens exists.
 - `N1_hotbar_full` — all ten hotbar slots go live while ground
   truth declares eight inert: the **inert-but-live** direction
   (negative flipped positive). The sweep must find all ten live.
