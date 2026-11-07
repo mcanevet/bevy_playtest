@@ -15,17 +15,19 @@
 //! `docs/explanation/input-surface-discovery.md` for the design and
 //! [`flow::discover`] for the one-call entry point.
 //!
-//! Feature split: `flow` and `probe_pool` drive TAKEOVER SUBPROCESSES
-//! (they build on `crate::plugin`'s env contract, which only exists
-//! with the `takeover` feature) and are gated behind it, exactly like
-//! their only crate consumer, `crate::battery`. The pure layers —
-//! `cache`, `diff`, `group_completion`, `probe_scenarios`,
+//! Feature split: `flow`, `probe_pool`, and `draft` drive TAKEOVER
+//! SUBPROCESSES (they build on `crate::plugin`'s env contract, which
+//! only exists with the `takeover` feature) and are gated behind it,
+//! exactly like their only crate consumer, `crate::battery`. The pure
+//! layers — `cache`, `diff`, `group_completion`, `probe_scenarios`,
 //! `provenance`, `static_scan`, `surface` — compile everywhere so
 //! report types like `DiscoveredSurface`/`ViolationMeta` stay
 //! available to in-process-only builds.
 
 pub mod cache;
 pub mod diff;
+#[cfg(feature = "takeover")]
+pub mod draft;
 #[cfg(feature = "takeover")]
 pub mod flow;
 pub mod group_completion;

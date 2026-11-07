@@ -369,6 +369,14 @@ pub fn discover(config: &DiscoveryConfig) -> Result<DiscoveryOutcome, DiscoveryE
         Some(plan.expected_last_frame()),
     );
 
+    // Promote the game child's build profile onto the surface (the
+    // first control run's report carries it; probe children carry
+    // the same stamp). The parent harness's own profile is NOT the
+    // game's — this is the only honest channel (roadmap §4 item 5).
+    let promoted = outcomes.iter().find_map(|o| o.report.game_build_profile);
+    let mut surface = surface;
+    surface.build_profile = promoted;
+
     // Best-effort persistence: a failure costs the next run its
     // probe time, never this one its result.
     let entry = CachedSurface {

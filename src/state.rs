@@ -122,6 +122,18 @@ pub struct PlaytestReport {
     /// compact for runs that didn't record.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub state_digest: Vec<crate::digest::StateDigest>,
+    /// Build profile of the GAME binary that produced this report.
+    /// In-process and takeover runs alike stamp the reporting
+    /// process's own `cfg!(debug_assertions)` — the report-writing
+    /// code lives in the game's binary in both modes, so this is
+    /// the game's profile, not the harness library's. Discovery
+    /// promotes it to `DiscoveredSurface.build_profile` (cfg-gated
+    /// keys make dev-profile surfaces strictly larger than release
+    /// ones; comparing surfaces across profiles misleads).
+    /// Additive, default `None` (absent on stubs and pre-field
+    /// reports).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub game_build_profile: Option<crate::discovery::surface::BuildProfile>,
     /// Discovered input surface (present only when discovery ran for
     /// this report). Structured data for renderers and dashboards;
     /// kept separate from violation details, which consumers parse
@@ -156,6 +168,9 @@ impl PlaytestReport {
             harness_mode: "in_process".to_string(),
             scenario_source: None,
             log_capture_available: None,
+            // Crashed-before-reporting stub: no game run ever
+            // completed, so no profile is claimable.
+            game_build_profile: None,
             state_digest: vec![],
             discovered_surface: None,
             injected_surface_keys: None,
