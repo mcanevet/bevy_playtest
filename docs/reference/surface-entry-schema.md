@@ -38,10 +38,20 @@ projects them mechanically (effective findings become
 `ProbeVerified` entries in an unfingerprinted `Boot` context).
 The projection is lossy by design — entries are richer; there is no
 reverse mapping. Negatives (inert, inferred-no-effect keys) stay
-legacy-only, and per-key probe frames are not retained by the legacy
-shape — so every projected entry carries a `notes` caveat saying its
-`ProbeRun` evidence frame is the surface's first probe point, not
-this input's. The disclosure travels with the artifact.
+legacy-only *in the D0 projection*, and per-key probe frames are not
+retained by the legacy shape — so every projected entry carries a
+`notes` caveat saying its `ProbeRun` evidence frame is the surface's
+first probe point, not this input's. The disclosure travels with the
+artifact.
+
+The D1-c sweep draft extends this: a probed-and-inert candidate ALSO
+becomes an entry, because a drafted surface that omits inert keys
+hides the residue problem and makes curation impossible. Such an
+entry keeps `grade: probe_verified` (the probe method vouched for
+the observation) but says so honestly: `effect_signature: null`,
+evidence `probe_run_inert` (ran to completion, no divergence), and a
+note "probed inert under Exact controls". Nothing was verified live;
+the entry records a ruled-out candidate, not a binding.
 
 ### `mutable` and `profile`
 
@@ -64,18 +74,18 @@ vocabulary, snake_case:
 |---|---|---|
 | `declared` | the game code declares this binding (Leafwing `InputMap`, bespoke resource) | that the binding is live — declared + refuted is the `declared_but_dead` alarm |
 | `source_cited` | a file:line source location references this input | that the referenced code runs (run conditions, dead code) |
-| `probe_verified` | pressing the input changed game state at the probed point, under the probe build profile and context | *what* changed (hash-only MVP), or persistence in other contexts |
+| `probe_verified` | pressing the input changed game state at the probed point, under the probe build profile and context; an inert entry with `probe_run_inert` evidence asserts the opposite fact — the probe RAN and observed no divergence, i.e. the input was ruled out at that context, never that it is dead elsewhere | *what* changed (hash-only MVP), or persistence in other contexts |
 | `suspect_shape` | nothing mechanical — a shape-detected candidate, not yet scan-linked | anything: reportable, **never alarm-grade** |
 | `llm_claimed` | nothing about the game — a model's claim, grounded in `SourceRef` citations a mechanical checker verifies | authority of any kind; no producer exists (opt-in prep step, deferred) |
 | `manager_pipeline_ok` | the driver's input reached the input manager and matched a binding (**wiring** liveness) | game liveness: a wiring-forgotten binding fires the action with zero world effect |
 
 `grade_is_consistent()` checks the minimum pairing — grade vs.
 evidence shape (`declared` needs `DeclaredIn`, `source_cited` and
-`llm_claimed` need `SourceRef`, `probe_verified` needs `ProbeRun`,
-`manager_pipeline_ok` needs `TapObserved`; `suspect_shape` needs
-nothing by design). Consistent means "the required evidence is
-present", never "the evidence is truthful" — that is the mutation
-harness's job.
+`llm_claimed` need `SourceRef`, `probe_verified` needs `ProbeRun`
+(live) or `ProbeRunInert` (ruled-out), `manager_pipeline_ok` needs
+`TapObserved`; `suspect_shape` needs nothing by design). Consistent
+means "the required evidence is present", never "the evidence is
+truthful" — that is the mutation harness's job.
 
 ## ContextWitness
 
@@ -101,6 +111,11 @@ its grade:
 
 - `ProbeRun { frame, effect }` — differential divergence against the
   control baseline (frame is absolute, matching `probed_at`).
+- `ProbeRunInert { frame }` — the probe ran to completion at `frame`
+  and observed NO divergence: evidence for a negative. The inert
+  counterpart of `ProbeRun` (D1-c sweep); backs inert entries'
+  `probe_verified` grade so ruled-out candidates can appear as
+  entries without ever claiming liveness.
 - `TapObserved { stage }` — intent-tap observed at a named pipeline
   stage (`"manager_pipeline"` today; more constants arrive with
   their producers).

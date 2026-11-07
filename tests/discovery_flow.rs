@@ -33,6 +33,7 @@ mod common;
 use std::path::PathBuf;
 
 use bevy_playtest::battery::{run_with_config, BatteryConfig, BUILTIN_BATTERY};
+use bevy_playtest::discovery::draft::{draft_surface, DraftOutcome};
 use bevy_playtest::discovery::flow::{
     discover, discover_from_env, DiscoveryConfig, DiscoveryError, ENV_DISCOVER, ENV_DISCOVER_CACHE,
     ENV_DISCOVER_INJECT, ENV_DISCOVER_KEYS,
@@ -583,4 +584,190 @@ fn injection_never_overrides_an_authored_scenario() {
     );
 
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The draft sweep on the slim matrix: the e2e of the D1-c layer —
+/// `draft_surface` over the demo game produces live AND inert
+/// entries, the coverage partition, findings in bijection with live
+/// entries, and `from_cache` reflecting reality.
+#[test]
+fn draft_sweep_derives_live_and_inert_entries_with_honest_coverage() {
+    let _slot = common::run_slot();
+    let config = slim_config();
+
+    let cold = draft_surface(&config).expect("cold draft sweep");
+    assert!(!cold.from_cache, "fresh cache dir must probe");
+
+    // Slim matrix: Digit1 (bound, live) + KeyQ (control, no entry).
+    assert_eq!(cold.entries.len(), 1, "Digit1 live, KeyQ entry-less");
+    let digit1 = &cold.entries[0];
+    assert_eq!(digit1.input, "Digit1");
+    assert!(digit1.effect_signature.is_some(), "Digit1 moves the world");
+    assert!(
+        digit1.evidence.iter().any(|e| matches!(
+            e,
+            bevy_playtest::discovery::surface::Evidence::ProbeRun { .. }
+        )),
+        "the live entry carries a probe_run observation"
+    );
+    assert!(cold.draft, "the outcome wears its draft marker");
+    assert_eq!(
+        cold.surface_confidence,
+        SurfaceConfidence::Exact,
+        "deterministic demo, clean controls"
+    );
+
+    // Coverage: one informatively-probed candidate, partitioned 1/0.
+    assert_eq!(cold.coverage.candidates_probed, 1);
+    assert_eq!(cold.coverage.verified, 1);
+    assert_eq!(cold.coverage.inert, 0);
+
+    // Findings in bijection with live entries, conservative kind.
+    assert_eq!(cold.findings.len(), 1);
+    assert!(matches!(
+        cold.findings[0].kind,
+        bevy_playtest::discovery::surface::DiscoveryFindingKind::DiscoveredButUndeclared
+    ));
+    assert_eq!(cold.findings[0].input, "Digit1");
+
+    // The named limitation classes are acknowledged verbatim.
+    for class in bevy_playtest::discovery::draft::MISSED_BY_DESIGN {
+        assert!(
+            cold.coverage.missed_by_design.iter().any(|m| m == class),
+            "coverage must acknowledge: {class}"
+        );
+    }
+
+    std::fs::remove_dir_all(&config.cache_dir).unwrap();
+}
+
+/// Acceptance bar item 3+4: the CLI drafts a real game binary in
+/// one command, the artifact round-trips, and two sweeps of the
+/// same binary (isolated caches) produce BYTE-IDENTICAL artifacts —
+/// the artifact carries no timestamps, so determinism is asserted
+/// on full byte equality.
+#[test]
+fn cli_draft_artifact_round_trips_and_is_byte_deterministic() {
+    let _slot = common::run_slot();
+    let dir = temp_dir();
+    let out_first = dir.join("first").join("surface.draft.json");
+    let out_second = dir.join("second").join("surface.draft.json");
+    let keys = "Digit1,KeyQ";
+
+    // One command, real subprocesses, twice — distinct cache dirs so
+    // both are cold and the outputs can only agree if the derivation
+    // is deterministic (acceptance bar: no timestamp exclusion
+    // needed — the artifact has no timestamps to exclude).
+    let cli = env!("CARGO_BIN_EXE_bevy_playtest_discover");
+    for (cache, out) in [
+        (dir.join("cache1"), &out_first),
+        (dir.join("cache2"), &out_second),
+    ] {
+        let status = std::process::Command::new(cli)
+            .arg("--binary")
+            .arg(demo_binary())
+            .arg("--keys")
+            .arg(keys)
+            .arg("--cache-dir")
+            .arg(&cache)
+            .arg("--out")
+            .arg(out)
+            .status()
+            .expect("the discover CLI binary must run");
+        assert!(
+            status.success(),
+            "the CLI must exit 0 (inert answers included) — got {status}"
+        );
+        assert!(out.exists(), "the CLI must write the artifact at --out");
+    }
+
+    let bytes_first = std::fs::read(&out_first).unwrap();
+    let bytes_second = std::fs::read(&out_second).unwrap();
+    assert_eq!(
+        bytes_first, bytes_second,
+        "two cold sweeps of the same binary must produce byte-identical drafts"
+    );
+
+    // Round-trip through the typed shape, wearing the header.
+    let json = String::from_utf8(bytes_first).unwrap();
+    assert!(
+        json.contains("\"draft\": true"),
+        "the artifact's header must carry the draft marker"
+    );
+    let back: DraftOutcome =
+        serde_json::from_str(&json).expect("artifact parses as a DraftOutcome");
+    assert!(back.draft);
+    assert_eq!(
+        back.schema_version,
+        bevy_playtest::discovery::draft::ARTIFACT_SCHEMA_VERSION,
+        "the header's schema-version promise must survive the round trip"
+    );
+
+    // The CLI-driven artifact agrees with the library-driven draft
+    // of the same matrix (from_cache differs run-to-run by design:
+    // both CLI runs were cold, so it is false here).
+    let config = slim_config();
+    let lib = draft_surface(&config).expect("library draft of the same matrix");
+    assert_eq!(back.entries, lib.entries, "CLI and library drafts agree");
+    assert_eq!(back.coverage, lib.coverage);
+    assert_eq!(back.findings, lib.findings);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&config.cache_dir).unwrap();
+}
+
+/// The sweep-lens negative control: an INERT key probed under Exact
+/// controls becomes a pinned entry — `probe_run_inert` evidence,
+/// null effect signature — so an all-inert draft is an answer with
+/// something to show, not an empty one. (KeyQ is deliberately NOT
+/// this test: the control key supports no entry of any kind.)
+#[test]
+fn draft_pins_inert_keys_as_observations_not_silence() {
+    let _slot = common::run_slot();
+    let mut config = slim_config();
+    // Digit1 stays; Swap keys: probe Digit1 (live) plus a key the
+    // demo demonstrably ignores (KeyW) so the draft carries BOTH
+    // entry kinds.
+    config.plan.candidate_keys = vec!["Digit1".into(), "KeyW".into(), "KeyQ".into()];
+
+    let draft = draft_surface(&config).expect("draft sweep with an inert candidate");
+
+    let by_input = |key: &str| {
+        draft
+            .entries
+            .iter()
+            .find(|e| e.input == key)
+            .unwrap_or_else(|| panic!("{key} must have an entry"))
+    };
+    let digit1 = by_input("Digit1");
+    assert!(digit1.effect_signature.is_some());
+
+    // The inert key: pinned with probe_run_inert evidence and the
+    // committed note.
+    let keyw = by_input("KeyW");
+    assert!(keyw.effect_signature.is_none(), "KeyW moves nothing");
+    assert!(
+        keyw.evidence.iter().any(|e| matches!(
+            e,
+            bevy_playtest::discovery::surface::Evidence::ProbeRunInert { .. }
+        )),
+        "inert entries carry the probe_run_inert observation"
+    );
+    assert!(
+        keyw.notes.iter().any(|n| n.contains("probed inert")),
+        "the committed inert note travels with the entry"
+    );
+
+    // Partition holds with both kinds present: 2 probed candidates
+    // (KeyQ never counts), 1 live, 1 inert.
+    assert_eq!(draft.coverage.candidates_probed, 2);
+    assert_eq!(draft.coverage.verified, 1);
+    assert_eq!(draft.coverage.inert, 1);
+    // No finding claims the inert key.
+    assert!(
+        !draft.findings.iter().any(|f| f.input == "KeyW"),
+        "inert keys carry no live-residue finding"
+    );
+
+    std::fs::remove_dir_all(&config.cache_dir).unwrap();
 }
