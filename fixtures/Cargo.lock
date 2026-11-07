@@ -1409,7 +1409,7 @@ dependencies = [
 
 [[package]]
 name = "bevy_playtest"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bevy",
  "bevy_app",
@@ -2727,6 +2727,17 @@ dependencies = [
  "bevy",
  "bevy_playtest",
  "fixture_game_menu",
+]
+
+[[package]]
+name = "fixture_known_answer"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_playtest",
+ "fixture_known_answer",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

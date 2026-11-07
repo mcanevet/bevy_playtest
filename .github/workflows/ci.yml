@@ -26,7 +26,7 @@ jobs:
   # one cache restore. Contract coverage kept per-PR:
   #   - unit + fault-injection oracles (negative controls)
   #   - flagless `cargo test` UX pin (breakout)
-  #   - battery tier, all 7 fixtures (playtest feature, plain cargo test)
+  #   - battery tier, all 8 fixtures (playtest feature, plain cargo test)
   #   - release purity guard (zero bevy_playtest bytes in plain builds)
   #   - clippy -D warnings, fmt, rustdoc
   ci:

@@ -126,6 +126,17 @@ input).
 Opt-outs: `mouse_buttons: []` under a scenario's `bot.raw_surface`
 drops clicks; `"keys": []` there drops chaos keys (mouse-only chaos).
 
+## The known-answer fixture
+
+Beyond the fetched showcase games, the repo carries one
+hand-authored fixture: `fixtures/known_answer/` — a deliberately
+constructed input surface (numbered "plants": chords, debounces,
+shape-only KeyCode traps) with committed ground truth
+(`ground_truth.json`) that discovery measurements are graded
+against, including asserted expected misses and two runtime code
+mutations for drift testing. See the
+[known-answer fixture reference](docs/reference/known-answer-fixture.md).
+
 ## Discovering the input surface
 
 Declared-nothing cuts both ways: sometimes you want to know what the
