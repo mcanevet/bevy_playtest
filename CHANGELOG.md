@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/mcanevet/bevy_playtest/compare/v0.7.0...v0.8.0) - 2026-11-07
+
+### Added
+
+- *(fixtures)* known-answer planted-truth fixture and measurement harness
+- *(discovery)* SurfaceEntry IR, provenance grades, and finding vocabulary
+
 ## [0.7.0](https://github.com/mcanevet/bevy_playtest/compare/v0.6.0...v0.7.0) - 2026-11-06
 
 ### Added
