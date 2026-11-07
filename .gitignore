@@ -14,6 +14,10 @@
 /fixtures/*/*
 !/fixtures/*/tests/
 !/fixtures/*/tests/playtest.rs
+# The known_answer fixture is hand-authored, committed wholesale
+# (source + tests + ground truth) — NOT fetch-script-managed like
+# the showcase games. Later-match-wins over the patterns above.
+!/fixtures/known_answer/**
 bevy_playtest-smoke.report.json
 
 # Discovery cache (bevy_playtest::discovery): re-probing after

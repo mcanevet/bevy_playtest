@@ -215,6 +215,12 @@ code 3 — a typo'd setting must never be mistaken for a configured option.
 The takeover runner exits the game process with:
 `0` Pass, `1` Fail, `2` Crash, `3` config error (bad scenario or env).
 
+## Known-answer fixture
+
+[`fixtures/known_answer/`](known-answer-fixture.md) — the planted-truth
+fixture: hand-authored input surface, committed ground truth, and the
+measurement/mutation harnesses that grade discovery against it.
+
 ## Compatibility
 
 Targets Bevy 0.20.

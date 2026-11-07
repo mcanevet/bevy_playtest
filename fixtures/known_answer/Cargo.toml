@@ -1,0 +1,36 @@
+# Hand-authored known-answer fixture — committed wholesale (source
+# AND tests), NOT managed by scripts/fetch_bevy_examples.sh. See
+# docs/reference/known-answer-fixture.md for the plant catalog.
+[package]
+name = "fixture_known_answer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lints.rust]
+unexpected_cfgs = { level = "allow" }
+
+[features]
+playtest = [
+    "dep:bevy_playtest",
+    "bevy_playtest/takeover",
+    "bevy_playtest/takeover-winit",
+]
+# Measurement/mutation harness opt-in (tests/measure.rs,
+# tests/mutation.rs): needs exclusive probe-pool access and is SLOW,
+# so it is deliberately NOT part of the plain battery tier. Explicit
+# command: cargo test --features playtest,measure -- --test-threads=1
+measure = []
+
+[dependencies]
+bevy = { version = "0.20.0" }
+bevy_playtest = { path = "../..", optional = true }
+
+[dev-dependencies]
+# Self-dependency: activates OUR OWN `playtest` feature only for
+# test/example/bench builds. Normal & release builds stay clean.
+fixture_known_answer = { path = ".", features = ["playtest"] }
+# Ground-truth loader (tests/): serde lives here only — the game
+# binary itself never depends on it (release purity).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

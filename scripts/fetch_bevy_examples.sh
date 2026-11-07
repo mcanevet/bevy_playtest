@@ -413,7 +413,9 @@ EOF
     echo "  Created: $target_dir/"
 done
 
-# 5. Create fixtures workspace
+# 5. Create fixtures workspace. NOTE: `known_answer` is listed as a
+# member but is hand-authored and committed (NOT seeded by the loop
+# above) — regeneration must preserve it or the workspace breaks.
 cat > "${FIXTURES_DIR}/Cargo.toml" << 'WORKSPACE'
 [workspace]
 resolver = "2"
@@ -423,6 +425,7 @@ members = [
     "contributors",
     "desk_toy",
     "game_menu",
+    "known_answer",
     "loading_screen",
     "mines",
 ]

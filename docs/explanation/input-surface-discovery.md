@@ -737,7 +737,7 @@ probe runs (~4 min at pool=8). Still a coffee break, which is why the
 subprocess pool
 architecture is the right call.
 
-### Full Battery Cost (7 fixtures)
+### Full Battery Cost (8 fixtures: 7 fetched showcase games + the committed known_answer fixture)
 
 - Serial: 7 × ~5.3 min = ~37 min
 - Parallel discovery (pool=8 per fixture, sequential fixtures): 7 × ~40s ≈ 5 min

@@ -1,0 +1,301 @@
+{
+  "fixture": "known_answer",
+  "schema_version": 1,
+  "bevy_profile_note": "P6 (KeyG debug-overlay toggle) exists only in dev-profile builds (cfg(debug_assertions)); a release-profile sweep MUST discover a strictly smaller surface. The D0 discovery driver does not yet record the game binary's build profile on the surface (TODO: D1-c/d, roadmap item 5) — measurement asserts what today's shape can express.",
+  "entries": [
+    {
+      "input": "KeyU",
+      "expected_grade": {
+        "probe_visible": true,
+        "source_declared": false,
+        "boot_live": true
+      },
+      "expected_effect_class": "diverge",
+      "context": "menu_focused",
+      "mutable": true,
+      "plant_marker": "P1",
+      "notes": "Menu unmute toggle routed through the mutable UnmuteKey bespoke resource (R3 testbed: runtime rebind to KeyM; mutable: true). R2 testbed: live via focused menu row AND global shortcut, so unfocused boots still see the effect. Mutation P1_dead flips it to dead-at-runtime."
+    },
+    {
+      "input": "KeyW",
+      "expected_grade": {
+        "probe_visible": true,
+        "source_declared": false,
+        "boot_live": true
+      },
+      "expected_effect_class": "diverge",
+      "context": "gameplay",
+      "mutable": false,
+      "plant_marker": "P2",
+      "notes": "Movement cluster up, routed through the R1 Keymap bespoke resource. WASD group-completion case: each key diverges on its own probe run."
+    },
+    {
+      "input": "KeyA",
+      "expected_grade": {
+        "probe_visible": true,
+        "source_declared": false,
+        "boot_live": true
+      },
+      "expected_effect_class": "diverge",
+      "context": "gameplay",
+      "mutable": false,
+      "plant_marker": "P2",
+      "notes": "Movement cluster left (R1 Keymap)."
+    },
+    {
+      "input": "KeyS",
+      "expected_grade": {
+        "probe_visible": true,
+        "source_declared": false,
+        "boot_live": true
+      },
+      "expected_effect_class": "diverge",
+      "context": "gameplay",
+      "mutable": false,
+      "plant_marker": "P2",
+      "notes": "Movement cluster down (R1 Keymap)."
+    },
+    {
+      "input": "KeyD",
+      "expected_grade": {
+        "probe_visible": true,
+        "source_declared": false,
+        "boot_live": true
+      },
+      "expected_effect_class": "diverge",
+      "context": "gameplay",
+      "mutable": false,
+      "plant_marker": "P2",
+      "notes": "Movement cluster right (R1 Keymap)."
+    },
+    {
+      "input": "KeyR",
+      "expected_grade": {
+        "probe_visible": true,
+        "source_declared": false,
+        "boot_live": true
+      },
+      "expected_effect_class": "diverge",
+      "context": "gameplay",
+      "mutable": false,
+      "plant_marker": "P3",
+      "notes": "Reset: zeroes movement-derived state and bumps the reflected ResetCount witness. R1-poisoning shape: the origin snap-back is only meaningful after movement; the counter ensures a bare probe tap still diverges."
+    },
+    {
+      "input": "KeyL",
+      "expected_grade": {
+        "probe_visible": false,
+        "source_declared": false,
+        "boot_live": true
+      },
+      "expected_effect_class": "diverge",
+      "context": "gameplay",
+      "mutable": false,
+      "plant_marker": "P4",
+      "notes": "EXPECTED SWEEP MISS: chord (KeyL while holding ShiftLeft). Naive single-key taps cannot satisfy both halves, so the D0 sweep must report KeyL inert at boot — a known limitation, asserted as an expected miss, never tuned away."
+    },
+    {
+      "input": "ShiftLeft",
+      "expected_grade": {
+        "probe_visible": false,
+        "source_declared": false,
+        "boot_live": true
+      },
+      "expected_effect_class": "diverge",
+      "context": "gameplay",
+      "mutable": false,
+      "plant_marker": "P4",
+      "notes": "Chord modifier half (with KeyL). Probe-visible false: pressing ShiftLeft alone triggers nothing (the chord requires JUST_PRESSED KeyL under pressed ShiftLeft)."
+    },
+    {
+      "input": "KeyT",
+      "expected_grade": {
+        "probe_visible": false,
+        "source_declared": false,
+        "boot_live": true
+      },
+      "expected_effect_class": "diverge",
+      "context": "gameplay",
+      "mutable": false,
+      "plant_marker": "P5",
+      "notes": "EXPECTED SWEEP MISS: debounced (20-frame cooldown). A single 1-frame tap only arms the unreflected ArmedFrame resource — invisible to the digest; the reflected TrickCount bumps only on a later press out of cooldown. Asserted as an expected miss of the naive sweep."
+    },
+    {
+      "input": "KeyG",
+      "expected_grade": {
+        "probe_visible": true,
+        "source_declared": false,
+        "boot_live": true
+      },
+      "expected_effect_class": "diverge",
+      "context": "gameplay",
+      "mutable": false,
+      "plant_marker": "P6",
+      "notes": "cfg(debug_assertions)-gated debug overlay toggle — dev-profile surfaces are strictly larger than release. Today's measurement runs a dev-profile binary, so the sweep MUST find KeyG live; a release-profile expectation is a TODO (see bevy_profile_note)."
+    },
+    {
+      "input": "KeyV",
+      "expected_grade": {
+        "probe_visible": false,
+        "source_declared": false,
+        "boot_live": false
+      },
+      "expected_effect_class": "diverge",
+      "context": "unreachable",
+      "mutable": false,
+      "plant_marker": "P7",
+      "notes": "Scan decoy: real effect (reflected VhsFilter toggle) behind in_state(GameState::Secret), which NO transition ever enters — dead at boot by construction. The sweep MUST report KeyV inert at boot and MUST NOT treat the source shape as drift."
+    },
+    {
+      "input": "Digit1",
+      "expected_grade": {
+        "probe_visible": true,
+        "source_declared": false,
+        "boot_live": true
+      },
+      "expected_effect_class": "diverge",
+      "context": "gameplay",
+      "mutable": false,
+      "plant_marker": "N1",
+      "notes": "Hotbar slot 0 of the [KeyCode; 10] array — one of only two LIVE slots. Live keys of a mostly-dead array; the array shape must never grade as ten bindings. Mutation N1_hotbar_full flips all ten live."
+    },
+    {
+      "input": "Digit2",
+      "expected_grade": {
+        "probe_visible": true,
+        "source_declared": false,
+        "boot_live": true
+      },
+      "expected_effect_class": "diverge",
+      "context": "gameplay",
+      "mutable": false,
+      "plant_marker": "N1",
+      "notes": "Hotbar slot 1 — the second LIVE slot of the [KeyCode; 10] array."
+    },
+    {
+      "input": "Digit3",
+      "expected_grade": "negative",
+      "expected_effect_class": "inert",
+      "context": "gameplay",
+      "mutable": false,
+      "plant_marker": "N1",
+      "notes": "Hotbar slot 2: array-shape member, NOT live. A shape-based method reading the [KeyCode; 10] would grade this as a binding; the sweep proves it inert. Row exists to pin the negative."
+    },
+    {
+      "input": "Digit4",
+      "expected_grade": "negative",
+      "expected_effect_class": "inert",
+      "context": "gameplay",
+      "mutable": false,
+      "plant_marker": "N1",
+      "notes": "Hotbar slot 3: array shape only."
+    },
+    {
+      "input": "Digit5",
+      "expected_grade": "negative",
+      "expected_effect_class": "inert",
+      "context": "gameplay",
+      "mutable": false,
+      "plant_marker": "N1",
+      "notes": "Hotbar slot 4: array shape only."
+    },
+    {
+      "input": "Digit6",
+      "expected_grade": "negative",
+      "expected_effect_class": "inert",
+      "context": "gameplay",
+      "mutable": false,
+      "plant_marker": "N1",
+      "notes": "Hotbar slot 5: array shape only."
+    },
+    {
+      "input": "Digit7",
+      "expected_grade": "negative",
+      "expected_effect_class": "inert",
+      "context": "gameplay",
+      "mutable": false,
+      "plant_marker": "N1",
+      "notes": "Hotbar slot 6: array shape only."
+    },
+    {
+      "input": "Digit8",
+      "expected_grade": "negative",
+      "expected_effect_class": "inert",
+      "context": "gameplay",
+      "mutable": false,
+      "plant_marker": "N1",
+      "notes": "Hotbar slot 7: array shape only."
+    },
+    {
+      "input": "Digit9",
+      "expected_grade": "negative",
+      "expected_effect_class": "inert",
+      "context": "gameplay",
+      "mutable": false,
+      "plant_marker": "N1",
+      "notes": "Hotbar slot 8: array shape only."
+    },
+    {
+      "input": "Digit0",
+      "expected_grade": "negative",
+      "expected_effect_class": "inert",
+      "context": "gameplay",
+      "mutable": false,
+      "plant_marker": "N1",
+      "notes": "Hotbar slot 9: array shape only."
+    },
+    {
+      "input": "Enter",
+      "expected_grade": "negative",
+      "expected_effect_class": "inert",
+      "context": "boot",
+      "mutable": false,
+      "plant_marker": "N2",
+      "notes": "Rebind-preview map value (MenuAction::Start) and the settings-UI row payload: display data for a settings screen, never an input route. Inert at boot — a shape method must not grade HashMap values as bindings."
+    },
+    {
+      "input": "*",
+      "expected_grade": "negative",
+      "expected_effect_class": "inert",
+      "context": "gameplay",
+      "mutable": false,
+      "plant_marker": "N3",
+      "notes": "Wildcard row: the last_pressed: KeyCode debug tracker mirrors whatever key was pressed LAST — it is structurally a KeyCode field but behaviorally a logger. It is deliberately unreflected so the digest never sees it; NO candidate key may be graded live because of the tracker (if it were reflected, every probe would diverge from its KeyQ control and the matrix would collapse into false positives). Graders must skip '*' as a per-key claim."
+    },
+    {
+      "input": "KeyX",
+      "expected_grade": "negative",
+      "expected_effect_class": "inert",
+      "context": "gameplay",
+      "mutable": false,
+      "plant_marker": "N4",
+      "notes": "Raw ButtonInput read writing a log-only, unreflected resource: behaviorally inert. The shape (a raw just_pressed read) must never earn a binding grade from the sweep."
+    },
+    {
+      "input": "KeyM",
+      "expected_grade": "negative",
+      "expected_effect_class": "inert",
+      "context": "boot",
+      "mutable": false,
+      "plant_marker": "P1",
+      "notes": "Structure-only today: KeyM becomes P1's binding only when the (never-active-in-D1) rebind menu flips UnmuteKey (P1 row carries mutable: true). Pristine boots see KeyM inert. Listed so the mutation/rebind contract is explicit; cite marker P1 because this row describes P1's runtime-mutable OTHER half."
+    }
+  ],
+  "findings_expected": [
+    {
+      "kind": "sweep_expected_misses",
+      "inputs": ["KeyL", "ShiftLeft", "KeyT"],
+      "detail": "Chord (P4) and debounce (P5) are live gameplay bindings the naive D0 sweep CANNOT see: single-key 1-frame taps never satisfy the chord or the debounce's second-press condition. Asserted as expected misses — a measured, documented limitation of single-key probing, not a silent gap."
+    },
+    {
+      "kind": "context_gated_not_discovered",
+      "inputs": ["KeyV"],
+      "detail": "P7's effect is real but lives behind an unreachable state; the sweep MUST report it inert at boot without flagging drift."
+    },
+    {
+      "kind": "negative_shapes",
+      "inputs": ["Digit3", "Digit4", "Digit5", "Digit6", "Digit7", "Digit8", "Digit9", "Digit0", "Enter", "KeyX", "KeyM"],
+      "detail": "Shape-positive, behaviorally-negative inputs: hotbar dead slots, rebind-preview display values, the raw-read logger key, and the dormant rebind target. The sweep must grade all inert; a source-shape method grading them live would be the false-positive discipline this fixture exists to enforce. (TODO D1-c/D1-d: source-scan and Leafwing-reader lenses get their own commitments against these rows.)"
+    }
+  ]
+}
