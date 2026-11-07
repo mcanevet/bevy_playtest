@@ -225,6 +225,17 @@ pub enum Evidence {
     /// Declared in a binding source of this kind (e.g.
     /// `"leafwing_input_map"`, `"bespoke_resource:<Name>"`).
     DeclaredIn { source_kind: String },
+    /// Differential probe ran to completion at `frame` and observed
+    /// NO divergence from the control baseline: the input was probed
+    /// under the run's controls and found inert. This is evidence
+    /// FOR a negative — it earns an entry's place the same way
+    /// [`Evidence::ProbeRun`] earns a live one, letting inert keys
+    /// appear as entries (grade [`ProvenanceGrade::ProbeVerified`],
+    /// `effect_signature: None`) so curators see what was ruled out
+    /// and why, instead of the draft silently omitting the residue.
+    /// Introduced by the D1-c sweep; additive to the D1-a shape, no
+    /// existing variant changed.
+    ProbeRunInert { frame: u64 },
 }
 
 /// The canonical IR unit (roadmap §6): one input, the context it
@@ -274,9 +285,10 @@ pub struct SurfaceEntry {
 impl SurfaceEntry {
     /// Is `grade` backed by the evidence it claims? A grade whose
     /// evidence is missing is a lying report — e.g. `ProbeVerified`
-    /// with no [`Evidence::ProbeRun`] observation, or `Declared`
-    /// with no [`Evidence::DeclaredIn`] source. Pure function, no
-    /// I/O; used by tests now and report-rendering warnings later.
+    /// with no [`Evidence::ProbeRun`]/[`Evidence::ProbeRunInert`]
+    /// observation, or `Declared` with no [`Evidence::DeclaredIn`]
+    /// source. Pure function, no I/O; used by tests now and
+    /// report-rendering warnings later.
     ///
     /// Deliberately a MINIMUM-consistency check, not a full proof:
     /// `true` means the grade's REQUIRED evidence shape is present,
@@ -295,10 +307,12 @@ impl SurfaceEntry {
                 .evidence
                 .iter()
                 .any(|e| matches!(e, Evidence::SourceRef { .. })),
-            ProvenanceGrade::ProbeVerified => self
-                .evidence
-                .iter()
-                .any(|e| matches!(e, Evidence::ProbeRun { .. })),
+            ProvenanceGrade::ProbeVerified => self.evidence.iter().any(|e| {
+                matches!(
+                    e,
+                    Evidence::ProbeRun { .. } | Evidence::ProbeRunInert { .. }
+                )
+            }),
             ProvenanceGrade::SuspectShape => true,
             ProvenanceGrade::LlmClaimed => self
                 .evidence
@@ -397,6 +411,15 @@ pub struct DiscoveredSurface {
     /// Caveats surfaced by the static scan (exclusive systems,
     /// uninitialized schedules, ...) that qualify the surface.
     pub notes: Vec<String>,
+    /// Build profile of the GAME binary the surface was learned
+    /// against (promoted from the probe child's report by
+    /// [`crate::discovery::flow::discover`]). `cfg`-gated keys make
+    /// dev-profile surfaces strictly larger than release ones, so a
+    /// surface without its profile invites misleading cross-profile
+    /// comparisons. `None` for D0-era cached surfaces and direct
+    /// `aggregate` callers. Additive, skip-serialized when empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_profile: Option<BuildProfile>,
     /// Canonical IR entries (D1+): richer than `keys`/`mouse_buttons`
     /// — one entry per (input × context) with grade, evidence,
     /// action label and qualifiers. ADDITIVE and default-empty:
@@ -971,6 +994,10 @@ mod tests {
         }
     }
 
+    fn probe_run_inert_evidence() -> Evidence {
+        Evidence::ProbeRunInert { frame: 60 }
+    }
+
     fn entry(grade: ProvenanceGrade, evidence: Vec<Evidence>) -> SurfaceEntry {
         SurfaceEntry {
             input: "KeyW".to_string(),
@@ -1074,12 +1101,21 @@ mod tests {
             Evidence::DeclaredIn {
                 source_kind: "leafwing_input_map".to_string(),
             },
+            probe_run_inert_evidence(),
         ];
         for e in evidences {
             let json = serde_json::to_string(&e).unwrap();
             let back: Evidence = serde_json::from_str(&json).unwrap();
             assert_eq!(back, e);
         }
+        // WIRE PIN (D1-c additive variant): the inert-probe
+        // evidence serializes as probe_run_inert with its frame —
+        // the bytes are the contract for downstream tooling.
+        let json = serde_json::to_string(&probe_run_inert_evidence()).unwrap();
+        assert_eq!(
+            json, "{\"kind\":\"probe_run_inert\",\"frame\":60}",
+            "inert-evidence wire name is probe_run_inert: {json}"
+        );
     }
 
     #[test]
@@ -1131,6 +1167,12 @@ mod tests {
                     source_kind: "leafwing_input_map".to_string(),
                 }],
             ),
+            (
+                ProvenanceGrade::ManagerPipelineOk,
+                // An inert probe run is a probe observation, not an
+                // intent-tap.
+                vec![probe_run_inert_evidence()],
+            ),
             (ProvenanceGrade::ManagerPipelineOk, Vec::new()),
             (
                 ProvenanceGrade::ManagerPipelineOk,
@@ -1163,6 +1205,16 @@ mod tests {
                 }],
             ),
             (ProvenanceGrade::ProbeVerified, vec![probe_run_evidence()]),
+            // The D1-c inert representation: ProbeVerified with an
+            // inert probe run (ran to completion, never diverged) is
+            // a CONSISTENT grade — the backstop now distinguishes
+            // ran-and-diverged (ProbeRun) from ran-and-didn't
+            // (ProbeRunInert), so inert entries pass it without
+            // ever upgrading their claim.
+            (
+                ProvenanceGrade::ProbeVerified,
+                vec![probe_run_inert_evidence()],
+            ),
             // SuspectShape has NO mechanical evidence shape: the
             // two-grade scheme makes it reportable without any
             // backing (and never alarm-grade) — even an EMPTY

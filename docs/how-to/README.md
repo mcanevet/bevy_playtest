@@ -11,3 +11,4 @@ Task-focused recipes, one per page. Each assumes the
 - [Handle lost log capture](how-to-handle-lost-log-capture.md) — Recover when another tracing subscriber wins the process global
 - [Prove a scenario is deterministic](how-to-prove-a-scenario-is-deterministic.md) — Verify replay divergence
 - [Discover your input surface](how-to-discover-your-input-surface.md) — Learn which keys your game actually consumes, with cached probe results
+- [Draft your input surface with one command](discover-input-surface.md) — Authoring-time `surface.draft.json` artifact with live entries, pinned inerts, and honest limitations

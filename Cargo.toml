@@ -148,6 +148,14 @@ name = "takeover_demo_empty"
 path = "src/bin/takeover_demo_empty.rs"
 required-features = ["takeover"]
 
+# Discover a game's input surface: the authoring-time tier-0 sweep
+# (see docs/how-to/discover-input-surface.md). Required-features
+# gates match the other bins: takeover drives probe subprocesses.
+[[bin]]
+name = "bevy_playtest_discover"
+path = "src/bin/bevy_playtest_discover.rs"
+required-features = ["takeover"]
+
 [features]
 default = ["in-process", "takeover"]
 in-process = []
