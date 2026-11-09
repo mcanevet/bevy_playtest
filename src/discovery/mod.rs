@@ -22,7 +22,11 @@
 //! layers — `cache`, `diff`, `group_completion`, `probe_scenarios`,
 //! `provenance`, `static_scan`, `surface` — compile everywhere so
 //! report types like `DiscoveredSurface`/`ViolationMeta` stay
-//! available to in-process-only builds.
+//! available to in-process-only builds. `lw` — the Leafwing
+//! declared-tier reader — sits behind the separate `lw-reader`
+//! opt-in: it is a pure-reflection consumer of these layers (no
+//! Leafwing dependency), but its live-world walk only has anything
+//! to find when the game itself uses Leafwing.
 
 pub mod cache;
 pub mod diff;
@@ -31,6 +35,8 @@ pub mod draft;
 #[cfg(feature = "takeover")]
 pub mod flow;
 pub mod group_completion;
+#[cfg(feature = "lw-reader")]
+pub mod lw;
 #[cfg(feature = "takeover")]
 pub mod probe_pool;
 pub mod probe_scenarios;
