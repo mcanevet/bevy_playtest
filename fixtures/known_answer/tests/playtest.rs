@@ -158,10 +158,15 @@ fn findings_expected_agree_with_hardcoded_sets() {
     }
 
     // Sweep expected misses: exactly the boot_live-but-not-probe-
-    // visible rows (the chord/debounce plants).
+    // visible rows (the chord/debounce plants). L-marker rows are
+    // declared-tier commitments graded by the LW lens (measure.rs),
+    // not sweep-lens misses — L4 (KeyP) is boot-live and NOT
+    // probe-visible, but for a reader-side reason, never a sweep
+    // limitation; leaving it here would misfile L4 as a sweep miss.
     let committed_misses: BTreeSet<&str> = gt
         .entries
         .iter()
+        .filter(|r| !r.plant_marker.starts_with('L'))
         .filter(|r| match &r.expected_grade {
             ExpectedGrade::Methods(m) => m.boot_live && !m.probe_visible,
             ExpectedGrade::Negative(_) => false,
@@ -175,10 +180,14 @@ fn findings_expected_agree_with_hardcoded_sets() {
          not-probe-visible rows (measure.rs asserts exactly this set)"
     );
 
-    // Context-gated not-discovered: the boot_dead rows.
+    // Context-gated not-discovered: the boot_dead rows. L-marker rows
+    // are excluded for the same reason as the misses derivation:
+    // L1/L2/L3's boot-deadness is a declared-tier fact (reader/tap/
+    // reconcile own it), not a sweep context limitation.
     let committed_gated: BTreeSet<&str> = gt
         .entries
         .iter()
+        .filter(|r| !r.plant_marker.starts_with('L'))
         .filter(|r| match &r.expected_grade {
             ExpectedGrade::Methods(m) => !m.boot_live,
             ExpectedGrade::Negative(_) => false,

@@ -12,3 +12,4 @@ Task-focused recipes, one per page. Each assumes the
 - [Prove a scenario is deterministic](how-to-prove-a-scenario-is-deterministic.md) — Verify replay divergence
 - [Discover your input surface](how-to-discover-your-input-surface.md) — Learn which keys your game actually consumes, with cached probe results
 - [Draft your input surface with one command](discover-input-surface.md) — Authoring-time `surface.draft.json` artifact with live entries, pinned inerts, and honest limitations
+- [Declare your actions with Leafwing Input Manager](declare-actions-leafwing.md) — Have discovery read `InputMap` declarations (RON maps included), tap wiring liveness, and alarm on declared-but-dead bindings

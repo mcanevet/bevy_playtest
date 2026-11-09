@@ -279,6 +279,84 @@
       "mutable": false,
       "plant_marker": "P1",
       "notes": "Structure-only today: KeyM becomes P1's binding only when the (never-active-in-D1) rebind menu flips UnmuteKey (P1 row carries mutable: true). Pristine boots see KeyM inert. Listed so the mutation/rebind contract is explicit; cite marker P1 because this row describes P1's runtime-mutable OTHER half."
+    },
+    {
+      "input": "KeyN",
+      "expected_grade": {
+        "probe_visible": false,
+        "source_declared": true,
+        "boot_live": false
+      },
+      "expected_effect_class": "inert",
+      "context": "boot",
+      "mutable": false,
+      "plant_marker": "L1",
+      "notes": "DECLARED-TIER PLANT (Leafwing): DisabledAtSpawn action, LW-disabled in Startup, so the wiring can never fire — no game effect exists and the sweep lens correctly never sees one. The binding is visible ONLY to the declared reader: the deterministic scenario presses KeyN and the intent-tap records pressed-never-fired + disabled, so reconcile MUST raise the DeclaredButDead ALARM (the one true-alarm plant). See lw_rows for the declared-tier expectations."
+    },
+    {
+      "input": "KeyO",
+      "expected_grade": {
+        "probe_visible": false,
+        "source_declared": true,
+        "boot_live": false
+      },
+      "expected_effect_class": "inert",
+      "context": "gameplay",
+      "mutable": false,
+      "plant_marker": "L2",
+      "notes": "DECLARED-TIER PLANT — honesty spine: the Ignored action is declared and ENABLED (wiring fires under press) but NO game handler exists, so the game ignores it. The intent-tap records pressed-and-fired, and reconcile MUST grade ContextUnverified, NEVER an alarm: wiring liveness is NOT game liveness. From the sweep's standpoint there is no effect, so boot_live is false."
+    },
+    {
+      "input": "ControlLeft",
+      "expected_grade": {
+        "probe_visible": false,
+        "source_declared": true,
+        "boot_live": false
+      },
+      "expected_effect_class": "inert",
+      "context": "gameplay",
+      "mutable": false,
+      "plant_marker": "L3",
+      "notes": "DECLARED-TIER PLANT — chord half of Combo (ControlLeft + KeyI via Leafwing's own ButtonlikeChord, distinct trap from the P4 raw-read chord). Probed as a default candidate but single-key presses can never satisfy the chord, so the sweep grades it inert — correct. The reader marks it chord: true; reconcile gives chord members a NOTE, never a finding, never an alarm."
+    },
+    {
+      "input": "KeyI",
+      "expected_grade": {
+        "probe_visible": false,
+        "source_declared": true,
+        "boot_live": false
+      },
+      "expected_effect_class": "inert",
+      "context": "gameplay",
+      "mutable": false,
+      "plant_marker": "L3",
+      "notes": "DECLARED-TIER PLANT — chord member half of Combo (with ControlLeft). Unlike ControlLeft, KeyI is not even a probe candidate: the sweep never looks at it, so the row's sweep-lens fields are moot. The deterministic scenario holds ControlLeft and taps KeyI so the chord FIRES (wiring live), yet no game handler consumes Combo — the note-only channel must absorb all of that without a single finding."
+    },
+    {
+      "input": "KeyP",
+      "expected_grade": {
+        "probe_visible": false,
+        "source_declared": true,
+        "boot_live": true
+      },
+      "expected_effect_class": "diverge",
+      "context": "menu_focused",
+      "mutable": false,
+      "plant_marker": "L4",
+      "notes": "DECLARED-TIER PLANT — context-gated: Gated has a REAL handler with a REAL digest-visible witness (GatedUse), but the system runs only in_state(GameState::Menu), which auto-exits at frame 30 — long before the sweep's probe points. Same expected-miss SHAPE as P4/P5 (boot_live: true, probe_visible: false) but behaviorally distinct from L2: the handler exists, the state is merely unreachable by the sweep. Reconcile MUST grade ContextUnverified (wiring fires under tap; game effect unverifiable) — never an alarm."
+    },
+    {
+      "input": "KeyJ",
+      "expected_grade": {
+        "probe_visible": true,
+        "source_declared": true,
+        "boot_live": true
+      },
+      "expected_effect_class": "diverge",
+      "context": "gameplay",
+      "mutable": false,
+      "plant_marker": "L5",
+      "notes": "DECLARED-TIER PLANT — healthy live: Live bumps the reflected LwUse witness unconditionally, so the SWEEP discovers KeyJ live and emits DiscoveredButUndeclared — the only L-plant both tiers can see. Reconcile must then SUPERSEDE the raw finding (reader declared the binding) and grade manager_pipeline_ok: declared ∧ tap-fired ∧ sweep-verified, with KeyJ named in retracted_residue. Mutation LW_dead disables the action at frame 35, turning the frame-40 press into the pressed-never-fired ALARM arm."
     }
   ],
   "findings_expected": [
@@ -296,6 +374,64 @@
       "kind": "negative_shapes",
       "inputs": ["Digit3", "Digit4", "Digit5", "Digit6", "Digit7", "Digit8", "Digit9", "Digit0", "Enter", "KeyX", "KeyM"],
       "detail": "Shape-positive, behaviorally-negative inputs: hotbar dead slots, rebind-preview display values, the raw-read logger key, and the dormant rebind target. The sweep must grade all inert; a source-shape method grading them live would be the false-positive discipline this fixture exists to enforce. (TODO D1-c/D1-d: source-scan and Leafwing-reader lenses get their own commitments against these rows.)"
+    }
+  ],
+  "lw_rows": [
+    {
+      "action": "Live",
+      "input": "KeyJ",
+      "source_declared": true,
+      "tap": "pressed_and_fired",
+      "pristine_reconcile": "manager_pipeline_ok",
+      "notes": "L5 crown jewel: reader enumerates the binding, tap records pressed-and-fired, sweep independently verified the LwUse effect — so reconcile grades manager_pipeline_ok and KeyJ's draft DiscoveredButUndeclared finding is RETRACTED (the declared tier supersedes the raw finding)."
+    },
+    {
+      "action": "DisabledAtSpawn",
+      "input": "KeyN",
+      "source_declared": true,
+      "tap": "pressed_never_fired_disabled",
+      "pristine_reconcile": "declared_but_dead",
+      "notes": "L1 static alarm plant: action LW-disabled at spawn. The tap records pressed=1, fired=0, disabled=true — the disabled arm of the DeclaredButDead alarm. This is the ONLY binding the pristine run may alarm on."
+    },
+    {
+      "action": "Ignored",
+      "input": "KeyO",
+      "source_declared": true,
+      "tap": "pressed_and_fired",
+      "pristine_reconcile": "context_unverified",
+      "notes": "L2 honesty spine: wiring fires under press but no game handler exists — wiring liveness is NOT game liveness, so reconcile grades ContextUnverified and MUST NOT alarm."
+    },
+    {
+      "action": "RonBound",
+      "input": "KeyH",
+      "source_declared": true,
+      "tap": "pressed_and_fired",
+      "pristine_reconcile": "context_unverified",
+      "notes": "Reader enumeration proof for RON-loaded maps: this InputMap<MenuAction2> row never existed as a code-built value (parsed from MENU_MAP_RON at startup), and the reader must find it indistinguishable from code-built rows. No handler consumes MenuAction2, so same ContextUnverified grade as L2."
+    },
+    {
+      "action": "Gated",
+      "input": "KeyP",
+      "source_declared": true,
+      "tap": "pressed_and_fired",
+      "pristine_reconcile": "context_unverified",
+      "notes": "L4 context-gated: REAL handler + REAL witness, but in_state(GameState::Menu) — the menu exits at frame 30 so the sweep can never verify. Tap sees the wiring fire; reconcile grades ContextUnverified, never an alarm."
+    },
+    {
+      "action": "Combo",
+      "input": "ControlLeft",
+      "source_declared": true,
+      "tap": "chord_member",
+      "pristine_reconcile": "chord_note",
+      "notes": "L3 chord member (ButtonlikeChord with KeyI): the reader must mark chord: true; reconcile must give a per-binding NOTE and NO finding, NO alarm — single-key presses are expected misses by design, and even a FIRED chord (as in the deterministic scenario) must stay note-only."
+    },
+    {
+      "action": "Combo",
+      "input": "KeyI",
+      "source_declared": true,
+      "tap": "chord_member",
+      "pristine_reconcile": "chord_note",
+      "notes": "L3 chord member (other half). Same note-only contract as ControlLeft."
     }
   ]
 }

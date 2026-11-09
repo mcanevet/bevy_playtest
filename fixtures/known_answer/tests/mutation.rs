@@ -10,10 +10,9 @@
 //!   KeyU LIVE, the sweep must now find it INERT — the
 //!   declared-but-dead drift direction. At the D1-c draft level that
 //!   means BOTH halves: a PINNED inert entry (probe ran, ruled out)
-//!   AND no finding claiming it live. (TODO D1-d: assert a
-//!   `DeclaredButDead` finding once the declared-binding reader lens
-//!   exists; today the inert-entry-plus-no-finding pair is the best
-//!   observable stand-in for that alarm.)
+//!   AND no finding claiming it live. (The D1-d declared-binding
+//!   reader lens exists now; its alarm contracts are asserted in
+//!   tests/measure.rs and in the `LW_dead` test below.)
 //! - `N1_hotbar_full`: all ten hotbar slots go live. Ground truth
 //!   declares Digit3..Digit0 INERT, the sweep must now find all ten
 //!   LIVE with `DiscoveredButUndeclared` findings — the
@@ -185,10 +184,12 @@ fn claimed_live(draft: &DraftOutcome, key: &str) -> bool {
 /// today's best observable stand-in for the declared-but-dead
 /// alarm.
 ///
-/// TODO(D1-d): once the declared-binding reader lens exists, this
-/// must also assert a `DeclaredButDead` finding (source cites the
-/// binding; the boot-time probe refutes it). Live in the pristine
-/// run: tests/measure.rs.
+/// D1-d update: the declared-binding reader lens now exists — the
+/// pressed-never-fired alarm arm is asserted LIVE in
+/// `mutation_lw_dead_alarms_on_healthy_binding_turned_dead` below,
+/// and the static dead plant's alarm in the pristine run is
+/// asserted in tests/measure.rs
+/// (`lw_reconcile_lens_known_answer_commitments`).
 #[test]
 fn mutation_p1_dead_makes_keyu_inert_where_truth_says_live() {
     let draft = draft_with_mutation("p1_dead", "P1_dead");
@@ -276,4 +277,169 @@ fn mutation_n1_hotbar_full_flips_negative_to_positive() {
             "N1_hotbar_full blast radius: {key} must remain a pinned inert entry"
         );
     }
+}
+
+/// `LW_dead`: the HEALTHY Live action (L5, KeyJ) is disabled at frame
+/// 35 — after the reader's declared snapshot, before the scenario's
+/// frame-40 press. The D1-d declared-tier contract, alarm direction:
+///
+/// - pristine run: exactly one DeclaredButDead alarm (L1 KeyN, the
+///   static disabled plant) and NONE for KeyJ — the healthy binding
+///   must not false-alarm;
+/// - mutated run: the intent-tap records KeyJ pressed=1, fired=0,
+///   disabled=true — reconcile MUST add the pressed-never-fired
+///   `DeclaredButDead` alarm for KeyJ (the disabled arm and the
+///   pressed-never-fired arm coincide: disabling IS what stops the
+///   firing);
+/// - blast radius: the OTHER declared rows' reconcile results are
+///   unchanged (KeyN still its static alarm; chords never alarm).
+///
+/// This plus the static L1 plant proves the alarm channel BOTH
+/// ways: a binding healthy-then-killed in the SAME run alarms, and
+/// the pristine run stays false-tap-free.
+#[test]
+fn mutation_lw_dead_alarms_on_healthy_binding_turned_dead() {
+    // DiscoveryFindingKind already imported at the top of this file.
+
+    // Draft live input set for reconcile (the same for both arms:
+    // LW_dead only disables the Live action at frame 35, long
+    // after the boot-time probe sweep sampled the surface — the
+    // DRAFT is mutation-blind here, so ONE pristine draft serves
+    // both reconcile calls).
+    let draft = draft_pristine("lw_dead");
+    let draft_live: std::collections::BTreeSet<String> = draft
+        .entries
+        .iter()
+        .filter(|e| e.effect_signature.is_some())
+        .map(|e| e.input.clone())
+        .collect();
+
+    // PRISTINE arm (control): healthy Live wiring — NO KeyJ alarm,
+    // and exactly the one static L1 alarm (KeyN).
+    let pristine = support::run_lw_lens("lw_pristine");
+    let rec_pristine = support::reconcile_report(&pristine, &draft_live);
+    let pristine_alarms: Vec<&str> = rec_pristine
+        .findings
+        .iter()
+        .filter(|f| matches!(f.kind, DiscoveryFindingKind::DeclaredButDead))
+        .map(|f| f.input.as_str())
+        .collect();
+    assert_eq!(
+        pristine_alarms,
+        vec!["KeyN"],
+        "pristine run: exactly the static L1 alarm, none for healthy KeyJ — \
+         a false tap on the healthy binding would destroy the alarm channel"
+    );
+
+    // MUTATED arm: LW_dead disables Live at frame 35; the scenario's
+    // frame-40 press lands on dead wiring. The tap must record
+    // pressed=1, fired=0, disabled=true for the Live action…
+    struct RestoreEnv(&'static str);
+    impl Drop for RestoreEnv {
+        fn drop(&mut self) {
+            unsafe { std::env::remove_var(self.0) };
+        }
+    }
+    // Everything fallible happens BEFORE the var is set (same
+    // discipline as draft_with_mutation) — a panic cannot leak the
+    // mutation into a subsequent run.
+    unsafe { std::env::set_var(ENV_MUTATION, "LW_dead") };
+    let _restore = RestoreEnv(ENV_MUTATION);
+    let mutated =
+        std::panic::catch_unwind(|| support::run_lw_lens("lw_mutated"));
+    drop(_restore);
+    let mutated = match mutated {
+        Ok(report) => report,
+        Err(_) => panic!(
+            "LW-lens run panicked under mutation 'LW_dead'; see the panic \
+             printed above — a mutated run must never fail silently"
+        ),
+    };
+    let live_stat = mutated
+        .lw_tap_stats
+        .iter()
+        .find(|s| s.action == "Live")
+        .expect("tap stats must carry the Live action");
+    assert_eq!(
+        (live_stat.pressed_frames, live_stat.fired_frames, live_stat.disabled),
+        (1, 0, true),
+        "LW_dead: the frame-40 KeyJ press must land as pressed-never-fired \
+         with the action disabled"
+    );
+
+    // …and reconcile must ALARM on KeyJ: the pressed-never-fired
+    // arm, proven on a binding the pristine run grades healthy.
+    let rec_mutated = support::reconcile_report(&mutated, &draft_live);
+    let mutated_alarms: Vec<&str> = rec_mutated
+        .findings
+        .iter()
+        .filter(|f| matches!(f.kind, DiscoveryFindingKind::DeclaredButDead))
+        .map(|f| f.input.as_str())
+        .collect();
+    assert_eq!(
+        mutated_alarms,
+        vec!["KeyJ", "KeyN"],
+        "LW_dead reconcile: the turned-dead KeyJ must alarm (pressed-\
+         never-fired arm) alongside the static L1 KeyN alarm — and no \
+         others"
+    );
+
+    // Blast radius: the rest of the declared tier is unchanged —
+    // chords never alarm (Combo fired under the synchronized
+    // multi-press in BOTH arms), Ignored/Gated/RonBound stay
+    // ContextUnverified, never alarms.
+    fn kinds<'a>(
+        rec: &'a bevy_playtest::discovery::lw::ReconciledLw,
+        key: &str,
+    ) -> Vec<&'a DiscoveryFindingKind> {
+        rec.findings
+            .iter()
+            .filter(|f| f.input == key)
+            .map(|f| &f.kind)
+            .collect()
+    }
+    for key in ["KeyO", "KeyP", "KeyH"] {
+        let pristine_kinds = kinds(&rec_pristine, key);
+        let mutated_kinds = kinds(&rec_mutated, key);
+        assert_eq!(
+            pristine_kinds, mutated_kinds,
+            "LW_dead blast radius: {key}'s findings must be unchanged"
+        );
+        assert!(
+            !mutated_kinds
+                .iter()
+                .any(|k| matches!(k, DiscoveryFindingKind::DeclaredButDead)),
+            "LW_dead blast radius: {key} must never alarm"
+        );
+    }
+    assert!(
+        kinds(&rec_mutated, "ControlLeft").is_empty()
+            && kinds(&rec_mutated, "KeyI").is_empty(),
+        "LW_dead blast radius: chord members keep NO findings in the \
+         mutated run"
+    );
+}
+
+/// A pristine (unmutated) draft sweep with a fresh temp cache — the
+/// LW_dead test's reconcile sets derive from it (the mutation is
+/// frame-35 runtime state, invisible to the boot-time probes).
+fn draft_pristine(tag: &str) -> DraftOutcome {
+    let cache_dir = temp_cache(tag);
+    let config = DiscoveryConfig {
+        plan: ProbePlan {
+            candidate_keys: candidate_keys(),
+            ..ProbePlan::default()
+        },
+        cache_dir,
+        fixture_name: Some(format!("known_answer_{tag}")),
+        ..DiscoveryConfig::new(env!("CARGO_BIN_EXE_fixture_known_answer"))
+    };
+    let draft = draft_surface(&config)
+        .expect("pristine draft sweep completes (the LW_dead test only \
+                mutates the tap run, never the sweep)");
+    assert!(
+        !draft.from_cache,
+        "fresh temp cache must probe, never recall a stale entry"
+    );
+    draft
 }
