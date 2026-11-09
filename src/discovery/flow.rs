@@ -109,6 +109,9 @@ fn active_features() -> Vec<&'static str> {
         ("takeover", cfg!(feature = "takeover")),
         ("takeover-winit", cfg!(feature = "takeover-winit")),
         ("ui-liveness", cfg!(feature = "ui-liveness")),
+        // The surface embeds the lw reconcile section when on, so
+        // lw-on and lw-off harness builds must not share entries.
+        ("lw-reader", cfg!(feature = "lw-reader")),
     ];
     all.iter()
         .filter(|(_, on)| *on)
@@ -376,6 +379,29 @@ pub fn discover(config: &DiscoveryConfig) -> Result<DiscoveryOutcome, DiscoveryE
     let promoted = outcomes.iter().find_map(|o| o.report.game_build_profile);
     let mut surface = surface;
     surface.build_profile = promoted;
+
+    // D1-d wiring: aggregate the Leafwing declared-tier evidence the
+    // child runs recorded (every child spawns the game's `InputMap`s;
+    // each child's tap saw only ITS scenario's presses) into one
+    // run-equivalent evidence and reconcile it against THIS
+    // surface's live inputs. Reported as an additive `lw` section —
+    // the D1-c sweep fields stay untouched (the retraction stays
+    // consumer-side). Games without Leafwing state (or lw-off
+    // builds) leave the section absent, honestly.
+    #[cfg(feature = "lw-reader")]
+    {
+        let reports: Vec<&PlaytestReport> = outcomes.iter().map(|o| &o.report).collect();
+        if let Some(evidence) = crate::discovery::lw::aggregate_lw_evidence(&reports) {
+            let live: std::collections::BTreeSet<String> = surface
+                .keys
+                .iter()
+                .chain(surface.mouse_buttons.iter())
+                .filter(|k| k.effect.is_some() && k.confidence != KeyConfidence::Unclassified)
+                .map(|k| k.key.clone())
+                .collect();
+            surface.lw = Some(crate::discovery::lw::reconcile(&evidence, &live));
+        }
+    }
 
     // Best-effort persistence: a failure costs the next run its
     // probe time, never this one its result.

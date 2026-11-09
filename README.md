@@ -165,6 +165,15 @@ counts, and the named limitation classes the method cannot see
 `"draft": true` — a curation input, not a contract. See
 [draft your input surface](docs/how-to/discover-input-surface.md).
 
+Games using Leafwing Input Manager get a declared tier on top: with
+the `lw-reader` feature the harness reads `InputMap` bindings by
+pure reflection (RON-loaded maps included), taps wiring liveness
+during the run, and reconciles the two — the result rides the
+surface and the `surface.draft.json` artifact as an additive `lw`
+section, declared-but-dead wiring alarms, everything honest stays a
+note. See [declare your actions with Leafwing Input
+Manager](docs/how-to/declare-actions-leafwing.md).
+
 Discovery can also aim the battery itself: with
 `BEVY_PLAYTEST_DISCOVER_INJECT=1` the parent discovers the surface
 first and — when the scenario declares no key surface of its own

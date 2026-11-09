@@ -15,6 +15,9 @@ playtest = [
     "dep:bevy_playtest",
     "bevy_playtest/takeover",
     "bevy_playtest/takeover-winit",
+    # Declared-tier discovery (D1-d): the LW reader/tap/reconcile
+    # machinery compiled into the harness the fixture drives.
+    "bevy_playtest/lw-reader",
 ]
 # Measurement/mutation harness opt-in (tests/measure.rs,
 # tests/mutation.rs): needs exclusive probe-pool access and is SLOW,
@@ -25,12 +28,21 @@ measure = []
 [dependencies]
 bevy = { version = "0.20.1" }
 bevy_playtest = { path = "../..", optional = true }
+# D1-d declared-tier plant: real Leafwing InputManager 0.22
+# (lockstep with our Bevy ^0.20 pin — see docs/reference/discovery-compat).
+leafwing-input-manager = "0.22"
+# `Actionlike` enums must be serde-serializable (Leafwing's InputMap
+# derives Serialize/Deserialize, propagating the bound onto A) and one
+# map is loaded from a RON asset string at startup.
+serde = { version = "1.0.229", features = ["derive"] }
+ron = "0.10"
 
 [dev-dependencies]
 # Self-dependency: activates OUR OWN `playtest` feature only for
 # test/example/bench builds. Normal & release builds stay clean.
 fixture_known_answer = { path = ".", features = ["playtest"] }
-# Ground-truth loader (tests/): serde lives here only — the game
-# binary itself never depends on it (release purity).
-serde = { version = "1.0.229", features = ["derive"] }
+# Ground-truth loader (tests/): serde is also a real game
+# dependency now (Leafwing needs it), so tests just reuse it.
 serde_json = "1.0.154"
+# Scratch dump test: RON round-trip of a Leafwing InputMap (D1-d).
+ron = "0.10"

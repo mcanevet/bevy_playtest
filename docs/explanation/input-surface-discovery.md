@@ -58,6 +58,50 @@ discovered surface into an undeclared scenario. That flow is now
 implemented as **discovery-driven scenario injection**
 (`BEVY_PLAYTEST_DISCOVER_INJECT=1`) — see the section below.
 
+## The Declared Tier (Leafwing reader, intent-tap, reconcile)
+
+The sweep measures; it cannot cite. For games using Leafwing Input
+Manager, the declared tier adds the citation: an **opt-in reader**
+(`lw-reader` feature, pure reflection — the harness links no
+Leafwing code, it walks the game's live `InputMap`s through the type
+registry exactly as it reads any reflected resource) enumerates
+every declared binding, including maps loaded from RON and maps of
+different `Actionlike` types coexisting in one world. Declarations
+ride the playtest report as `lw_declared`.
+
+Three layers, each honest about what it proves:
+
+1. **Reader** — the game code declares this binding. Nothing about
+   liveness: a declared binding the probes refute is the
+   `declared_but_dead` alarm channel, and a declared binding the
+   probes never looked at is coverage debt, not a verdict.
+2. **Intent-tap** — the driver's synthetic press reached the input
+   manager and fired the action (`stage: "manager_pipeline"`). This
+   is **wiring** liveness, and the product's honesty spine lives
+   here: **wiring liveness is not game liveness.** An action that
+   fires while the game ignores it is a note (`context_unverified`),
+   never an alarm — a false tap would destroy the channel, so
+   `manager_pipeline_ok` claims exactly what it observed and nothing
+   more.
+3. **Reconcile** — the join. Declared inputs upgrade to
+   `manager_pipeline_ok` when the tap corroborates; their duplicate
+   `discovered_but_undeclared` residue from the draft is retracted
+   (citation supersedes raw observation); and the alarm fires only
+   on **proven-dead wiring**: a disabled action that never fired
+   (per-action or component-wide disable — any firing overrides the
+   disabled observation), or a pressed binding whose action never
+   fired across the run. Chord members — disabled or not —
+   never-pressed bindings, and fired-but-ignored actions NEVER
+   alarm: the chord gap is deliberate (chord firing is only
+   observable as a group, so no per-member arm can be proven), and
+   the known-answer fixture plants each of these as a negative
+   control, while the mutation harness proves the channel both ways
+   (silent for live, loud for killed).
+
+Determinism extends unchanged: reconcile is a pure function of
+(declarations, tap stats, draft inputs), and identical runs produce
+byte-identical output.
+
 ## Discovery-Driven Scenario Injection
 
 The report-annotation flow above describes the run; it cannot save

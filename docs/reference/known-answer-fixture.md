@@ -51,6 +51,25 @@ would be exactly the false-positive this fixture exists to catch):
 | N3 | wildcard (`"*"` row) | `last_pressed: KeyCode` logger mirroring the last press | structurally a KeyCode field, behaviorally a logger; deliberately NOT reflected — if it were, every probe would diverge from its KeyQ control and the matrix would collapse into false positives |
 | N4 | `KeyX` | raw `just_pressed(KeyX)` read writing a log-only unreflected resource | a raw read must never earn a binding grade from the sweep alone |
 
+Declared-tier plants (real Leafwing Input Manager 0.22 subsystem —
+per-binding expectations in the additive `lw_rows` key, graded by
+the reader/intent-tap/reconcile lens, not the sweep):
+
+| Plant | Binding | Construction | What it pins |
+|-------|---------|---------------|--------------|
+| L1 | `DisabledAtSpawn` ← `KeyN` | LW action disabled at spawn | the static `declared_but_dead` alarm: pressed-never-fired with `disabled: true` — the pristine run's ONLY true alarm |
+| L2 | `Ignored` ← `KeyO` | declared + enabled, NO game handler | wiring fires while the game ignores it → `context_unverified`, NEVER an alarm (wiring liveness ≠ game liveness) |
+| L3 | `Combo` ← `ControlLeft`+`KeyI` | Leafwing's own `ButtonlikeChord` | chord members get notes, never findings, never alarms — even when the chord fires under a synchronized multi-press |
+| L4 | `Gated` ← `KeyP` | REAL handler + REAL reflected `GatedUse` witness, but `run_if(in_state(GameState::Menu))` (menu ends frame 30; probes sample later) | context-gated wiring: fires under tap, unverifiable by the sweep → `context_unverified`; behaviorally distinct from L2 (handler exists, state unreachable) |
+| L5 | `Live` ← `KeyJ` | unconditional handler bumping reflected `LwUse` | the healthy binding both tiers see: sweep discovers it (`discovered_but_undeclared`), reconcile upgrades to `manager_pipeline_ok` and RETRACTS the residue. Mutation `LW_dead` disables it at frame 35 — the pressed-never-fired alarm arm, proven on a binding the pristine run grades healthy |
+
+A RON-loaded `InputMap<MenuAction2>` (`RonBound` ← `KeyH`) hosts no
+plant of its own but pins reader enumeration: a map parsed from a
+RON string at startup must be indistinguishable from a code-built
+one. Two `Actionlike` types coexist (multi-map enumeration), and no
+handler consumes `MenuAction2`, so `KeyH` shares L2's
+`context_unverified` grade.
+
 Supporting testbeds (structure-only in D1, consumed by later
 slices): a bespoke `Keymap` resource routing the REAL WASD bindings
 (shape and behavior), a `MenuFocus` witness, and a
@@ -73,9 +92,9 @@ inert so the rebind contract is explicit from day one).
   - `probe_visible`: the D0 probe sweep observes a divergence when
     tapping this key at boot context.
   - `source_declared`: a declared-binding reader (Leafwing-style
-    actionlike, D1-d+) would cite a source. `false` everywhere in
-    D1 — the fixture deliberately uses raw reads plus bespoke
-    resources.
+    actionlike, D1-d+) would cite a source. `false` for the P/N
+    plants (raw reads plus bespoke resources); `true` for the L
+    plants, whose bindings live in real `InputMap`s.
   - `boot_live`: the binding genuinely fires in the boot context.
     P4/P5 are `boot_live: true, probe_visible: false` — live
     bindings the sweep is KNOWN to miss. They must land in the
@@ -98,7 +117,7 @@ game's actual behavior.
 
 Measured honestly against the full catalog (dev-profile binary,
 candidate list = defaults ∪ {KeyU, KeyL, KeyT, KeyG, KeyV, KeyX,
-KeyM}, control key `KeyQ` never bound, never a candidate):
+KeyM, KeyJ}, control key `KeyQ` never bound, never a candidate):
 
 - **True positives (9)**: KeyU, KeyW, KeyA, KeyS, KeyD, KeyR,
   Digit1, Digit2, KeyG — every probe-visible plant is found.
@@ -129,9 +148,19 @@ for why the var is deliberately not `BEVY_PLAYTEST_`-prefixed):
   declares KeyU live: the **declared-but-dead** drift direction.
   The sweep must report KeyU inert — as a pinned `probe_run_inert`
   entry with no `discoveredButUndeclared` finding claiming it live
-  (today's best observable stand-in for the alarm).
-  TODO(D1-d): assert a `DeclaredButDead` finding once the
-  declared-binding reader lens exists.
+  (the sweep-lens half of the alarm story; the declared-tier alarm
+  itself is asserted on the L plants, where a declared binding is
+  involved).
+- `LW_dead` — the healthy Live action (L5, KeyJ) is disabled at
+  frame 35, after the reader's declared snapshot but before the
+  scenario's frame-40 press: the declared-tier **alarm** direction.
+  The intent-tap records KeyJ pressed=1, fired=0, disabled=true —
+  the reconcile MUST add the pressed-never-fired `DeclaredButDead`
+  alarm for KeyJ (disabling IS what stops the firing, so the
+  disabled arm and the pressed-never-fired arm coincide). Together
+  with the static L1 plant this proves the alarm channel both ways:
+  a binding healthy-then-killed in the same run alarms, and the
+  pristine run stays false-tap-free.
 - `N1_hotbar_full` — all ten hotbar slots go live while ground
   truth declares eight inert: the **inert-but-live** direction
   (negative flipped positive). The sweep must find all ten live.

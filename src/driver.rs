@@ -1071,6 +1071,19 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     let total_ticks = (scenario.duration_s * tps as f32).ceil() as u64;
     let start = std::time::Instant::now();
 
+    // Leafwing declared-tier capture + intent-tap (`lw-reader`). Runs
+    // as a driver-loop recorder (like the digest), never a scheduled
+    // system — it must not appear in the game's schedule or the
+    // static scan's reader census. Declarations are read ONCE, at
+    // the first frame where Leafwing state exists (Startup-spawned),
+    // and held for the whole run; the tap observes every frame.
+    #[cfg(feature = "lw-reader")]
+    let mut lw_declared: Vec<crate::discovery::lw::LwDeclaration> = Vec::new();
+    #[cfg(feature = "lw-reader")]
+    let mut lw_declared_captured = false;
+    #[cfg(feature = "lw-reader")]
+    let mut lw_tap_stats: Vec<crate::discovery::lw::LwTapStats> = Vec::new();
+
     let loop_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         for i in 0..total_ticks {
             sinks::set_current_frame(i);
@@ -1082,6 +1095,23 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             }
             if record_digest {
                 crate::digest::record_digest_system(app.world_mut());
+            }
+            #[cfg(feature = "lw-reader")]
+            {
+                if !lw_declared_captured {
+                    let declared = crate::discovery::lw::read_declared(app.world());
+                    if !declared.is_empty() {
+                        lw_declared = declared;
+                        lw_declared_captured = true;
+                    }
+                }
+                let pressed = crate::discovery::lw::pressed_keys_this_frame(app.world());
+                crate::discovery::lw::tap_manager_pipeline(
+                    app.world(),
+                    &pressed,
+                    &lw_declared,
+                    &mut lw_tap_stats,
+                );
             }
             if let Some(mut state) = app.world_mut().get_resource_mut::<RunState>() {
                 state.frame += 1;
@@ -1260,6 +1290,18 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         state_digest,
         discovered_surface: None,
         injected_surface_keys: None,
+        #[cfg(feature = "lw-reader")]
+        lw_declared,
+        #[cfg(feature = "lw-reader")]
+        // Deterministic ordering: stats accumulate in registry-walk
+        // order, which is registration-stable within a run but sort
+        // anyway so byte-stability holds across the double run.
+        lw_tap_stats: {
+            let mut s = lw_tap_stats;
+            s.sort_by(|a, b| (&a.action_map, &a.action).cmp(&(&b.action_map, &b.action)));
+            s.dedup();
+            s
+        },
     })
 }
 

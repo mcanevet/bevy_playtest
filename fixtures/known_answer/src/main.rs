@@ -26,6 +26,7 @@
 //! BEVY_PLAYTEST_-prefixed").
 
 use bevy::prelude::*;
+use leafwing_input_manager::prelude::*;
 
 /// Mutation selector, read ONCE at startup (see module docs for why
 /// the name is deliberately unprefixed). Values: `P1_dead`,
@@ -45,6 +46,14 @@ enum Mutation {
     /// All 10 hotbar slots become live (N1's "two live of ten"
     /// adversarial shape flips to fully live).
     N1HotbarFull,
+    /// L5's healthy LW action is disabled at runtime shortly after
+    /// boot: a LIVE declared binding flips to dead wiring mid-run
+    /// (see `disable_l5_if_mutated`). The intent-tap then records
+    /// pressed-but-never-fired — the `DeclaredButDead` alarm's
+    /// distinguishing control (the STATIC dead plant L1 already
+    /// proves the alarm fires; this proves it doesn't fire on the
+    /// pristine live twin).
+    LwDead,
 }
 
 fn read_mutation() -> Mutation {
@@ -53,9 +62,10 @@ fn read_mutation() -> Mutation {
         "" => Mutation::None,
         "P1_dead" => Mutation::P1Dead,
         "N1_hotbar_full" => Mutation::N1HotbarFull,
+        "LW_dead" => Mutation::LwDead,
         other => panic!(
             "known_answer fixture: unknown {} value '{other}' \
-             (expected 'P1_dead', 'N1_hotbar_full', or empty)",
+             (expected 'P1_dead', 'N1_hotbar_full', 'LW_dead', or empty)",
             ENV_MUTATION
         ),
     }
@@ -321,6 +331,164 @@ fn active_mutation() -> Mutation {
 /// GAMEPLAY context; the menu is the boot prefix.
 const MENU_FRAMES: u32 = 30;
 
+// ---------------------------------------------------------------------------
+// LEAFWING DECLARED-TIER PLANTS (L1..L5, D1-d).
+//
+// A real Leafwing InputManager 0.22 subsystem: the declared-tier
+// reader enumerates these `InputMap`s by pure reflection (no
+// Leafwing dependency in the harness), the intent-tap correlates
+// driver presses with action firings, and reconcile grades each
+// binding. Plants:
+//
+// PLANT L1 — Static dead wiring: DisabledAtSpawn(KeyN), LW-disabled at
+//            spawn; pressed but never fires → DeclaredButDead alarm.
+// PLANT L2 — Honesty spine: Ignored(KeyO) declared + enabled, NO game
+//            handler — wiring fires, game ignores → ContextUnverified,
+//            never an alarm (wiring liveness ≠ game liveness).
+// PLANT L3 — Chord: Combo = ControlLeft+KeyI via LW's own chord —
+//            chord members get notes, never alarms.
+// PLANT L4 — Context-gated: Gated(KeyP) has a REAL handler with a
+//            REAL digest-visible effect, but it runs only inside
+//            GameState::Menu (auto-left at frame 30, before probe
+//            points sample gameplay) — wiring fires, the sweep can
+//            never verify → ContextUnverified, never an alarm.
+// PLANT L5 — Healthy live: Live(KeyJ) bumps reflected LwUse —
+//            probe-visible, boot-live, manager_pipeline_ok under the
+//            deterministic press scenario; the sweep's
+//            DiscoveredButUndeclared for KeyJ is RETRACTED by
+//            reconcile. Mutation `LW_dead` disables it mid-run.
+//
+// Two maps exercise multi-map, multi-Actionlike-type enumeration:
+// a code-built `InputMap<LwPlantAction>` and a RON-loaded
+// `InputMap<MenuAction2>` (parsed at startup — RON maps must be
+// indistinguishable from code-built ones to the reflection reader).
+// ---------------------------------------------------------------------------
+
+/// The LW plant `Actionlike` enum (code-built map host).
+#[derive(
+    Actionlike, Clone, Copy, PartialEq, Eq, Hash, Debug, Reflect, serde::Serialize, serde::Deserialize,
+)]
+enum LwPlantAction {
+    /// L5: healthy live action (KeyJ), digest-visible witness bump.
+    Live,
+    /// L1: disabled at spawn — the static dead-wiring alarm plant.
+    DisabledAtSpawn,
+    /// L2: declared + enabled, no game handler — wiring fires, the
+    /// game ignores it (honesty-spine plant).
+    Ignored,
+    /// L3: chord with ControlLeft — chord-member semantics plant.
+    Combo,
+    /// L4: context-gated — fires at wiring level, invisible to the
+    /// boot-context sweep.
+    Gated,
+}
+
+/// The RON-loaded map's `Actionlike` enum. A SECOND Actionlike type
+/// coexisting with [`LwPlantAction`] proves the reader enumerates
+/// every map generically, not just the first one it meets.
+#[derive(
+    Actionlike, Clone, Copy, PartialEq, Eq, Hash, Debug, Reflect, serde::Serialize, serde::Deserialize,
+)]
+enum MenuAction2 {
+    /// A binding that exists ONLY via the RON-loaded map.
+    RonBound,
+}
+
+/// L5's digest-visible witness: bumped by the `Live` action handler.
+/// Reflected + registered (the sweep's effect-signature probe sees
+/// the bump on KeyJ; the retraction case rides on it).
+#[derive(Resource, Debug, Reflect, PartialEq)]
+#[reflect(Resource)]
+struct LwUse(u32);
+
+/// L4's digest-visible witness: bumped by the menu-gated `Gated`
+/// handler. REAL wiring, REAL effect — but the handler runs only in
+/// `GameState::Menu`, which the fixture auto-leaves at frame 30
+/// (before any gameplay-context probe point), so the sweep can never
+/// verify the effect and must NOT claim liveness it cannot see.
+#[derive(Resource, Debug, Reflect, PartialEq)]
+#[reflect(Resource)]
+struct GatedUse(u32);
+
+/// RON source for the second map, hand-written as a real game's
+/// asset file would be (shape captured from LW 0.22's own
+/// serialization: each binding is a typetagged single-entry map —
+/// `{"KeyCode":KeyH}`). The reader must recover `RonBound`'s binding
+/// from a map that never existed as a code-built `InputMap` value.
+const MENU_MAP_RON: &str = r#"(
+    buttonlike_map: {
+        RonBound: [{"KeyCode": KeyH}],
+    },
+    axislike_map: {},
+    dual_axislike_map: {},
+    triple_axislike_map: {},
+    associated_gamepad: None,
+)"#;
+
+/// Builds the code-built `InputMap<LwPlantAction>`: L1, L2, L3
+/// (chord), L4, L5's KeyJ binding. The RON map (below) is a distinct
+/// construction route, exercising BOTH paths the reader must cover.
+fn lw_plant_map() -> InputMap<LwPlantAction> {
+    let mut map = InputMap::default();
+    map.insert(LwPlantAction::Live, KeyCode::KeyJ);
+    map.insert(LwPlantAction::DisabledAtSpawn, KeyCode::KeyN);
+    map.insert(LwPlantAction::Ignored, KeyCode::KeyO);
+    map.insert(
+        LwPlantAction::Combo,
+        ButtonlikeChord::new([KeyCode::ControlLeft, KeyCode::KeyI]),
+    );
+    map.insert(LwPlantAction::Gated, KeyCode::KeyP);
+    map
+}
+
+/// L4's handler: context-gated by DESIGN. The `GatedUse` bump is a
+/// real, registered, digest-visible effect — but this system only
+/// runs inside `GameState::Menu`, which lasts frames 0..30. The
+/// probe plan's gameplay probe points (~frames 60/90) can therefore
+/// never observe the effect: the binding is honestly unverifiable by
+/// the sweep, not dead. This is what separates L4 from L2 — L2 has
+/// NO handler anywhere; L4's handler exists but is state-gated.
+fn handle_lw_gated(
+    mut actions: Query<&mut ActionState<LwPlantAction>>,
+    mut gated_use: ResMut<GatedUse>,
+) {
+    for actions in &mut actions {
+        if actions.just_pressed(&LwPlantAction::Gated) {
+            gated_use.0 += 1;
+        }
+    }
+}
+
+/// L5's game handler: the ONLY unconditionally-live effect among the
+/// LW plants. The digest-visible `LwUse` bump is what makes KeyJ
+/// probe-visible to the sweep — the crown-jewel retraction case needs
+/// the sweep to FIND KeyJ live and reconcile to supersede that raw
+/// finding.
+fn handle_lw_live(
+    mut actions: Query<&mut ActionState<LwPlantAction>>,
+    mut lw_use: ResMut<LwUse>,
+) {
+    for actions in &mut actions {
+        if actions.just_pressed(&LwPlantAction::Live) {
+            lw_use.0 += 1;
+        }
+    }
+}
+
+/// Mutation `LW_dead`: disable the HEALTHY action shortly after boot
+/// (frame 35 — after the declared snapshot, before the deterministic
+/// KeyJ press at frame 40). The intent-tap then records a pressed
+/// key whose action never fires: the pressed-never-fired alarm arm.
+/// The action stays enabled in the pristine run — the control arm.
+fn disable_l5_if_mutated(mut actions: Query<&mut ActionState<LwPlantAction>>, frame: Res<FrameCount>) {
+    if active_mutation() != Mutation::LwDead || frame.0 != 35 {
+        return;
+    }
+    for mut actions in &mut actions {
+        actions.disable_action(&LwPlantAction::Live);
+    }
+}
+
 fn main() {
     let mutation = read_mutation();
     let _ = MUTATION.set(mutation);
@@ -366,12 +534,16 @@ fn main() {
         .insert_resource(VhsFilter(false))
         .insert_resource(RebindMenuActive(false))
         .insert_resource(FrameCount(0))
+        .insert_resource(LwUse(0))
+        .insert_resource(GatedUse(0))
         .register_type::<Muted>()
         .register_type::<ResetCount>()
         .register_type::<LampOn>()
         .register_type::<TrickCount>()
         .register_type::<HotbarUse>()
-        .register_type::<VhsFilter>();
+        .register_type::<VhsFilter>()
+        .register_type::<LwUse>()
+        .register_type::<GatedUse>();
     // P6: dev-profile surface member — registered (and the system
     // compiled) under `debug_assertions` only, so a release-profile
     // surface is strictly smaller.
@@ -411,6 +583,48 @@ fn main() {
             Update,
             handle_vhs_filter.run_if(in_state(GameState::Secret)),
         );
+
+    // ----- Leafwing declared-tier plants (L1..L5, D1-d) -----
+    // Plugin order note: InputManagerPlugin is added AFTER
+    // PlaytestPlugin (takeover must own the runner — last-set-wins);
+    // LW's own systems run inside the game's normal Update schedule,
+    // so the takeover's post-update intent-tap (a driver-loop
+    // recorder) still observes their firings after app.update().
+    app.add_plugins(InputManagerPlugin::<LwPlantAction>::default());
+    app.add_plugins(InputManagerPlugin::<MenuAction2>::default());
+    // RON-loaded map (startup-parse: exactly like an asset load):
+    // a binding route that never exists as a code-built InputMap.
+    let menu_map: InputMap<MenuAction2> = ron::from_str(MENU_MAP_RON)
+        .expect("MENU_MAP_RON must parse (LW InputMap serde layout)");
+    app.add_systems(Startup, move |mut commands: Commands| {
+        // Code-built plant map: L1..L5's bindings.
+        let mut actions = ActionState::<LwPlantAction>::default();
+        // L1: the static dead-wiring plant — disabled BEFORE the
+        // first frame so the reader's ActionState observation sees
+        // `disabled: true` from the very first tap frame.
+        actions.disable_action(&LwPlantAction::DisabledAtSpawn);
+        commands.spawn((lw_plant_map(), actions));
+        // RON-loaded map: RonBound(KeyH). MenuAction2 has NO game
+        // handler — a declared binding that fires when pressed but
+        // is ignored by game code (honesty-spine, ContextUnverified
+        // if probed). The deterministic scenario DOES press KeyH at
+        // frame 65: the tap records pressed-and-fired, wiring live,
+        // game effect unverified — the never-pressed arm is pinned
+        // by unit tests instead.
+        commands.spawn((menu_map.clone(), ActionState::<MenuAction2>::default()));
+    })
+    .add_systems(
+        Update,
+        (
+            // L5's digest-visible effect.
+            handle_lw_live,
+            // L4's menu-gated effect: real handler + real witness,
+            // only observable inside GameState::Menu.
+            handle_lw_gated.run_if(in_state(GameState::Menu)),
+            // Mutation LW_dead's disable pass (no-op pristine).
+            disable_l5_if_mutated,
+        ),
+    );
     app.run();
 }
 
