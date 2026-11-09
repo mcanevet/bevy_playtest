@@ -51,6 +51,11 @@ bevy_winit = { version = "0.20.1", optional = true, default-features = false }
 bevy = { version = "0.20.1", optional = true }
 
 [dev-dependencies]
+# D1-d: the lw-reader tests read REAL Leafwing InputManager 0.22
+# registrations (in-process App fixtures). Dev/test-only: consumers'
+# graphs never see leafwing, even with `lw-reader` ON (the reader is
+# pure reflection and works against any conforming registration).
+leafwing-input-manager = "0.22"
 # Register an engine resource (bevy_time::Time<Virtual>) as REFLECTED in
 # the exclusion test: the harness's narrow bevy_time dep (no reflect)
 # covers runtime use, but the test must prove the bevy_* filter drops a
@@ -165,6 +170,15 @@ takeover-winit = ["takeover", "dep:bevy_winit", "dep:bevy", "ui-liveness"]
 # under takeover (bevy meta-crate already unifies bevy_ui), so default-on
 # there; in-process-only consumers opt in explicitly.
 ui-liveness = ["dep:bevy_ui"]
+
+# Leafwing InputManager declared-binding reader + intent-tap
+# (D1-d). Pure reflection: no leafwing dependency in this crate — the
+# reader matches LW's registered type paths via AppTypeRegistry and
+# walks InputMap/ActionState components reflectively (see
+# src/discovery/lw.rs). OFF by default so the default build's
+# dependency set is unchanged; ON in dev/test all-features runs and
+# requested by the known_answer fixture's `playtest` feature.
+lw-reader = []
 
 # Local dev speedup: line-tables-only debuginfo (fast link, much
 # smaller target/ — full debuginfo made each Bevy rlib 190-370 MB).

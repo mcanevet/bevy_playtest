@@ -435,6 +435,20 @@ pub struct DiscoveredSurface {
     /// consumers never see it).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub findings: Vec<DiscoveryFinding>,
+    /// Leafwing declared-tier reconcile ([`crate::discovery::lw`]),
+    /// populated by [`crate::discovery::flow::discover`] when the
+    /// probe children's reader found declared bindings. PURELY
+    /// ADDITIVE — a REPORTED section, never an applied one: the
+    /// frozen D1-c fields above (`entries`, `findings`) carry the
+    /// sweep's own commitments, and `retracted_residue` in
+    /// particular is left for consumers to apply (the sweep draft
+    /// deliberately keeps its findings ↔ live-inputs bijection).
+    /// `None` when the game declares nothing or the `lw-reader`
+    /// feature is off. `#[serde(default)]`: D1-d-era caches
+    /// deserialize to `None`. Serialized only when present.
+    #[cfg(feature = "lw-reader")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lw: Option<crate::discovery::lw::ReconciledLw>,
 }
 
 impl DiscoveredSurface {

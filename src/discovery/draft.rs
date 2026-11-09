@@ -182,6 +182,18 @@ pub struct DraftOutcome {
     /// Caveats qualifying the surface (scan notes, group-completion
     /// disclosures, backstop drops).
     pub notes: Vec<String>,
+    /// Leafwing declared-tier reconcile section (report-only copy
+    /// of [`super::surface::DiscoveredSurface::lw`]): declared
+    /// entries, `DeclaredButDead`/`ContextUnverified` findings, and
+    /// the `retracted_residue` inputs whose D1-c
+    /// `DiscoveredButUndeclared` findings a consumer SHOULD retract
+    /// — reported, not applied, so the D1-c commitments above stay
+    /// untouched. `None` when the game declares nothing or the
+    /// `lw-reader` feature is off. `#[serde(default)]`: old
+    /// artifacts deserialize cleanly.
+    #[cfg(feature = "lw-reader")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lw: Option<super::lw::ReconciledLw>,
 }
 
 impl DraftOutcome {
@@ -375,6 +387,8 @@ impl DraftOutcome {
             readers: surface.readers.clone(),
             pruned_devices: surface.pruned_devices.clone(),
             notes,
+            #[cfg(feature = "lw-reader")]
+            lw: surface.lw.clone(),
         }
     }
 

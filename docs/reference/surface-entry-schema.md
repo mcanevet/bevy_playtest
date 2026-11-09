@@ -117,8 +117,16 @@ its grade:
   `probe_verified` grade so ruled-out candidates can appear as
   entries without ever claiming liveness.
 - `TapObserved { stage }` — intent-tap observed at a named pipeline
-  stage (`"manager_pipeline"` today; more constants arrive with
-  their producers).
+  stage. Example: the Leafwing reader's post-update tap records
+  `TapObserved { stage: "manager_pipeline" }` on a binding whose
+  driver press fired the action — **wiring** liveness, never game
+  liveness (see `manager_pipeline_ok` above). Reconcile: the
+  declared tier is joined against the draft sweep — declared inputs
+  upgrade to `manager_pipeline_ok` when the tap corroborates and
+  their `discovered_but_undeclared` residue is retracted, while
+  proven-dead wiring (disabled-without-a-firing, or
+  pressed-never-fired) alarms
+  `declared_but_dead` and nothing else ever does.
 - `SourceRef { file, line, enclosing }` — the mechanically-checkable
   citation format.
 - `DeclaredIn { source_kind }` — e.g. `"leafwing_input_map"`.

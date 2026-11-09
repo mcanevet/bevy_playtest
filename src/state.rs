@@ -149,6 +149,20 @@ pub struct PlaytestReport {
     /// imply an authored one.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub injected_surface_keys: Option<Vec<String>>,
+    /// Leafwing declared bindings read from the game's `InputMap`s
+    /// during this run (`lw-reader` feature; `None` when the
+    /// feature is off or the game spawns no Leafwing state).
+    /// Additive honesty field: lets a report consumer distinguish
+    /// "nothing declared" from "reader not compiled in".
+    #[cfg(feature = "lw-reader")]
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub lw_declared: Vec<crate::discovery::lw::LwDeclaration>,
+    /// Leafwing intent-tap statistics accumulated across this run
+    /// (`lw-reader` feature). Same additive contract as
+    /// [`Self::lw_declared`].
+    #[cfg(feature = "lw-reader")]
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub lw_tap_stats: Vec<crate::discovery::lw::LwTapStats>,
 }
 
 impl PlaytestReport {
@@ -174,6 +188,10 @@ impl PlaytestReport {
             state_digest: vec![],
             discovered_surface: None,
             injected_surface_keys: None,
+            #[cfg(feature = "lw-reader")]
+            lw_declared: vec![],
+            #[cfg(feature = "lw-reader")]
+            lw_tap_stats: vec![],
         }
     }
 
