@@ -587,3 +587,74 @@ fn stray_playtest_env_vars_are_sanitized_in_children() {
     }
     std::env::remove_var("BEVY_PLAYTEST_PROBE_SUITE_STRAY");
 }
+
+#[test]
+fn probe_children_get_their_own_cwd_and_home() {
+    let _slot = common::run_slot();
+    // Isolation regression: probe children used to inherit the
+    // PARENT's working directory, so a game writing anything
+    // `./`-relative (or resolving paths through $HOME) scribbled
+    // into wherever `cargo test` ran — the repo tree in CI — and
+    // sibling jobs shared one collision-prone cwd. The pool must
+    // give every job its own throwaway directory (under the RAII
+    // workspace, so no artifacts survive the run) and repoint the
+    // child's HOME there.
+    //
+    // The child is the dedicated `takeover_demo_cwd_write` binary:
+    // it writes a cwd-relative marker and a HOME-resolved marker,
+    // then exits. It is not a takeover child (no report), and the
+    // test ASSERTS the resulting `NoReport` — with "no report
+    // file" as the cause — as positive proof the child really ran
+    // to completion rather than failing at spawn.
+    let plan = ProbePlan::default();
+    let points = probe_points(PROBE_DURATION_S, PROBE_TPS);
+    let job = bevy_playtest::discovery::probe_pool::ProbeJob {
+        scenario: plan.control_scenario(points[0]).expect("scenario"),
+        kind: bevy_playtest::discovery::probe_pool::ProbeJobKind::Control { point: points[0] },
+        expected_last_frame: plan.expected_last_frame(),
+        export_scan: false,
+    };
+    // Reused workspace so the per-job cwd survives this pool run
+    // for inspection before the RAII drop (the run_jobs wrapper
+    // would have destroyed it by the time the assertions run).
+    let workspace = bevy_playtest::discovery::probe_pool::ProbeWorkspace::new().expect("workspace");
+    let writer = std::path::PathBuf::from(env!("CARGO_BIN_EXE_takeover_demo_cwd_write"));
+    let config = ProbePoolConfig::new(writer);
+
+    let parent_cwd = std::env::current_dir().expect("parent cwd");
+    let results = run_jobs_in(&config, &[job], &workspace);
+    // The child exits 0 after writing its markers, but writes NO
+    // report — that exact refusal is the proof it executed.
+    match &results[0] {
+        Err(ProbeError::NoReport { scenario: _, cause }) => assert!(
+            cause.contains("no report file"),
+            "child must have RUN (exit 0, report never written), got: {cause:?}"
+        ),
+        other => panic!("marker-writing child must yield the no-report refusal, got: {other:?}"),
+    }
+
+    // Both markers land INSIDE the per-job cwd: the cwd-relative
+    // write because that IS the child's cwd, and the HOME-resolved
+    // write because the pool repointed HOME at the same directory.
+    let child_cwd = workspace.child_cwd_path(0);
+    assert!(
+        child_cwd.join("cwd_marker.txt").is_file(),
+        "child's ./-relative write must land in its per-job cwd, not the parent's"
+    );
+    assert!(
+        child_cwd.join("home_marker.txt").is_file(),
+        "child's HOME-resolved write must land in the isolated per-job HOME"
+    );
+
+    // Nothing leaked into the parent's working directory, and the
+    // parent's cwd is untouched (the child's isolation is
+    // one-directional).
+    assert!(
+        !parent_cwd.join("cwd_marker.txt").exists(),
+        "isolation failed: the child wrote into the PARENT's cwd"
+    );
+    assert!(
+        std::env::current_dir().is_ok_and(|d| d == parent_cwd),
+        "the parent's cwd must be unchanged by the pool run"
+    );
+}

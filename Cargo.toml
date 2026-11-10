@@ -138,6 +138,16 @@ name = "takeover_demo_hang"
 path = "src/bin/takeover_demo_hang.rs"
 required-features = ["takeover"]
 
+# Cwd/HOME-isolation child for probe-pool tests: writes one
+# cwd-relative marker and one HOME-resolved marker, then exits —
+# the regression test asserts both land in the pool's per-job
+# throwaway directory. See tests/probe_pool.rs:
+# probe_children_get_their_own_cwd_and_home.
+[[bin]]
+name = "takeover_demo_cwd_write"
+path = "src/bin/takeover_demo_cwd_write.rs"
+required-features = ["takeover"]
+
 [[bin]]
 name = "takeover_demo_raw_winit"
 path = "src/bin/takeover_demo_raw_winit.rs"
