@@ -126,16 +126,25 @@ input).
 Opt-outs: `mouse_buttons: []` under a scenario's `bot.raw_surface`
 drops clicks; `"keys": []` there drops chaos keys (mouse-only chaos).
 
-## The known-answer fixture
+## The hand-maintained fixtures
 
-Beyond the fetched showcase games, the repo carries one
-hand-authored fixture: `fixtures/known_answer/` — a deliberately
-constructed input surface (numbered "plants": chords, debounces,
-shape-only KeyCode traps) with committed ground truth
-(`ground_truth.json`) that discovery measurements are graded
-against, including asserted expected misses and two runtime code
-mutations for drift testing. See the
+The repository carries two hand-maintained fixtures beyond the
+fetched showcase games. The first is hand-authored:
+`fixtures/known_answer/` — a deliberately constructed input surface
+(numbered "plants": chords, debounces, shape-only KeyCode traps)
+with committed ground truth (`ground_truth.json`) that discovery
+measurements are graded against, including asserted expected
+misses and two runtime code mutations for drift testing. See the
 [known-answer fixture reference](docs/reference/known-answer-fixture.md).
+
+The second is a real-world game: `fixtures/thetawave/` — a port of
+the MIT-licensed thetawave (Bevy 0.14 → 0.20) using real Leafwing
+Input Manager maps loaded from RON. It has no ground truth by
+design: its committed tests make only per-run-derivable, honest
+claims — headless boot, a clean battery, reader enumeration of the
+game's actual `MenuAction` bindings, and driven actions grading
+`manager_pipeline_ok` — the reference point for what the declared
+tier observes on a production-shaped game.
 
 ## Discovering the input surface
 

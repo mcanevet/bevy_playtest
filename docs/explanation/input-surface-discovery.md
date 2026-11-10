@@ -102,6 +102,28 @@ Determinism extends unchanged: reconcile is a pure function of
 (declarations, tap stats, draft inputs), and identical runs produce
 byte-identical output.
 
+### Real-world corroboration: the thetawave fixture
+
+The declared tier's demo surface is the real game, not a plant:
+`fixtures/thetawave` (a port of the MIT-licensed thetawave to
+Bevy 0.20 / Leafwing Input Manager 0.22, fetched wholesale from a
+pinned commit of our fork by `scripts/fetch_bevy_examples.sh`)
+exercises the reader against production-shaped code. Its committed
+`tests/playtest.rs` drives a deterministic scenario walking the
+game's own menus and asserts, from the report alone: the reader
+enumerates the real RON-loaded `MenuAction` map (15 declared
+bindings, action names straight from the game's enum), the
+intent-tap observes scripted presses firing their bound actions,
+and reconcile grades the driven actions `manager_pipeline_ok`
+without arming `declared_but_dead`. Honest limits are asserted as
+limits: no completeness claim (the reader snapshots the first
+non-empty map population, so maps spawned later in gameplay —
+`PlayerAction` at character select — are intentionally out of
+scope), and no determinism claim (the game's background picker
+uses thread-local RNG). A passed reader run is evidence about the
+game as ported, at that Bevy and Leafwing version — not a
+standing guarantee about upstream thetawave.
+
 ## Discovery-Driven Scenario Injection
 
 The report-annotation flow above describes the run; it cannot save
@@ -781,11 +803,11 @@ probe runs (~4 min at pool=8). Still a coffee break, which is why the
 subprocess pool
 architecture is the right call.
 
-### Full Battery Cost (8 fixtures: 7 fetched showcase games + the committed known_answer fixture)
+### Full Battery Cost (9 fixtures: 7 fetched showcase games + the committed known_answer fixture + the fetched thetawave port)
 
-- Serial: 7 × ~5.3 min = ~37 min
-- Parallel discovery (pool=8 per fixture, sequential fixtures): 7 × ~40s ≈ 5 min
-- **With fixture-level parallelism (4 fixtures concurrently):** ~1-2 min
+- Serial: 9 × ~5.3 min ≈ ~48 min
+- Parallel discovery (pool=8 per fixture, sequential fixtures): 9 × ~40s ≈ 6 min
+- **With fixture-level parallelism (e.g. 4 fixtures concurrently):** scales accordingly; not exercised by CI (battery runs serially there)
 
 ### CI Considerations
 

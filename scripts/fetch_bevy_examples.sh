@@ -413,9 +413,78 @@ EOF
     echo "  Created: $target_dir/"
 done
 
-# 5. Create fixtures workspace. NOTE: `known_answer` is listed as a
-# member but is hand-authored and committed (NOT seeded by the loop
-# above) — regeneration must preserve it or the workspace breaks.
+# 5. thetawave — the real-world Leafwing fixture: a ported
+#    third-party game (Theta Wave, MIT — see
+#    docs/reference/thetawave-fixture.md) whose tree lives in our
+#    fork, fixture-shaped already. Extracted WHOLESALE at an immutable
+#    pinned SHA — no feature-gated transform, no Cargo.toml
+#    generation: the tree IS the fixture. The fork ships its own
+#    tests/playtest.rs so fresh checkouts get a working test file,
+#    but the COMMITTED copy here is canonical and hand-maintainable:
+#    regeneration never lets the fork copy silently overwrite it.
+#    Divergence between the two fails LOUDLY (escape hatch below).
+# NOTE: the escape hatch deliberately avoids the `BEVY_PLAYTEST_`
+# prefix — game binaries reject unknown `BEVY_PLAYTEST_*` vars
+# (exit 3), so a leaked value must not poison test children.
+THETAWAVE_REV="3b21d2dcb88b647b21c8df2913310e7ddc02c31c"
+echo "Processing: thetawave (fork port @ ${THETAWAVE_REV})"
+target_dir="${FIXTURES_DIR}/thetawave"
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "${tmp_dir}"' EXIT
+curl -sfL --retry 3 --retry-delay 2 \
+    "https://codeload.github.com/mcanevet/thetawave/tar.gz/${THETAWAVE_REV}" \
+    -o "${tmp_dir}/thetawave.tar.gz" \
+    || die "could not fetch thetawave port ${THETAWAVE_REV} from the fork"
+# Preserve the canonical committed tests/playtest.rs across the tar
+# overlay (the fork tree contains a copy that extraction would
+# clobber it with).
+committed_test="${target_dir}/tests/playtest.rs"
+saved_test=""
+if [[ -f "${committed_test}" ]]; then
+    saved_test="${tmp_dir}/committed_playtest.rs"
+    cp "${committed_test}" "${saved_test}"
+fi
+mkdir -p "${target_dir}"
+tar -xzf "${tmp_dir}/thetawave.tar.gz" -C "${target_dir}" --strip-components=1
+# Loud verification: the fork tree must arrive intact and
+# fixture-shaped.
+[ -f "${target_dir}/LICENSE.upstream" ] \
+    || die "thetawave: LICENSE.upstream (MIT notice) missing from fork tree"
+[ -f "${target_dir}/Cargo.toml" ] \
+    || die "thetawave: Cargo.toml missing from fork tree"
+[ -f "${target_dir}/src/main.rs" ] \
+    || die "thetawave: game binary source missing from fork tree"
+grep -q 'name = "fixture_thetawave"' "${target_dir}/Cargo.toml" \
+    || die "thetawave: fixture package name missing from fork tree"
+grep -q 'bevy_playtest' "${target_dir}/Cargo.toml" \
+    || die "thetawave: playtest wiring missing from fork tree"
+[ -f "${target_dir}/tests/playtest.rs" ] \
+    || die "thetawave: tests/playtest.rs missing from fork tree"
+# Canonical-copy check: the committed tests/playtest.rs is the
+# hand-maintainable assertion file. If the fork copy diverges, restore
+# the committed copy and fail LOUDLY — a silent overwrite would
+# destroy hand-maintained assertions. Escape hatch:
+# FETCH_THETAWAVE_ALLOW_TEST_DIVERGENCE=1 keeps the committed
+# copy and continues (for experimentation only; CI never sets it).
+if [[ -n "${saved_test}" ]] && ! cmp -s "${saved_test}" "${committed_test}"; then
+    cp "${saved_test}" "${committed_test}"
+    if [[ "${FETCH_THETAWAVE_ALLOW_TEST_DIVERGENCE:-0}" == "1" ]]; then
+        echo "  WARNING: thetawave tests/playtest.rs diverges from the fork"
+        echo "  copy at ${THETAWAVE_REV}; keeping the committed copy."
+    else
+        die "thetawave: committed tests/playtest.rs diverges from the fork copy at ${THETAWAVE_REV}.
+Restore them to byte-identical (sync the fork branch, cut a new pinned
+SHA, re-pin THETAWAVE_REV here) — or set
+FETCH_THETAWAVE_ALLOW_TEST_DIVERGENCE=1 to proceed with the
+committed copy anyway."
+    fi
+fi
+echo "  Created: $target_dir/ (at pinned ${THETAWAVE_REV})"
+
+# 6. Create fixtures workspace. NOTE: `known_answer` (hand-authored
+#    planted-truth game) is committed but NOT seeded by the loops
+#    above — regeneration must preserve it or the workspace breaks.
+#    Everything else, thetawave included, is fetch-managed.
 cat > "${FIXTURES_DIR}/Cargo.toml" << 'WORKSPACE'
 [workspace]
 resolver = "2"
@@ -428,6 +497,7 @@ members = [
     "known_answer",
     "loading_screen",
     "mines",
+    "thetawave",
 ]
 
 [workspace.dependencies]
