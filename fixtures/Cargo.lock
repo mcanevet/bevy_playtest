@@ -449,12 +449,6 @@ checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
 
 [[package]]
 name = "base64"
-version = "0.22.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
-
-[[package]]
-name = "base64"
 version = "0.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
@@ -517,7 +511,7 @@ dependencies = [
  "downcast-rs 2.0.2",
  "either",
  "petgraph",
- "ron 0.12.2",
+ "ron 0.12.3",
  "serde",
  "smallvec",
  "thiserror 2.0.21",
@@ -614,7 +608,7 @@ dependencies = [
  "futures-lite",
  "futures-util",
  "js-sys",
- "ron 0.12.2",
+ "ron 0.12.3",
  "serde",
  "stackfuture",
  "thiserror 2.0.21",
@@ -759,7 +753,7 @@ dependencies = [
  "bevy_app",
  "bevy_asset",
  "bevy_reflect",
- "ron 0.12.2",
+ "ron 0.12.3",
  "serde",
  "thiserror 2.0.21",
 ]
@@ -2112,7 +2106,7 @@ dependencies = [
  "bevy_transform",
  "bevy_utils",
  "derive_more 2.1.1",
- "ron 0.12.2",
+ "ron 0.12.3",
  "serde",
  "thiserror 2.0.21",
  "uuid",
@@ -2984,7 +2978,7 @@ dependencies = [
  "bevy_playtest",
  "fixture_known_answer",
  "leafwing-input-manager",
- "ron 0.10.1",
+ "ron 0.12.3",
  "serde",
  "serde_json",
 ]
@@ -5565,25 +5559,11 @@ dependencies = [
 
 [[package]]
 name = "ron"
-version = "0.10.1"
+version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "beceb6f7bf81c73e73aeef6dd1356d9a1b2b4909e1f0fc3e59b034f9572d7b7f"
-dependencies = [
- "base64 0.22.1",
- "bitflags 2.13.2",
- "serde",
- "serde_derive",
- "unicode-ident",
-]
-
-[[package]]
-name = "ron"
-version = "0.12.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81116b9531d61eabc41aeb228e4b6b2435bcca3233b98cf3b3077d4e6e9debb3"
+checksum = "97b3fe97c18ff24299ea56f802c5693eb34266fb0bc8317f4e101debc8a3ceaf"
 dependencies = [
  "bitflags 2.13.2",
- "once_cell",
  "serde",
  "serde_derive",
  "typeid",
