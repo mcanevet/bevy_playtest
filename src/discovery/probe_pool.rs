@@ -14,6 +14,12 @@
 //!   variables — the takeover rejects unknown ones (strict env
 //!   contract; a leaked `REPLAY_PASS_B` variable would turn every run
 //!   into a pass-B child).
+//! - **Child cwd/HOME isolation**: every job's child runs in its OWN
+//!   throwaway directory (with `HOME` repointed at it) instead of
+//!   inheriting the parent's — `./`-relative writes (auto-saves,
+//!   logs, caches) land in the per-job dir, not the repo tree, and
+//!   never collide between sibling runs. Asset loading is unaffected
+//!   (bevy resolves its asset root from env/exe-dir, never cwd).
 //! - **Success = a report was written AND its trace extends PAST
 //!   the tap point.** Exit code is annotation (findings live in the
 //!   report; the discovery layer treats game findings and passes
@@ -291,6 +297,21 @@ impl ProbeWorkspace {
             Self::sanitize(scenario_name)
         ))
     }
+
+    /// Working directory this job's child runs in: a per-job
+    /// subdirectory of the workspace, created lazily by the spawn
+    /// path right before the child starts. Jobs must NOT share
+    /// one: two children racing `./save.json` in a shared cwd is
+    /// exactly the cross-run contamination the isolation exists
+    /// to prevent.
+    ///
+    /// RAII note: the subdirectory lives UNDER `self.dir`, so the
+    /// workspace's own drop-cleanup removes it with everything else;
+    /// a child killed by the watchdog mid-write may leave a file
+    /// behind inside, which the same cleanup swallows.
+    pub fn child_cwd_path(&self, job_index: usize) -> PathBuf {
+        self.dir.join(format!("{:04}_cwd", job_index))
+    }
 }
 
 impl Drop for ProbeWorkspace {
@@ -435,6 +456,29 @@ fn execute_job(
             }
         }
     }
+    // Child cwd/HOME isolation: a probe child used to inherit the
+    // parent's working directory, so a game writing anything
+    // `./`-relative (auto-saves, config, logs) scribbled into
+    // wherever `cargo test` happened to run — the repo tree in CI —
+    // and cross-contaminated sibling runs sharing that cwd. Give
+    // every job its own throwaway directory instead, and repoint
+    // HOME at it: config caches resolved through $HOME (e.g. the
+    // `directories` crates) belong to the throwaway run, not to
+    // the developer's real profile. The scenario/report/scan
+    // paths above are ABSOLUTE (workspace-rooted), so the parent
+    // keeps reading exactly what it staged regardless of the
+    // child's cwd.
+    //
+    // Asset loading is unaffected: bevy resolves its default asset
+    // root from `BEVY_ASSET_ROOT` / `CARGO_MANIFEST_DIR` (inherited
+    // env) or the executable's directory — never the process cwd
+    // (bevy_asset::io::file::get_base_path).
+    let child_cwd = workspace.child_cwd_path(job_index);
+    std::fs::create_dir_all(&child_cwd).map_err(|e| ProbeError::ScenarioSerialize {
+        scenario: name.clone(),
+        cause: format!("cannot create child cwd: {e}"),
+    })?;
+    cmd.current_dir(&child_cwd).env("HOME", &child_cwd);
     cmd.env(ENV_SCENARIO, &scenario_path)
         .env(ENV_REPORT, &report_path);
     if job.export_scan {
