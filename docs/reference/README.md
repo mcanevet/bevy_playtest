@@ -221,6 +221,13 @@ The takeover runner exits the game process with:
 fixture: hand-authored input surface, committed ground truth, and the
 measurement/mutation harnesses that grade discovery against it.
 
+## Thetawave fixture
+
+[`fixtures/thetawave/`](thetawave-fixture.md) — the real-world fixture:
+a ported third-party game (Theta Wave, MIT) proving the declared-tier
+discovery machinery against actual Leafwing usage, with an honest
+NOTICE covering attribution and stand-in assets.
+
 ## Compatibility
 
 Targets Bevy 0.20.

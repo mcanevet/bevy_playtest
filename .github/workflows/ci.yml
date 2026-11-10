@@ -26,7 +26,7 @@ jobs:
   # one cache restore. Contract coverage kept per-PR:
   #   - unit + fault-injection oracles (negative controls)
   #   - flagless `cargo test` UX pin (breakout)
-  #   - battery tier, all 8 fixtures (playtest feature, plain cargo test)
+  #   - battery tier, all 9 fixtures (playtest feature, plain cargo test)
   #   - release purity guard (zero bevy_playtest bytes in plain builds)
   #   - clippy -D warnings, fmt, rustdoc
   ci:
@@ -149,7 +149,7 @@ jobs:
       # builds; these binaries were already built above.
       - name: Battery tier (cargo test, all fixtures)
         run: |
-          timeout 480 cargo test --manifest-path fixtures/Cargo.toml --workspace --features playtest --test playtest -- --test-threads=1
+          timeout 600 cargo test --locked --manifest-path fixtures/Cargo.toml --workspace --features playtest --test playtest -- --test-threads=1
 
       # Release-purity guard: plain bin builds must NOT resolve
       # bevy_playtest. This is a cargo check + tree walk, not a rebuild.
