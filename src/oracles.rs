@@ -3,6 +3,11 @@
 //! Each oracle is a Bevy system reporting into the run's violations
 //! resource. The driver registers them; scenario configuration gates
 //! which families run (bounds/NaN run over all entities with a
+//! zero-annotation query, so they stay meaningful on games with no
+//! bevy_playtest-specific code). The other rule families — frozen-world
+//! (soft-lock), panic capture, and log findings — live in
+//! [`crate::driver`] / [`crate::sinks`]; see [`crate::rules`] for the
+//! full registry and each rule's meaning.
 
 use bevy_ecs::prelude::*;
 use bevy_transform::prelude::Transform;
