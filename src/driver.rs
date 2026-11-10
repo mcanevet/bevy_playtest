@@ -1,9 +1,10 @@
 //! In-process driver: runs a scenario against an already-built Bevy App.
 //!
-//! Panic/log hooks, single-threaded setup, chaos bot,
-//! synthetic_keyboard bot, frame-timing oracle, frozen_world stub.
-//! The full oracle suite (liveness, bounds, NaN, pass_through) ports
-//! incrementally.
+//! Panic/log hooks, single-threaded executor, chaos + synthetic
+//! keyboard/mouse bots, frame-timing oracle, frozen-world (soft-lock)
+//! oracle with an optional UI-liveness watcher (`ui-liveness`). The
+//! bounds/NaN transform oracles live in [`crate::oracles`]; the full
+//! rule-name registry in [`crate::rules`].
 
 use bevy_app::{App, PluginsState, Update};
 use bevy_ecs::prelude::*;

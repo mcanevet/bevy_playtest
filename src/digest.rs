@@ -1,62 +1,25 @@
 //! Broadened state digest for replay verification and input-surface discovery.
 //!
-//! # Design Overview
+//! [`compute_digest`] produces a per-frame `u64` fingerprint of the whole
+//! world: live entity count, archetype count, sorted Transform and
+//! UiTransform translations, and — via reflection, with engine and
+//! harness types excluded — every game resource's canonicalized value and
+//! per-component-type entity counts. Canonicalization is built for
+//! determinism: unordered collections fold through sub-hashers sorted
+//! numerically, floats hash bitwise (`to_bits()`, so distinct NaN payloads
+//! and `-0.0` vs `0.0` stay distinct), and every reflect kind carries a
+//! stream tag plus length prefixes so structurally different trees with
+//! overlapping byte content cannot collide. Equal worlds hash equal
+//! regardless of spawn/insertion order.
 //!
-//! This module provides a per-frame `state_digest(world) -> u64` that covers a BROAD set of
-//! signals to detect any change in the game state. Unlike the narrow fingerprint in `replay.rs`
-//! (which only sees Transform translations + choices), this digest can detect:
-//!
-//! - Entity count changes (spawns/despawns)
-//! - Archetype count changes (structural world modifications)
-//! - All Transform translations (preserved for backward compatibility)
-//! - All UiTransform translations (pure-UI games become visible)
-//! - Reflected resource values (game-defined resources only, excluding harness/engine)
-//! - Component type counts (entities per component type, via reflection)
-//!
-//! # Signals Covered
-//!
-//! | Signal | Why |
-//! |--------|-----|
-//! | Entity count | Spawns/despawns are fundamental state changes |
-//! | Archetype count | Structural changes (adding/removing component types) |
-//! | Transform translations | Existing fingerprint signal, preserved for compat |
-//! | UiTransform translations | Pure-UI games need visibility (menu focus, animations) |
-//! | Reflected resources | Game state stored in resources (score, health, flags) |
-//! | Component type counts | Adding/removing a marker component shifts a type count |
-//!
-//! # Determinism Policy
-//!
-//! - **Iteration order**: All queries are collected into `Vec`s then SORTED before hashing.
-//!   Archetype iteration order is stable within identical construction, but we sort anyway.
-//! - **HashMap replacement**: `BTreeMap` used where key sorting matters.
-//! - **Float hashing**: Uses `to_bits()` for `f32` and `f64` — BIT-EXACT representation.
-//!   This correctly handles:
-//!   - `NaN`: Different NaN payloads hash differently (by design — payload difference = state diff)
-//!   - `-0.0` vs `0.0`: Hash differently (IEEE 754 distinction; if game distinguishes them, digest should too)
-//!   - Infinity: Bit patterns hash consistently
-//!
-//! # Performance Strategy
-//!
-//! - **Zero-cost when unused**: Digest only runs when `StateDigestRecorder` resource is inserted (like `StateTrace` in bevy_swarm).
-//! - **Direct byte hashing**: No string allocations — hash bytes directly from `to_bits()`, `to_le_bytes()`.
-//! - **Single pass**: All signals gathered in one query iteration, hashed incrementally.
-//! - **Expected cost**: ~5-15µs per frame on typical worlds (<1000 entities); negligible vs 16ms budget.
-//!
-//! # Integration Path
-//!
-//! 1. **Backward compatible**: The new digest is opt-in via `StateDigestRecorder` resource. Existing `verify_replay`
-//!    continues using `replay::fingerprint_frame()` unless migrated.
-//! 2. **Migration path**: When ready, `replay::fingerprint_frame()` can be replaced with `compute_digest()`.
-//!    Tests will immediately become MORE SENSITIVE (good — they'll catch bugs previously invisible).
-//! 3. **Replay report**: Per-frame digests can optionally be serialized to reports when enabled.
-//!
-//! # Caveats
-//!
-//! - **Engine resources excluded**: `Time`, `Fixed timestep` resources contain wall-clock Instants — not deterministic.
-//!   Only non-bevy resources are digested.
-//! - **Harness resources excluded**: `RunState`, `ReplaySeries`, etc. are excluded to avoid harness-internal churn.
-//! - **Reflection requires registration**: Only reflected resources with `ReflectComponent` are visible.
-//! - **UiTransform feature-gated**: Requires `ui-liveness` feature to compile.
+//! Recording is opt-in: inserting [`StateDigestRecorder`] makes
+//! [`record_digest_system`] append one [`StateDigest`] per frame (plus
+//! expensive debug [`DigestSnapshot`]s behind `with_snapshots`).
+//! Compared to the narrow replay fingerprint (Transform translations +
+//! bot choices only), this digest additionally sees spawns/despawns,
+//! structural archetype changes, marker-component flips, and resource
+//! state — the coverage the probe pool's double-control determinism
+//! gate and the discovery divergence diffs consume.
 
 use bevy_ecs::prelude::*;
 use std::collections::BTreeMap;
@@ -418,8 +381,6 @@ fn collect_component_type_counts(world: &World) -> BTreeMap<String, usize> {
         id_to_path.insert(component_id, full_path);
     }
 
-    // Sum entity counts per component type across archetypes. Entities in an
-    // archetype all share its component set, so archetype.len() is exact.
     // Sum entity counts per component type across archetypes. Entities in an
     // archetype all share its component set, so archetype.len() is exact.
     for archetype in world.archetypes().iter() {
