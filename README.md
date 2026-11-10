@@ -292,4 +292,9 @@ auto-activation is lost).
 Games with known findings can pin them instead of failing — see
 [pinning in the reproduce-a-failure guide](docs/how-to/how-to-reproduce-a-failure.md).
 
+Headless CI caveat: takeover drops `WinitPlugin`, not `RenderPlugin` —
+camera-bearing games still need a GPU adapter, so stock GPU-less
+runners panic with `Unable to find a GPU!`. See
+[run playtests on a GPU-less CI host](docs/how-to/headless-ci-gpu.md).
+
 See the [docs](docs/README.md) for the full guides.
