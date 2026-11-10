@@ -20,7 +20,7 @@ only for test builds:
 
 ```toml
 [dependencies]
-bevy_playtest = { version = "0.4", optional = true }
+bevy_playtest = { version = "0.8", optional = true }
 
 [dev-dependencies]
 # Self-dependency: activates OUR OWN `playtest` feature only for
