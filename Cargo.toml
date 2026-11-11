@@ -148,6 +148,60 @@ name = "takeover_demo_cwd_write"
 path = "src/bin/takeover_demo_cwd_write.rs"
 required-features = ["takeover"]
 
+# Cwd/HOME-isolation child for the BATTERY's regression test: unlike
+# the pool (whose workspace survives long enough to inspect), the
+# battery's temp dir is RAII-removed before assertions run — so this
+# child SELF-CHECKS its cwd and HOME (exit 0 = isolated, 2/3 =
+# violation details on stderr) and the test asserts on the exit
+# code. See tests/battery.rs:
+# battery_child_runs_in_its_own_cwd_and_home.
+[[bin]]
+name = "takeover_demo_cwd_check"
+path = "src/bin/takeover_demo_cwd_check.rs"
+required-features = ["takeover"]
+
+# GPU-panic crash child for the battery's diagnosis regression:
+# prints bevy_render's exact GPU_NOT_FOUND_ERROR_MESSAGE (Linux arm,
+# with the URL suffix) and exits 101 with no report — reproducing a
+# GPU-less-host death WITHOUT a GPU-less host. See tests/battery.rs:
+# gpu_panic_gets_named_failure_with_remediation.
+[[bin]]
+name = "takeover_demo_gpu_panic"
+path = "src/bin/takeover_demo_gpu_panic.rs"
+required-features = ["takeover"]
+
+# Negative-control crash child for the battery's diagnosis
+# regression: a GENERIC panic (no GPU marker substring) must keep
+# the plain NoReport verdict — detection must never mask other
+# failures. See tests/battery.rs:
+# generic_panic_keeps_plain_no_report_failure.
+[[bin]]
+name = "takeover_demo_panic_generic"
+path = "src/bin/takeover_demo_panic_generic.rs"
+required-features = ["takeover"]
+
+# Grandchild-holding-pipe child for the battery's bounded-drain
+# regression, TIMEOUT path: spawns a grandchild that INHERITS its
+# stderr (the battery's tee pipe) and parks, then parks forever —
+# the watchdog kills the direct child, but the parked grandchild
+# keeps the pipe's write end open, so the tee never observes EOF.
+# The drain must detach after its grace window instead of joining
+# forever. See tests/battery.rs: bounded_drain_survives_a_held_pipe.
+[[bin]]
+name = "takeover_demo_stderr_grandchild"
+path = "src/bin/takeover_demo_stderr_grandchild.rs"
+required-features = ["takeover"]
+
+# Same shape as takeover_demo_stderr_grandchild, NORMAL path: the
+# direct child exits 101 promptly while the parked grandchild keeps
+# the tee pipe open — the exit-diagnosis verdict must still arrive
+# bounded. See tests/battery.rs:
+# held_pipe_does_not_block_exit_diagnosis.
+[[bin]]
+name = "takeover_demo_stderr_grandchild_exit"
+path = "src/bin/takeover_demo_stderr_grandchild_exit.rs"
+required-features = ["takeover"]
+
 [[bin]]
 name = "takeover_demo_raw_winit"
 path = "src/bin/takeover_demo_raw_winit.rs"

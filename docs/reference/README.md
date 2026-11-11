@@ -183,7 +183,12 @@ for `cargo test` integration:
 - `run_with_config(&BatteryConfig)` — explicit config:
   `BatteryConfig { binary, scenario, timeout_secs }`
 - `BatteryError` — infrastructure failures only: `Spawn`, `Timeout`,
-  `NoReport` (game exited before reporting), `ReportParse`
+  `NoReport` (game exited before reporting), `ReportParse`, and
+  `GpuMissing` (bevy_render found no GPU adapter — headless-CI
+  hosts without a software rasterizer; see
+  `docs/how-to/headless-ci-gpu.md`). The enum is
+  `#[non_exhaustive]`: new infrastructure failure modes may be
+  added in any release, so match with a catch-all arm
 
 ## Plugins
 

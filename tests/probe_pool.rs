@@ -646,6 +646,28 @@ fn probe_children_get_their_own_cwd_and_home() {
         "child's HOME-resolved write must land in the isolated per-job HOME"
     );
 
+    // Read-preservation: the per-job cwd's top level is a SYMLINK
+    // TREE into the parent's cwd (same treatment as the battery —
+    // see `crate::battery::populate_symlink_tree`), so raw
+    // `./`-relative reads keep resolving. `cargo test` runs from
+    // the crate root, so `./Cargo.toml` exists in the parent cwd
+    // and must be readable through the per-job dir; and the entry
+    // must be a SYMLINK (a copy would satisfy the read but blow
+    // the per-job dirs up to a full tree each, defeating the
+    // throwaway-cwd point).
+    assert!(
+        child_cwd.join("Cargo.toml").is_file(),
+        "read-isolation regression: ./Cargo.toml must resolve through the \
+         per-job symlink tree"
+    );
+    assert!(
+        child_cwd
+            .join("Cargo.toml")
+            .symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_symlink()),
+        "the per-job tree must SYMLINK into the parent cwd, not copy it"
+    );
+
     // Nothing leaked into the parent's working directory, and the
     // parent's cwd is untouched (the child's isolation is
     // one-directional).
