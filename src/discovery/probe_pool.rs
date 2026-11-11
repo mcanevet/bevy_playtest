@@ -18,8 +18,13 @@
 //!   throwaway directory (with `HOME` repointed at it) instead of
 //!   inheriting the parent's — `./`-relative writes (auto-saves,
 //!   logs, caches) land in the per-job dir, not the repo tree, and
-//!   never collide between sibling runs. Asset loading is unaffected
-//!   (bevy resolves its asset root from env/exe-dir, never cwd).
+//!   never collide between sibling runs. Raw `./`-relative READS
+//!   still resolve: the per-job dir's top level is a symlink tree
+//!   into the parent's cwd (the shared
+//!   `crate::battery::populate_symlink_tree` helper), so a game
+//!   reading `./assets/...` with plain `fs` calls sees the original
+//!   tree. Asset-server loading was never affected (bevy resolves
+//!   its asset root from env/exe-dir, never cwd).
 //! - **Success = a report was written AND its trace extends PAST
 //!   the tap point.** Exit code is annotation (findings live in the
 //!   report; the discovery layer treats game findings and passes
@@ -469,15 +474,23 @@ fn execute_job(
     // keeps reading exactly what it staged regardless of the
     // child's cwd.
     //
-    // Asset loading is unaffected: bevy resolves its default asset
-    // root from `BEVY_ASSET_ROOT` / `CARGO_MANIFEST_DIR` (inherited
-    // env) or the executable's directory — never the process cwd
-    // (bevy_asset::io::file::get_base_path).
+    // READS keep resolving too — the SAME symlink-tree treatment
+    // the battery gives its children
+    // (`crate::battery::populate_symlink_tree`, the shared helper
+    // behind this call): raw `./`-relative fs READS (a game reading
+    // `./assets/...` outside the asset server — real games do this)
+    // resolve through the symlink to the original tree. Asset
+    // SERVER loading was never affected to begin with (bevy
+    // resolves its asset root from `BEVY_ASSET_ROOT` /
+    // `CARGO_MANIFEST_DIR` — inherited env — or the executable's
+    // directory, never the process cwd;
+    // bevy_asset::io::file::get_base_path).
     let child_cwd = workspace.child_cwd_path(job_index);
     std::fs::create_dir_all(&child_cwd).map_err(|e| ProbeError::ScenarioSerialize {
         scenario: name.clone(),
         cause: format!("cannot create child cwd: {e}"),
     })?;
+    crate::battery::populate_symlink_tree(&child_cwd);
     cmd.current_dir(&child_cwd).env("HOME", &child_cwd);
     cmd.env(ENV_SCENARIO, &scenario_path)
         .env(ENV_REPORT, &report_path);
@@ -495,7 +508,9 @@ fn execute_job(
         // scan is best-effort and its failures are reported there,
         // so a user left with `scan: None` can actually see WHY.
         // (Other jobs null it — pool output stays clean when the
-        // matrix is large; the battery precedent inherits stdio.)
+        // matrix is large; the battery tees stderr instead —
+        // live-forwarded and buffered for death diagnosis, see
+        // `tee_child_stderr` in src/battery.rs.)
         cmd.stderr(std::process::Stdio::inherit());
     } else {
         cmd.stderr(std::process::Stdio::null());

@@ -51,6 +51,8 @@ use crate::discovery::flow;
 use crate::plugin::ENV_REPORT;
 use crate::plugin::ENV_SCENARIO;
 use crate::state::PlaytestReport;
+use std::io::{Read, Write};
+use std::sync::{Arc, Mutex};
 
 /// Scenario selector for [`run`]: the built-in default battery
 /// (zero-config battery run — chaos bot, all oracles, generous
@@ -63,10 +65,135 @@ pub use crate::plugin::BATTERY_LITERAL as BUILTIN_BATTERY;
 /// game must fail the test, not hang CI forever).
 const DEFAULT_TIMEOUT_SECS: u64 = 300;
 
+/// Stable sentence shared by BOTH arms of bevy_render's
+/// `GPU_NOT_FOUND_ERROR_MESSAGE` (bevy_render 0.20.1,
+/// src/renderer/mod.rs:159): the constant is cfg-split per platform —
+/// Linux appends a linux_dependencies.md URL, other platforms stop
+/// here — so only this common part is safe to match. Found in the
+/// child's stderr when `initialize_renderer`'s
+/// `selected_adapter.expect(...)` fires at startup: headless takeover
+/// drops the window, not the renderer, so a camera-bearing game
+/// panics on any host without a GPU adapter (stock CI runners).
+const GPU_PANIC_MARKER: &str =
+    "Unable to find a GPU! Make sure you have installed required drivers!";
+
+/// How much of the child's stderr to retain for failure diagnosis.
+/// The tail (not the head) is kept: the panic that explains a death
+/// is at the END of the output, after any startup log noise.
+const STDERR_TAIL_BYTES: usize = 64 * 1024;
+
+/// How long [`StderrTee::drain`] waits for the stderr tee to observe
+/// EOF after the child is gone before DETACHING it (dropping the
+/// receiver and letting the thread leak — the tail buffer lives
+/// behind an `Arc`, so a detached tee cannot dangle). EOF normally
+/// arrives within microseconds of child death; the only way it
+/// does not is a GRANDCHILD inheriting the stderr pipe (launcher
+/// shims, asset compilers, crash handlers — the same hazard
+/// [`kill_process`] documents), which would otherwise turn the
+/// watchdog's bounded timeout into a permanent join hang. If grace
+/// expires while stderr is still legitimately in flight, the
+/// detached snapshot loses whatever has not been copied yet: up to
+/// the pipe's OS capacity (typically 64 KiB) plus one in-flight
+/// chunk — a bounded evidence trade against an unbounded hang.
+const TEE_EOF_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Whether the buffered child stderr contains bevy_render's
+/// GPU-adapter panic. Lossy UTF-8 conversion is fine for substring
+/// presence, and stderr frames from panics are plain ASCII here.
+fn stderr_reports_gpu_panic(tail: &[u8]) -> bool {
+    String::from_utf8_lossy(tail).contains(GPU_PANIC_MARKER)
+}
+
+/// Tee the child's stderr: forward every chunk LIVE (the same
+/// content a child with inherited stderr would print, modulo
+/// interleaving position — chunks are emitted as they arrive, so
+/// ordering relative to the parent's own output can shift) while
+/// retaining a bounded tail for the failure path —
+/// a child that dies before writing a report gets DIAGNOSED (see
+/// [`BatteryError::GpuMissing`]) instead of leaving an opaque exit
+/// code. The thread exits at the child's stderr EOF, including
+/// after a watchdog kill, and signals EOF over the returned channel
+/// so [`StderrTee::drain`] can bound its wait (see `TEE_EOF_GRACE`).
+fn tee_child_stderr(stderr: std::process::ChildStderr) -> StderrTee {
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&buffer);
+    let (eof_tx, eof_rx) = std::sync::mpsc::channel::<()>();
+    let join = std::thread::spawn(move || {
+        let mut stderr = stderr;
+        let mut chunk = [0u8; 4096];
+        loop {
+            match stderr.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    // Live-forward first: visibility must not depend
+                    // on the child's eventual fate.
+                    let _ = std::io::stderr().write_all(&chunk[..n]);
+                    // Then retain the tail (poison-tolerant lock: a
+                    // panicking sibling must not lose the evidence).
+                    let mut tail = sink.lock().unwrap_or_else(|p| p.into_inner());
+                    tail.extend_from_slice(&chunk[..n]);
+                    let excess = tail.len().saturating_sub(STDERR_TAIL_BYTES);
+                    if excess > 0 {
+                        tail.drain(..excess);
+                    }
+                }
+            }
+        }
+        // Signal EOF even if nobody listens; the receiver may have
+        // been dropped (drained after a timeout) — that's fine.
+        let _ = eof_tx.send(());
+    });
+    StderrTee {
+        tail: buffer,
+        eof: eof_rx,
+        join: Some(join),
+    }
+}
+
+/// Running handle to a [`tee_child_stderr`] thread: the bounded-tail
+/// buffer (behind an `Arc`, shared with the thread) plus the EOF
+/// signal and join handle. DROPPING the handle detaches the thread
+/// — it finishes at child-stderr EOF or, if a grandchild inherited
+/// the pipe, leaks harmlessly (the `Arc` keeps the tail valid and
+/// the live-forwarding already happened).
+struct StderrTee {
+    tail: Arc<Mutex<Vec<u8>>>,
+    eof: std::sync::mpsc::Receiver<()>,
+    join: Option<std::thread::JoinHandle<()>>,
+}
+
+impl StderrTee {
+    /// Wait for the tee to observe EOF — BOUNDED by `TEE_EOF_GRACE`
+    /// — then return the retained tail. On grace expiry (a
+    /// grandchild holds the stderr pipe open past its parent's
+    /// death) the thread is DETACHED and leaked: the tail lives
+    /// behind the shared `Arc`, so the returned clone is still
+    /// whatever the tee managed to copy, and the run must conclude
+    /// with its verdict rather than hang on `join`.
+    fn drain(mut self) -> Vec<u8> {
+        if self.eof.recv_timeout(TEE_EOF_GRACE).is_ok() {
+            // EOF observed: the thread is about to return, so this
+            // join is a formality (never unbounded).
+            if let Some(join) = self.join.take() {
+                let _ = join.join();
+            }
+        }
+        // Else: grace expired — drop the JoinHandle and leak the
+        // thread. `Option::take` above leaves nothing to wait on.
+        self.tail.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+}
+
 /// Run one scenario against a game binary and return the parsed
 /// report. `scenario` is either a path to a scenario JSON file or the
-/// built-in literal [`BUILTIN_BATTERY`] (`"battery"`). The child
-/// inherits stdout/stderr (visible with `cargo test -- --nocapture`).
+/// built-in literal [`BUILTIN_BATTERY`] (`"battery"`). The child runs
+/// in its own throwaway directory with `HOME` repointed at it (see
+/// [`run_with_config`] — note this blinds `~`-resolved READS to the
+/// throwaway dir, a deliberate determinism gain), inherits stdout,
+/// and its stderr is TEED — forwarded live (visible with
+/// `cargo test -- --nocapture`, though interleaving position can
+/// shift) and buffered so the failure path can diagnose the child's
+/// death (see [`BatteryError::GpuMissing`]).
 pub fn run(binary: &str, scenario: &str) -> Result<PlaytestReport, BatteryError> {
     run_with_config(&BatteryConfig {
         binary: binary.to_string(),
@@ -95,7 +222,16 @@ pub struct BatteryConfig {
 /// Battery failure modes that are NOT game findings (infrastructure
 /// problems — the game crashed before reporting, timed out, etc.).
 /// Game findings surface through the report instead.
+///
+/// `#[non_exhaustive]`: new failure modes arrive as the harness grows
+/// (e.g. `GpuMissing`), and downstream match arms must not break —
+/// a caller matching exhaustively today should already carry a
+/// catch-all, but this makes that a guarantee instead of a hope.
+/// Note the interaction on 0.x: adding `#[non_exhaustive]` to an
+/// existing enum is itself breaking (hence it ships with the other
+/// breaking changes in the same release).
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum BatteryError {
     /// Spawning the game binary failed.
     Spawn(String),
@@ -104,6 +240,14 @@ pub enum BatteryError {
     /// No report was written (game died before the takeover could
     /// report — includes the exit code).
     NoReport { exit_code: Option<i32> },
+    /// No report was written AND the buffered child stderr matches
+    /// bevy_render's GPU-adapter panic (`initialize_renderer`'s
+    /// `GPU_NOT_FOUND_ERROR_MESSAGE`). Headless≠GPU-less:
+    /// `RenderPlugin` still initializes a real `wgpu` device, so a
+    /// camera-bearing game panics at startup on hosts without a GPU
+    /// adapter (stock CI runners). Named failure + remediation, not
+    /// a mystery crash.
+    GpuMissing { exit_code: Option<i32> },
     /// A report was written but could not be parsed.
     ReportParse(String),
     /// Opt-in input-surface discovery failed (probe matrix or setup).
@@ -126,6 +270,18 @@ impl std::fmt::Display for BatteryError {
                  it likely crashed before the takeover took over. Its stdout/stderr \
                  are captured by the failing test output (use --test-threads=1 if \
                  interleaving hides them)."
+            ),
+            Self::GpuMissing { exit_code } => write!(
+                f,
+                "game exited ({exit_code:?}) without writing a playtest report \
+                 because it could not find a GPU adapter: headless takeover drops \
+                 the window, not the renderer — RenderPlugin still initializes a \
+                 real wgpu device, which needs a GPU adapter even without a \
+                 display. Fix the CI HOST (not the game): install a software \
+                 Vulkan adapter — on Debian/Ubuntu, `sudo apt-get install -y \
+                 mesa-vulkan-drivers` (lavapipe); see \
+                 docs/how-to/headless-ci-gpu.md in the bevy_playtest repo for \
+                 the full recipe."
             ),
             Self::ReportParse(e) => write!(f, "playtest report is not valid JSON: {e}"),
             Self::Discovery(e) => {
@@ -181,6 +337,55 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
     }
     let _guard = TempDirGuard(dir.clone());
     let report_path = dir.join("report.json");
+    // Child cwd/HOME isolation (same treatment as the probe pool's
+    // `execute_job` — see #74): the child used to inherit the
+    // parent's working directory, so a game writing anything
+    // `./`-relative (auto-saves, config, logs) scribbled into
+    // wherever `cargo test` happened to run — the repo tree in CI.
+    // Run the child in its own throwaway subdirectory and repoint
+    // HOME at it: `./`-relative writes land there, and config caches
+    // resolved through $HOME belong to the throwaway run, not to the
+    // developer's real profile. `report_path` is ABSOLUTE
+    // (workspace-rooted), so the parent keeps reading exactly what
+    // it staged regardless of the child's cwd.
+    //
+    // The HOME repoint has a READ-side consequence too (a
+    // deliberate determinism win, shared with the pool): a game
+    // reading `~/.config/...` no longer sees the developer's
+    // profile — those reads now resolve against the throwaway
+    // dir and come up empty, exactly as they would on a fresh
+    // CI machine. (Windows note: only HOME is repointed, not
+    // USERPROFILE — the `directories`-style crates' degradations
+    // there are weaker than on Unix.)
+    //
+    // Reads still resolve: the throwaway dir's top level is a
+    // SYMLINK TREE — one symlink per entry of the original cwd
+    // (created BEFORE the child starts). A game reading
+    // `./assets/...` with raw `fs` calls (not the asset server —
+    // real games do this; the thetawave fixture's background
+    // picker is the shipped proof) resolves through the symlink to
+    // the original tree, exactly as it did before isolation. New
+    // `./`-relative file CREATION (auto-saves, logs, caches) has
+    // no symlink to follow and lands in the throwaway dir; the
+    // RAII guard removes it with everything else. Overwriting a
+    // tracked file still writes through to the real tree — the
+    // same exposure the inherited-cwd status quo had for those
+    // paths, never worse.
+    //
+    // Asset SERVER loading is doubly unaffected: bevy resolves its
+    // default asset root from `BEVY_ASSET_ROOT` / `CARGO_MANIFEST_DIR`
+    // (inherited env) or the executable's directory — never the
+    // process cwd (bevy_asset::io::file::get_base_path).
+    //
+    // Platform note: symlinks need no privileges on Unix; Windows
+    // may require developer mode for unprivileged symlink creation
+    // — if population fails there the run degrades to a plain
+    // throwaway cwd (reads fall back to creating their own files),
+    // never to a spawn failure.
+    let child_cwd = dir.join("child_cwd");
+    std::fs::create_dir_all(&child_cwd)
+        .map_err(|e| BatteryError::Spawn(format!("cannot create battery child cwd: {e}")))?;
+    populate_symlink_tree(&child_cwd);
 
     // Discovery-driven scenario injection (see
     // `discovery::flow::ENV_DISCOVER_INJECT`). Precedence rules:
@@ -243,9 +448,24 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
     cmd.env(ENV_SCENARIO, &scenario_arg)
         .env(ENV_REPORT, &report_path);
 
+    // cwd/HOME isolation (see the comment at `child_cwd` above) +
+    // the stderr tee: stdout still inherited, stderr PIPED so the
+    // tee thread can forward it live and buffer a copy for the
+    // failure path (see `tee_child_stderr`).
+    cmd.current_dir(&child_cwd).env("HOME", &child_cwd);
+    cmd.stdout(std::process::Stdio::inherit());
+    cmd.stderr(std::process::Stdio::piped());
+
     let mut child = cmd
         .spawn()
         .map_err(|e| BatteryError::Spawn(format!("{}: {e}", config.binary)))?;
+
+    let stderr_handle = child.stderr.take();
+    // Any EARLY return below (spawn-adjacent io failures surfaced by
+    // `?`) DROPS this handle, which DETACHES the tee thread mid-copy
+    // — deliberate and safe: the tail lives behind an `Arc` and the
+    // live-forwarding already happened (see `StderrTee`'s docs).
+    let stderr_tee = stderr_handle.map(tee_child_stderr);
 
     // Wall-clock watchdog: the run is deterministic and bounded by its
     // duration_s, but a game that blocks forever must fail the test,
@@ -258,6 +478,22 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
         else {
             if std::time::Instant::now() > deadline {
                 kill_process(&mut child);
+                // Deliberately NO tee drain here: the tail is
+                // unused on the timeout path (this early return
+                // discards it — see the comment at `break status`
+                // for why the normal path DOES drain), and waiting
+                // the grace window would stall the verdict by up
+                // to `TEE_EOF_GRACE` on a pipe a grandchild may
+                // hold forever. Dropping the tee DETACHES the
+                // thread: harmless (tail behind an `Arc`); the
+                // verdict stays within the watchdog's budget
+                // rather than paying any grace on top of it.
+                // (The regression test pins this only as "well
+                // under ten seconds" — the real guarantee is
+                // budget + poll quantum, but a drain-reinstating
+                // regression with an UNBOUNDED grace is caught:
+                // it blows the test's bound.)
+                drop(stderr_tee);
                 return Err(BatteryError::Timeout {
                     timeout_secs: config.timeout_secs,
                 });
@@ -267,9 +503,29 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
         };
         break status;
     };
+    // Child reaped: the tail drives the no-report diagnosis below,
+    // so here the tee IS drained — BOUNDED by `TEE_EOF_GRACE` (a
+    // grandchild may still hold the pipe's write end). On grace
+    // expiry the tee thread is leaked deliberately: the tail it
+    // copied so far is still returned. (The timeout path above
+    // drops the tee WITHOUT draining — its verdict does not need
+    // the tail, and waiting the grace there would only delay it.)
+    let stderr_tail = stderr_tee.map(StderrTee::drain);
 
-    let bytes = std::fs::read(&report_path).map_err(|_| BatteryError::NoReport {
-        exit_code: status.code(),
+    // GPU-panic diagnosis: a no-report death whose stderr matches
+    // bevy_render's adapter panic gets a NAMED failure with
+    // remediation guidance; any other death keeps the generic
+    // NoReport message — detection must never mask other failures.
+    let bytes = std::fs::read(&report_path).map_err(|_| {
+        if stderr_tail.as_deref().is_some_and(stderr_reports_gpu_panic) {
+            BatteryError::GpuMissing {
+                exit_code: status.code(),
+            }
+        } else {
+            BatteryError::NoReport {
+                exit_code: status.code(),
+            }
+        }
     })?;
     let mut report: PlaytestReport =
         serde_json::from_slice(&bytes).map_err(|e| BatteryError::ReportParse(e.to_string()))?;
@@ -309,6 +565,65 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
         report.annotate_frozen_world_with_surface();
     }
     Ok(report)
+}
+
+/// Populate a fresh directory with one symlink per top-level entry
+/// of the process's current working directory. Best-effort by
+/// design: a skipped entry degrades the child's read isolation for
+/// that path only, never the spawn; an ALREADY-symlinked source
+/// tree simply chains (symlink to symlink), and name collisions
+/// (hidden files etc.) are overwritten harmlessly inside the
+/// throwaway dir.
+///
+/// `pub(crate)` because the discovery probe pool
+/// (`crate::discovery::probe_pool`) isolates the SAME class of
+/// children — arbitrary game binaries reading `./`-relative assets
+/// with raw `fs` calls — and must not diverge from this proven
+/// tree (the same sharing precedent as [`kill_process`]).
+pub(crate) fn populate_symlink_tree(child_cwd: &std::path::Path) {
+    // Entries under the temp root get NO symlink: if the parent cwd
+    // itself lives inside `std::env::temp_dir()` (developer ran
+    // `cargo test` from a scratch checkout), the freshly-created
+    // throwaway dir sits there too, and a symlink pointing at (a
+    // parent of) the tree's own destination would loop the tree
+    // into itself.
+    let skip_prefix = std::fs::canonicalize(std::env::temp_dir()).ok();
+    let Ok(entries) = std::fs::read_dir(".") else {
+        return;
+    };
+    for entry in entries.flatten() {
+        // Canonicalize the target: `read_dir(".")` yields RELATIVE
+        // paths, and a symlink target resolves relative to the
+        // SYMLINK's directory (the child cwd), which would make it
+        // dangle. The absolute spelling never dangles.
+        let Ok(target) = std::fs::canonicalize(entry.path()) else {
+            continue;
+        };
+        if skip_prefix
+            .as_deref()
+            .is_some_and(|prefix| target.starts_with(prefix))
+        {
+            continue;
+        }
+        let link = child_cwd.join(entry.file_name());
+        #[cfg(unix)]
+        let _ = std::os::unix::fs::symlink(target, link);
+        #[cfg(windows)]
+        {
+            // Windows needs the RIGHT symlink flavor for the entry
+            // type: `symlink_dir` on a file (or vice versa) fails,
+            // which would silently blind HALF the tree. An entry
+            // whose type cannot be read (race) gets both flavors
+            // tried, best-effort like everything here.
+            let is_dir = entry.file_type().map(|t| t.is_dir());
+            let _ = match is_dir {
+                Some(true) => std::os::windows::fs::symlink_dir(&target, &link),
+                Some(false) => std::os::windows::fs::symlink_file(&target, &link),
+                None => std::os::windows::fs::symlink_dir(&target, &link)
+                    .or_else(|_| std::os::windows::fs::symlink_file(&target, &link)),
+            };
+        }
+    }
 }
 
 /// Kill a hung child and reap it (avoid a zombie and — on Windows —

@@ -8,6 +8,13 @@
 //! land in that per-job directory, not in the parent's cwd or the
 //! developer's real home.
 //!
+//! Sibling of the battery's `takeover_demo_cwd_check` (same
+//! isolation contract, opposite observation strategy: here the
+//! pool's workspace survives the run, so the TEST inspects the
+//! directory; the battery's temp dir is RAII-removed first, so that
+//! sibling SELF-CHECKS and relays its verdict through the exit
+//! code).
+//!
 //! Deliberately NOT an App run (same rationale as
 //! `takeover_demo_noop`): the test observes WHERE the child writes,
 //! not what it runs — the takeover/report path is irrelevant, and
