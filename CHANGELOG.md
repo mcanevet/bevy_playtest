@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/mcanevet/bevy_playtest/compare/v0.7.0...v0.8.0) - 2026-11-12
+
+### Added
+
+- *(discovery)* load-time capability census and structural contract suggestions
+- *(fixtures)* port thetawave to bevy 0.20 as real-world Leafwing fixture
+- *(discovery)* Leafwing reader, intent-tap, and declared-vs-measured reconciliation
+- *(discovery)* tier-0 discover sweep, draft artifact, and measured surface
+- *(fixtures)* known-answer planted-truth fixture and measurement harness
+- *(discovery)* SurfaceEntry IR, provenance grades, and finding vocabulary
+
+### Fixed
+
+- [**breaking**] isolate battery child cwd/HOME and name GPU-adapter panics
+- *(fixtures)* refresh Cargo.lock for ron 0.12.3 bump
+- *(discovery)* isolate probe-pool child cwd and HOME
+
+### Other
+
+- add headless-CI GPU how-to
+- *(src)* repair doc-debt trio
+- bump stale bevy_playtest version pins 0.4 -> 0.8 in quick-start snippets
+
 ## [0.7.0](https://github.com/mcanevet/bevy_playtest/compare/v0.6.0...v0.7.0) - 2026-11-06
 
 ### Added
