@@ -439,7 +439,7 @@ pub struct DiscoveredSurface {
     /// populated by [`crate::discovery::flow::discover`] when the
     /// probe children's reader found declared bindings. PURELY
     /// ADDITIVE — a REPORTED section, never an applied one: the
-    /// frozen D1-c fields above (`entries`, `findings`) carry the
+    /// frozen D1-c fields above (`entries`, `findings`) are the
     /// sweep's own commitments, and `retracted_residue` in
     /// particular is left for consumers to apply (the sweep draft
     /// deliberately keeps its findings ↔ live-inputs bijection).
@@ -449,6 +449,18 @@ pub struct DiscoveredSurface {
     #[cfg(feature = "lw-reader")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lw: Option<crate::discovery::lw::ReconciledLw>,
+    /// Authoring-time contract suggestions (work item 2:
+    /// [`crate::discovery::suggestions`]) — writer/reader lists per
+    /// game-owned resource, a candidate-invariant menu for written
+    /// resources, dead-message-channel candidates. PURELY ADDITIVE
+    /// DRAFT DATA: every row is machine-proposed with its derivation
+    /// attached, never a finding, never graded, never applied by the
+    /// harness. Promoted from the first control run's static scan by
+    /// [`crate::discovery::flow::discover`]. `#[serde(default)]`:
+    /// suggestion-less caches and old artifacts deserialize to
+    /// `None`. Serialized only when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggestions: Option<crate::discovery::suggestions::ContractSuggestions>,
 }
 
 impl DiscoveredSurface {

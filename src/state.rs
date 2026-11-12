@@ -163,6 +163,16 @@ pub struct PlaytestReport {
     #[cfg(feature = "lw-reader")]
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub lw_tap_stats: Vec<crate::discovery::lw::LwTapStats>,
+    /// Load-time capability census rows captured during
+    /// `run_scenario` startup, before bot/oracle registration
+    /// (present whenever
+    /// [`crate::driver::run_scenario`] executed). Additive
+    /// default-`None` field: absent on crash stubs and pre-field
+    /// reports; older reports without the field deserialize as
+    /// `None`, so consumers must treat absence as "no census",
+    /// never "empty census".
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub capability_census: Option<crate::discovery::census::CapabilityCensus>,
 }
 
 impl PlaytestReport {
@@ -192,6 +202,9 @@ impl PlaytestReport {
             lw_declared: vec![],
             #[cfg(feature = "lw-reader")]
             lw_tap_stats: vec![],
+            // Crash stub: the run never reached the census attach
+            // point, so no census exists.
+            capability_census: None,
         }
     }
 

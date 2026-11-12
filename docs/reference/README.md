@@ -233,6 +233,14 @@ a ported third-party game (Theta Wave, MIT) proving the declared-tier
 discovery machinery against actual Leafwing usage, with an honest
 NOTICE covering attribution and stand-in assets.
 
+## Deterministic boot
+
+[deterministic-boot.md](deterministic-boot.md) — the "why + how to
+fix" target for `replay_divergence` and `Statistical`-surface
+messages: the read-your-seed-from-the-environment pattern, what
+unseeded game RNG does to confidence, and the degradation classes
+(persisted external state, network sockets) as reported categories.
+
 ## Compatibility
 
 Targets Bevy 0.20.

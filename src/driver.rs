@@ -1012,6 +1012,33 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         let _ = crate::discovery::static_scan::capture_static_scan(app);
     }
 
+    // Load-time capability census (default-on, milliseconds-cheap,
+    // in-process). MUST run BELOW the scan-capture block above, not
+    // before it: the census force-initializes schedules, and
+    // `Schedule::initialize` BUILDS a changed graph, which moves
+    // run conditions out of `schedule.graph()` and into executor
+    // storage (`pub(super)` in bevy_ecs 0.20.1) — a census that ran
+    // first would leave BOTH condition harvests inside the capture
+    // (`condition_hidden_classes`, `collect_condition_blindness`)
+    // staring at empty condition lists in every scan-exporting run.
+    // After the capture it is safe: the capture has already built
+    // every schedule that built successfully, so the census's own
+    // `initialize` calls are no-op rebuilds for those; schedules
+    // whose capture-time build FAILED keep a changed graph, and
+    // the census retries them, pushing an honest failure note. It still runs before bot/oracle registration
+    // below, and the input-signal seeding between the old and new
+    // positions cannot inflate counts: every seeded type
+    // (`KeyboardInput`, `ButtonInput<..>`, `Time`, ...) lives under
+    // an engine `bevy_*` path the census's ownership filter
+    // already excludes. Structurally neutral (pinned in
+    // tests/census.rs); the one-line summary goes to stderr, full
+    // rows ride in the report artifact.
+    let capability_census = {
+        let census = crate::discovery::census::run_capability_census(app);
+        eprintln!("{}", census.summary_line());
+        census
+    };
+
     // Register bot + oracle systems once. The keyboard modifier state
     // is RESET each run so a previous run's held Shift cannot leak
     // into a fresh scenario's logical-key case mapping.
@@ -1303,6 +1330,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             s.dedup();
             s
         },
+        capability_census: Some(capability_census),
     })
 }
 
