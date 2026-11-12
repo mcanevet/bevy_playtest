@@ -288,4 +288,158 @@ mod in_process {
         let parked = take_captured_scan().expect("capture must park the scan");
         assert_eq!(parked, scan);
     }
+
+    /// PRODUCTION-COMPOSITION guard: the census and the scan
+    /// capture must coexist in one `run_scenario` process without
+    /// either blinding the other. The census force-initializes
+    /// schedules, and `Schedule::initialize` BUILDS a changed graph
+    /// — which moves run conditions out of `schedule.graph()` into
+    /// executor storage (`pub(super)` in bevy_ecs 0.20.1). When the
+    /// census ran ABOVE the capture block, both condition harvests
+    /// (`condition_hidden_classes` and
+    /// `collect_condition_blindness`) read EMPTY condition lists in
+    /// every scan-exporting run: a channel whose only consumer is a
+    /// system-set-level `run_if` was flagged dead with
+    /// `complete=true`, and the scan's run-condition blindness note
+    /// vanished. This test replays that composition through the
+    /// real `run_scenario` path — RED on the unfixed ordering,
+    /// green on capture-before-census.
+    #[test]
+    fn census_running_first_must_not_poison_condition_harvests() {
+        use bevy_ecs::message::{Message, MessageWriter};
+        use bevy_ecs::prelude::{IntoScheduleConfigs, Res, ResMut, Resource, SystemSet};
+        use bevy_playtest::discovery::suggestions::SuggestionKind;
+
+        #[derive(Message)]
+        struct SetGatedMessage;
+
+        #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
+        struct GatedSet;
+
+        // A run condition READING the channel, attached to the SET:
+        // the exact shape the poisoned harvest would miss.
+        fn set_condition_reads_channel(
+            msgs: Res<bevy_ecs::message::Messages<SetGatedMessage>>,
+        ) -> bool {
+            !msgs.is_empty()
+        }
+
+        // A member of the gated set (the set condition must apply to
+        // member systems, so at least one member must exist).
+        #[derive(Resource, Default)]
+        struct Marker {
+            touched: u32,
+        }
+
+        // A named member system of the gated set: its own body
+        // touches nothing the harvest cares about — the set
+        // condition is the only channel consumer to find.
+        fn gated_member(mut marker: ResMut<Marker>) {
+            marker.touched += 1;
+        }
+
+        let _slot = common::run_slot();
+        reset_scan_state();
+        request_scan_export();
+        let mut app = App::new();
+        app.add_message::<SetGatedMessage>()
+            .init_resource::<Marker>()
+            .add_systems(
+                bevy::app::Update,
+                |mut msgs: MessageWriter<SetGatedMessage>| {
+                    msgs.write(SetGatedMessage);
+                },
+            )
+            .add_systems(bevy::app::Update, gated_member.in_set(GatedSet))
+            .configure_sets(
+                bevy::app::Update,
+                GatedSet.run_if(set_condition_reads_channel),
+            );
+        let scenario = short_chaos_scenario();
+        run_scenario(&mut app, &scenario).expect("run completes");
+        clear_scan_export();
+        let scan = take_captured_scan().expect("captured scan must exist");
+
+        // The suggestions section must have seen the set condition.
+        let suggestions = scan
+            .suggestions
+            .expect("the capture always collects the suggestions section");
+        // `Suggestion.target` carries the FULL type path (module
+        // chain + type name), so compare by suffix — an equality
+        // check against the bare type name can never match and
+        // would leave this row-half of the regression pin inert.
+        assert!(
+            !suggestions
+                .rows
+                .iter()
+                .any(|r| r.kind == SuggestionKind::DeadMessageChannel
+                    && r.target.ends_with("::SetGatedMessage")),
+            "a set-condition-held read means the channel is consumed — \
+             the census poisoned the harvest (empty condition lists): {:?}",
+            suggestions.rows
+        );
+
+        // The scan-side harvest must survive the census too: the
+        // driver-built schedules must still report the
+        // run-condition blindness class (belt) and the suggestions
+        // must never claim completeness on a blinded walk.
+        assert!(
+            suggestions
+                .notes
+                .iter()
+                .any(|n| n.contains("run condition")),
+            "the demotion is explained, not silent: {:?}",
+            suggestions.notes
+        );
+    }
+
+    /// DRIVER-LEVEL census pin (composition the pure-module tests
+    /// cannot see): after a real `run_scenario`, the report must
+    /// carry the census (`Some`, never dropped on the floor), and
+    /// the `game_systems` count must be EXACT for the game — the
+    /// harness registers nine of its own bot/oracle systems into
+    /// `Update` AFTER the census point, plus the engine's
+    /// `run_main`/`message_update_system` drivers; none may appear
+    /// in the count. An exact-match assertion is the strongest pin:
+    /// any of (a) the census drifting below bot/oracle
+    /// registration, (b) the ownership filter weakening so
+    /// `bevy_playtest`-pathed systems count as game, (c) a plain
+    /// counting regression — trips it. (Precise today by path:
+    /// harness systems live under `bevy_playtest::`, which the
+    /// `bevy_` engine prefix already excludes — but this test is
+    /// what makes that ACCIDENT durable as design.)
+    #[test]
+    fn report_carries_a_census_that_counts_only_game_systems() {
+        use bevy_playtest::discovery::census::CapabilityKind;
+
+        let _slot = common::run_slot();
+        reset_scan_state();
+        let mut app = keyboard_only_app();
+        let scenario = short_chaos_scenario();
+        let report = run_scenario(&mut app, &scenario).expect("run completes");
+
+        let census = report
+            .capability_census
+            .as_ref()
+            .expect("run_scenario must attach the census to every report");
+        assert!(
+            census.rows().len() == 5,
+            "the census must carry all five capability rows, got {:?}",
+            census.rows()
+        );
+
+        // keyboard_only_app registers exactly three game systems
+        // (two in Update, one in Startup); the census must agree
+        // to the digit — bot systems, oracles and engine drivers
+        // excluded.
+        let row = census
+            .row(CapabilityKind::GameSystems)
+            .expect("the GameSystems row must exist");
+        assert_eq!(
+            row.count, 3,
+            "game_systems must count exactly the game's scheduled systems: \
+             harness bots/oracles registered after the census point and \
+             engine drivers must be excluded: {census:#?}"
+        );
+    }
 }

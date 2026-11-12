@@ -142,6 +142,16 @@ pub struct StaticScanResult {
     /// old sidecars never license pruning).
     #[serde(default)]
     pub complete: bool,
+    /// Authoring-time contract suggestions (writer/reader lists,
+    /// candidate invariant menu, dead-message-channel candidates),
+    /// collected in the SAME capture pass as the scan — see
+    /// [`super::suggestions`]. Purely additive annotation data:
+    /// never a gating signal, never findings. Serde-defaulted and
+    /// skipped when absent so pre-suggestions sidecars deserialize
+    /// as `None` (fail-open) and reports stay minimal when discovery
+    /// did not run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggestions: Option<super::suggestions::ContractSuggestions>,
 }
 
 impl StaticScanResult {
@@ -793,6 +803,11 @@ fn capture_scan_without_parking(app: &mut App) -> StaticScanResult {
     if app.world().get_resource::<Schedules>().is_none() {
         capture_blind_notes.push("no Schedules resource found at capture time".to_owned());
     }
+    // Condition-held access for the contract suggestions: harvested
+    // in the SAME pre-`initialize` window as the census above (see
+    // [`super::suggestions::collect_condition_blindness`]); merged
+    // across every schedule below.
+    let mut condition_blindness = super::suggestions::ConditionBlindness::default();
     for label in &labels {
         // Temporary ownership without touching the resource entity:
         // the Schedules resource stays in the world (minus this one
@@ -821,6 +836,11 @@ fn capture_scan_without_parking(app: &mut App) -> StaticScanResult {
                 classes.join(", ")
             ));
         }
+        // Sibling census, same window: fold this schedule's
+        // condition access into the suggestions' blindness set.
+        let cb = super::suggestions::collect_condition_blindness(&mut schedule, app.world_mut());
+        condition_blindness.touched.extend(cb.touched);
+        condition_blindness.unbounded |= cb.unbounded;
         if let Err(err) = schedule.initialize(app.world_mut()) {
             // Refuse completeness rather than lie: an unbuildable
             // schedule hides its systems' reads, so the scan may
@@ -837,7 +857,52 @@ fn capture_scan_without_parking(app: &mut App) -> StaticScanResult {
         }
     }
     let raw = static_device_readers(app);
-    merged_from(capture_blind_notes, raw)
+    let mut scan = merged_from(capture_blind_notes, raw);
+    // CONTRACT SUGGESTIONS (work item 2): collected in the same
+    // capture, riding the same sidecar via the serde-defaulted
+    // `suggestions` field. Runs only inside the env-gated capture —
+    // flagless runs never pay for it.
+    //
+    // Completeness asymmetry with the SCAN (deliberate): the scan's
+    // `complete=false` refuses input PRUNING — an automated gate —
+    // so any blindness withholds, including the always-present
+    // pre-update runtime-growth caveat of a takeover capture. A
+    // dead-channel SUGGESTION is weaker epistemically: a
+    // machine-proposed candidate a human confirms before any alarm
+    // exists, so withholding it on the runtime-growth caveat would
+    // make the candidate permanently unfireable (takeover captures
+    // always precede the first update) and gut work item 2's
+    // dead-channel bullet. Instead that caveat rides as a NOTE, and
+    // only blindness the walk cannot see itself — observers (param
+    // access is private in 0.20) — flips completeness here. The
+    // structural blockers (uninitialized schedules, exclusive /
+    // read-all systems, masked names, condition-held reads) are
+    // detected by the walk itself.
+    {
+        let mut suggestions =
+            super::suggestions::collect_contract_suggestions(app, &condition_blindness);
+        if world_has_observers(app.world()) {
+            suggestions.complete = false;
+            suggestions.notes.push(
+                "observer detected: hidden message consumers cannot be ruled \
+                 out (observer closures may read any channel; bevy 0.20 \
+                 exposes no observer param access)"
+                    .to_owned(),
+            );
+        }
+        if app.world().last_change_tick().get() == 0 {
+            suggestions.notes.push(
+                "captured before the world's first update: systems or \
+                 observers registered at runtime (from inside a running \
+                 system) are invisible — dead-channel candidates describe \
+                 the boot-time schedule graph only, confirm before wiring \
+                 an alarm"
+                    .to_owned(),
+            );
+        }
+        scan.suggestions = Some(suggestions);
+    }
+    scan
 }
 
 /// Fold capture-time blindness notes into the post-capture scan's

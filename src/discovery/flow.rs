@@ -380,6 +380,13 @@ pub fn discover(config: &DiscoveryConfig) -> Result<DiscoveryOutcome, DiscoveryE
     let mut surface = surface;
     surface.build_profile = promoted;
 
+    // Work item 2: promote the contract suggestions the
+    // scan-exporting first control run captured onto the surface
+    // (the scan piggybacks the same sidecar as `readers`). Absent
+    // scan → `None`, honestly: the section describes what a
+    // structural walk SAW, never what absence would imply.
+    surface.suggestions = scan.as_ref().and_then(|scan| scan.suggestions.clone());
+
     // D1-d wiring: aggregate the Leafwing declared-tier evidence the
     // child runs recorded (every child spawns the game's `InputMap`s;
     // each child's tap saw only ITS scenario's presses) into one
@@ -991,6 +998,7 @@ mod tests {
             readers: vec![(crate::discovery::static_scan::DeviceClass::Keyboard, 2)],
             notes: vec!["at least one schedule was not initialized at scan time".to_string()],
             complete: false,
+            ..Default::default()
         };
         let surface = aggregate(DEFAULT_CONTROL_KEY, &one_point_matrix(), Some(&scan), None);
         assert_eq!(

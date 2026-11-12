@@ -22,5 +22,7 @@ Two constraints:
 On divergence, the report fails with `replay_divergence` and the first
 frame where the two passes disagreed — the signature of hidden
 nondeterminism (unseeded game RNG, wall-clock reads, iteration-order
-dependencies).
+dependencies). The
+[deterministic boot reference](../reference/deterministic-boot.md)
+explains the usual causes and the game-side fixes.
 

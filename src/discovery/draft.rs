@@ -194,6 +194,15 @@ pub struct DraftOutcome {
     #[cfg(feature = "lw-reader")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lw: Option<super::lw::ReconciledLw>,
+    /// Authoring-time contract suggestions (report-only copy of
+    /// [`super::surface::DiscoveredSurface::suggestions`]):
+    /// writer/reader lists per game-owned resource, the
+    /// candidate-invariant menu, dead-message-channel candidates —
+    /// every row machine-proposed with its derivation attached, NOT
+    /// findings, NOT graded. `#[serde(default)]`: old artifacts
+    /// deserialize cleanly; absent section = none were captured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggestions: Option<super::suggestions::ContractSuggestions>,
 }
 
 impl DraftOutcome {
@@ -389,6 +398,7 @@ impl DraftOutcome {
             notes,
             #[cfg(feature = "lw-reader")]
             lw: surface.lw.clone(),
+            suggestions: surface.suggestions.clone(),
         }
     }
 

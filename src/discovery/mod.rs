@@ -29,6 +29,7 @@
 //! to find when the game itself uses Leafwing.
 
 pub mod cache;
+pub mod census;
 pub mod diff;
 #[cfg(feature = "takeover")]
 pub mod draft;
@@ -42,4 +43,5 @@ pub mod probe_pool;
 pub mod probe_scenarios;
 pub mod provenance;
 pub mod static_scan;
+pub mod suggestions;
 pub mod surface;
