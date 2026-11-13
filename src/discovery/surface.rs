@@ -373,10 +373,47 @@ pub struct DiscoveryFinding {
     pub detail: String,
 }
 
+/// One mouse grid-cell finding (Phase 1 mouse grammar): a scripted
+/// left click at this cell's center, probed at the readiness point
+/// and diffed against the mouse control run (a click at the plan's
+/// control position). Coordinates are NORMALIZED window space
+/// (0.0..=1.0, cell center), so findings stay comparable across
+/// window sizes and grid resolutions.
+///
+/// Confidence vocabulary reuses [`KeyConfidence`]: `Exact` =
+/// observed divergence vs the mouse control; `Unclassified` =
+/// vacuous or coverage-untrusted verdict (the control-position cell,
+/// or a probe/control pair whose frames stopped short of the
+/// expected span); `Inferred` is never assigned here (group
+/// completion is keyboard-only).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MouseCellFinding {
+    /// Cell identifier `r{row}c{col}` (0-based; schema-safe, matches
+    /// the probe scenario names).
+    pub id: String,
+    /// Grid row (0-based, top to bottom).
+    pub row: u32,
+    /// Grid column (0-based, left to right).
+    pub col: u32,
+    /// Normalized window x of the cell center (0.0..=1.0).
+    pub norm_x: f32,
+    /// Normalized window y of the cell center (0.0..=1.0).
+    pub norm_y: f32,
+    /// Observed effect (first divergence vs the mouse control
+    /// trace), or `None` if the probe matched the control.
+    pub effect: Option<Effect>,
+    /// How this cell's verdict was earned (see the type docs).
+    pub confidence: KeyConfidence,
+    /// Derivation record: the differential probe sweep that pressed
+    /// this cell's center click (`probe_verified`; no new grade
+    /// variants — the roadmap §6 vocabulary is frozen).
+    pub provenance: ProvenanceGrade,
+}
+
 /// The discovered input surface of one game (per
 /// `docs/explanation/input-surface-discovery.md`, Report
 /// Integration section).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct DiscoveredSurface {
     /// Keyboard keys probed (all candidates; `effect: None` = probed
     /// but inert at the probed points). Group-completed siblings
@@ -461,6 +498,16 @@ pub struct DiscoveredSurface {
     /// `None`. Serialized only when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suggestions: Option<crate::discovery::suggestions::ContractSuggestions>,
+    /// Mouse grid-cell findings (Phase 1 mouse grammar): one row per
+    /// probed cell of the plan's bounded grid, in row-major order —
+    /// the mouse analogue of `keys`. ADDITIVE and default-empty:
+    /// D0/D1-era surfaces and keyboard-only plans (`0 × 0` grid)
+    /// leave it absent on the wire, and old artifacts deserialize
+    /// unchanged. Serialized with provenance; never pruned on weak
+    /// evidence (fail-open: a cell with no verdict is reported as
+    /// `Unclassified`, never dropped).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mouse_cells: Vec<MouseCellFinding>,
 }
 
 impl DiscoveredSurface {
@@ -1428,7 +1475,56 @@ mod tests {
         let back: DiscoveredSurface = serde_json::from_str(old_doc).unwrap();
         assert!(back.entries.is_empty());
         assert!(back.findings.is_empty());
+        assert!(back.mouse_cells.is_empty());
         assert_eq!(back.probed_at, vec![60]);
+    }
+
+    #[test]
+    fn empty_mouse_cells_skip_serialization_and_old_surfaces_stay_old() {
+        // Same back-compat contract for the mouse grid (additive
+        // field): a keyboard-only surface (or a `0 × 0` plan)
+        // serializes with NO `mouse_cells` key — byte-level old
+        // artifacts stay byte-level identical — and a pre-mouse
+        // JSON document deserializes with an empty grid.
+        let legacy = sample_surface();
+        let json = serde_json::to_string(&legacy).unwrap();
+        assert!(!json.contains("\"mouse_cells\""), "{json}");
+        let old_doc = r#"{
+            "keys": [],
+            "mouse_buttons": [],
+            "mouse_motion": null,
+            "wheel": null,
+            "gamepad_buttons": [],
+            "gamepad_axes": [],
+            "probed_at": [60],
+            "readers": [["keyboard", 1]],
+            "key_confidence": [],
+            "confidence": "exact",
+            "pruned_devices": [],
+            "notes": []
+        }"#;
+        let back: DiscoveredSurface = serde_json::from_str(old_doc).unwrap();
+        assert!(back.mouse_cells.is_empty());
+    }
+
+    #[test]
+    fn populated_mouse_cells_round_trip_on_the_surface() {
+        let mut s = sample_surface();
+        s.mouse_cells = vec![MouseCellFinding {
+            id: "r2c3".to_string(),
+            row: 2,
+            col: 3,
+            norm_x: 0.7,
+            norm_y: 0.625,
+            effect: Some(effect(1)),
+            confidence: KeyConfidence::Exact,
+            provenance: ProvenanceGrade::ProbeVerified,
+        }];
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"mouse_cells\""), "{json}");
+        let back: DiscoveredSurface = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.mouse_cells, s.mouse_cells);
+        assert_eq!(back, s);
     }
 
     #[test]

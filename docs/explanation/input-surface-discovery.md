@@ -158,12 +158,15 @@ into. Semantics:
   recreates the declared-surface hole injection exists to close).
   Sorted and deduplicated — the list becomes a scenario file
   verbatim.
-- **Mouse stays default.** The MVP probe matrix is keyboard-only,
-  so there is no discovered mouse surface; an explicitly empty
-  mouse list would DISABLE mouse chaos, which discovery never
-  licensed. The injected scenario keeps the default buttons.
+- **Mouse buttons stay default.** Phase 1 discovers a bounded grid
+  of click POSITIONS (`mouse_cells`, below) — not mouse BUTTONS or
+  motion. The injected scenario still keeps the default buttons and
+  default motion: an explicitly empty mouse list would DISABLE mouse
+  chaos, which discovery never licensed. (Grid cells feed the draft
+  lens and the report's `mouse_cells` section, not the chaos bot's
+  device surface — the only chaos-listable inputs remain keys.)
 - **Runs discovery exactly once.** The parent discovers BEFORE
-  the child (cache-first, ~40s cold at pool=8), writes
+  the child (cache-first, ~55s cold at pool=8), writes
   `scenario.injected.json` (the battery literal plus
   `bot.raw_surface.keys`) into the run's temp dir, and drives the
   child with that path. The post-run annotation step reuses the
@@ -266,10 +269,11 @@ Per the prior-likelihood set (as shipped in
 digits 0-9, navigation cluster, modifiers, and common action
 letters E/F/R):
 - **Keys:** WASD, arrows, digits 0-9, Space, Enter, Escape, Tab, Backspace, Shift/Ctrl/Alt, E/F/R (Q is the default control key — a probe of the control against itself is structurally unclassifiable, so it is excluded from candidates; a bespoke matrix probing it gets an `Unclassified` finding, never a trusted negative)
-- **Mouse buttons:** Left, Right, Middle
-- **Mouse motion:** delta (10.0, 5.0)
-- **Wheel:** dy = 1.0
-- **Gamepad:** face buttons (South/East/North/West), DPad, Start/Select, axes (LeftStickX/Y)
+- **Mouse positions (Phase 1):** the bounded grid of cell centers (default 5 × 4, `0 × 0` disabled) — see the Mouse Grid Probing section
+- **Mouse buttons:** Left, Right, Middle (deferred — Phase 1 probes positions only)
+- **Mouse motion:** delta (10.0, 5.0) (deferred)
+- **Wheel:** dy = 1.0 (deferred)
+- **Gamepad:** face buttons (South/East/North/West), DPad, Start/Select, axes (LeftStickX/Y) (deferred)
 
 ### Variants Per Candidate
 
@@ -346,7 +350,7 @@ probed-and-unobserved — still never pruned from the keyboard class
 ### Subprocess Pool Size
 
 - **Pool size:** 6-8 concurrent game processes
-- **Rationale:** Bevy examples run ~5s headless. 8 parallel = ~40s wall-clock for full matrix vs ~6-8 min serial. Memory footprint acceptable on dev machines (each process ~50-150 MB).
+- **Rationale:** Bevy examples run ~5s headless. 8 parallel = ~55s wall-clock for full matrix vs ~7 min serial. Memory footprint acceptable on dev machines (each process ~50-150 MB).
 - **CI constraint:** Battery runs with `--test-threads=1`. Discovery spawns subprocesses internally, so CI cost = (discovery_wall_clock) × 1 thread.
 
 ### Scenario JSON Shape for Probe Runs
@@ -463,6 +467,82 @@ control key itself is always `Unclassified` and excluded from probe
 statistics — is the shipped compromise: deterministic games get
 trusted verdicts modulo a documented blind spot, and the blind
 spot is surfaced in-band rather than hidden.
+
+## Mouse Grid Probing (Phase 1 Mouse Grammar)
+
+The keyboard matrix asks "WHICH key matters"; the mouse matrix asks
+"WHERE a click matters". Phase 1 ships position probing only —
+button and motion candidates stay a future knob.
+
+**Delivery without a new bot.** Mouse cell probes ride the EXISTING
+scenario schema: any bot accepts `bot.mouse_clicks` (frame-indexed
+left clicks at logical-pixel positions), injected by the same
+`scripted_mouse_system` the chaos bot uses (`synthetic_keyboard`
+probe children emit `CursorMoved` + `MouseButtonInput` + wrapped
+window events before the click, so bevy_picking sees the same
+sequence a real pointer produces). No new bot type, no schema
+change.
+
+**The grid.** `ProbePlan` gains a bounded position grid, probed at
+cell centers in normalized window space (0.0..=1.0):
+
+- `mouse_grid_cols` × `mouse_grid_rows` (default 5 × 4 = 20 cells);
+  `0 × 0` DISABLES mouse probing (keyboard-only plans, slim test
+  matrices).
+- Cell id `r{row}c{col}` (0-based, row-major); cell center = `((col +
+  0.5) / cols, (row + 0.5) / rows)` in normalized coords, so findings
+  stay comparable across window sizes and grid resolutions.
+- Scenario click positions convert normalized coords to logical
+  pixels against a FIXED assumed window extent
+  (`mouse_click_extent_w_px` × `mouse_click_extent_h_px`, default
+  1280 × 720 — distinct from the chaos bot's own click-extent
+  constant; the assumption, not a measurement, is part of the plan
+  and therefore of the cache key).
+- **The extent is an assumption, not a measurement.** 1280 × 720 is
+  Bevy's default `WindowResolution`, which covers most games — but a
+  game that overrides its window size at startup shifts the grid
+  geometry: cell centers land elsewhere in the game's actual window,
+  cells can fall off a smaller window entirely (off-window clicks are
+  silently dropped by picking), and a bigger window leaves swaths of
+  screen the grid never touches. There is no way around this without
+  measuring the live window, which mode-1 discovery (headless,
+  pre-takeover) cannot do. If you know your game's resolution differs
+  from the default, set the plan's `mouse_click_extent_*_px` to
+  match — findings still carry normalized cell centers, so they stay
+  comparable, but the EFFECTS are probed at the positions your
+  window actually lays out.
+
+**Normalized pairs, mouse edition.** The mouse control is a click
+at the plan's `mouse_control_norm_x/y` (default window
+center: 0.5, 0.5) on the same bot, frame, hold, and button as every
+cell probe — probe and control differ by exactly ONE bit: where the
+click lands. The control runs TWICE (the determinism gate, mouse
+channel): the first copy is the diff baseline for all cells, the
+second re-checks repeatability; a diverged pair degrades the
+surface to `SurfaceConfidence::Statistical` with a note that names
+the MOUSE gate.
+
+**One point per cell.** Cells are probed once, at the readiness
+point (the same frame as the keyboard readiness probe). A
+click-only run has no press-early/pollute-later problem, but
+keeping one point per run preserves the independence doctrine and
+keeps the job count linear: 20 cells + 2 control copies per plan.
+
+**Findings.** Each cell lands in `DiscoveredSurface::mouse_cells`
+(additive; absent when the grid is disabled or the surface predates
+mouse probing): cell id, grid coords, normalized center, observed
+`effect` (first divergence vs the mouse control) or `null`, and a
+confidence — `Exact` when the differential verdict stands,
+`Unclassified` when it cannot (the coverage backstop: an inert
+verdict from an asymmetric or short-span pair; a cell whose center
+COINCIDES with the control position, whose probe equals its
+baseline by construction — the mouse analogue of the control-key
+self-probe guard). Fail-open applies verbatim: no cell is ever
+pruned on weak evidence, and "probed, no divergence" is an answer
+(`Exact`, `effect: null`), not an absence.
+
+**Cost.** +22 jobs per default plan (20 cells + 2 mouse control
+copies), folded into the same subprocess pool.
 
 ## Divergence Detection Algorithm
 
@@ -588,7 +668,16 @@ CacheKey {
     bevy_playtest_version: env!("CARGO_PKG_VERSION"),
     feature_fingerprint: sort(features.join(",")), // e.g., "in-process,takeover,ui-liveness"
     fixture_name: Option<String>, // for fixtures: "loading_screen"
-    plan_fingerprint: fnv1a_hex(sort(candidate_keys), control_key, tps, duration_bits),
+    plan_fingerprint: fnv1a_hex(sort(candidate_keys), control_key, tps, duration_bits,
+                                mouse_grid_bits), // dims + per-axis click
+                                                  // extents + control
+                                                  // position (see the
+                                                  // Mouse Grid Probing
+                                                  // section) — a plan
+                                                  // knob that can move a
+                                                  // click or resize the
+                                                  // grid MUST be folded
+                                                  // here
 }
 ```
 
@@ -651,6 +740,11 @@ invalidation the cache does not do). Entry shape:
               "confidence": "Exact"},
              {"key": "Digit2", "effect": null, "confidence": "Exact"}],
     "mouse_buttons": [],
+    "mouse_cells": [{"id": "r2c3", "row": 2, "col": 3,
+                     "norm_x": 0.7, "norm_y": 0.625,
+                     "effect": {"first_divergence_frame_delta": 1},
+                     "confidence": "Exact",
+                     "provenance": "probe_verified"}],
     "mouse_motion": null,
     "wheel": null,
     "gamepad_buttons": [],
@@ -683,6 +777,12 @@ existed):
 pub struct DiscoveredSurface {
     pub keys: Vec<KeyFinding>,          // keyboard candidates
     pub mouse_buttons: Vec<KeyFinding>, // same shape as `keys`
+    pub mouse_cells: Vec<MouseCellFinding>, // Phase 1 mouse grid
+                                            // (ADDITIVE: absent on the
+                                            // wire when empty — old
+                                            // artifacts deserialize
+                                            // unchanged; never pruned
+                                            // on weak evidence)
     pub mouse_motion: Option<Effect>,   // motion-probe effect, if probed
     pub wheel: Option<Effect>,          // wheel-probe effect, if probed
     pub gamepad_buttons: Vec<KeyFinding>, // same shape as `keys`
@@ -714,6 +814,21 @@ pub struct KeyFinding {
     pub effect: Option<Effect>,
     /// How this entry got into the surface.
     pub confidence: KeyConfidence,
+}
+
+/// One mouse grid-cell finding (Phase 1 mouse grammar): a click at
+/// this cell's normalized center, diffed against the mouse control.
+pub struct MouseCellFinding {
+    pub id: String,          // "r{row}c{col}" (0-based)
+    pub row: u32,
+    pub col: u32,
+    pub norm_x: f32,         // cell center, 0.0..=1.0
+    pub norm_y: f32,
+    pub effect: Option<Effect>, // divergence vs the mouse control
+    pub confidence: KeyConfidence, // Exact | Unclassified (Inferred
+                                    // is keyboard-only group
+                                    // completion — never assigned here)
+    pub provenance: ProvenanceGrade, // probe_verified
 }
 
 /// How a key came to be in the surface.
@@ -785,16 +900,18 @@ the shipped 30-key candidate set):
   the per-point loop (2 points × 2 control copies = 4). Shared across
   all keys — not per-key.
 - **Probe runs:** 30 keys × 2 points = 60 runs.
-- **Total:** 64 runs per fixture.
+- **Mouse matrix (Phase 1):** +22 runs — 20 grid cells (default 5 × 4)
+  + 2 mouse control copies (the determinism gate, mouse channel).
+- **Total:** 86 runs per fixture.
 
 Wall-clock:
-- Serial: 64 × 5s = 320s (~5.3 min)
-- Pool of 8: ~320s / 8 ≈ 40s
-- Pool of 6: ~320s / 6 ≈ 53s
-- **Total (pool=8):** ~40s per fixture
+- Serial: 86 × 5s = 430s (~7.2 min)
+- Pool of 8: ~430s / 8 ≈ 54s
+- Pool of 6: ~430s / 6 ≈ 72s
+- **Total (pool=8):** ~55s per fixture
 
 At the spike's measured 1.9s/run (rather than the 5s planning figure),
-pool=8 lands near ~15s per fixture — comfortably under a minute.
+pool=8 lands near ~21s per fixture — comfortably under a minute.
 
 **Scaling knobs (documented, not MVP):** adding the hold variant doubles
 the probe runs (120 probes → ~570s serial, ~72s at pool=8); extending to
@@ -806,7 +923,7 @@ architecture is the right call.
 ### Full Battery Cost (9 fixtures: 7 fetched showcase games + the committed known_answer fixture + the fetched thetawave port)
 
 - Serial: 9 × ~5.3 min ≈ ~48 min
-- Parallel discovery (pool=8 per fixture, sequential fixtures): 9 × ~40s ≈ 6 min
+- Parallel discovery (pool=8 per fixture, sequential fixtures): 9 × ~55s ≈ 8 min
 - **With fixture-level parallelism (e.g. 4 fixtures concurrently):** scales accordingly; not exercised by CI (battery runs serially there)
 
 ### CI Considerations
@@ -819,7 +936,7 @@ architecture is the right call.
   CI job (or committed to the repo) is always stale and never hits. Two
   options, choose at implementation time:
   1. **Accept re-discovery per CI run** (recommended for MVP): CI simply
-     pays the ~40s/fixture discovery cost each run. Simple, always
+     pays the ~55s/fixture discovery cost each run. Simple, always
      correct, no stale-cache class of bugs.
   2. **Key CI cache on a source-tree digest** (e.g., hash of the game's
      `src/**` + `Cargo.lock`) instead of the built binary hash, enabling a
@@ -1010,8 +1127,9 @@ fixture). They refine the design above.
 - 3s scenario ≈ **1.9 s wall-clock per subprocess run** (fixture spends ~1s
   in startup/teardown outside simulated time).
 - Shipped matrix (30 keys × 2 probe points, tap only, + 4 per-point
-  control runs = 64 runs): ~122 s sequential at the measured 1.9s/run,
-  ~15 s at pool=8. At the 5s planning figure: ~320s serial, ~40s at
+  control runs + 22 mouse jobs (20 cells + 2 mouse control copies) =
+  86 runs): ~164 s sequential at the measured 1.9s/run,
+  ~21 s at pool=8. At the 5s planning figure: ~430s serial, ~54s at
   pool=8.
 - Even the honest worst case (full 60-key prior set, both tap and hold
   variants, 2 probe points each) stays within a coffee-break budget at
@@ -1076,7 +1194,7 @@ fixture). They refine the design above.
 
 1. **Should discovery run automatically on first battery, or opt-in?**
    - RESOLVED (Phase 7): Opt-in via `BEVY_PLAYTEST_DISCOVER=1`, per this recommendation.
-     A cold cache costs ~40s of subprocess probing — silent surprise costs for every
+     A cold cache costs ~55s of subprocess probing — silent surprise costs for every
      battery run outweigh convenience; revisit auto-enable if caching proves invisible
      in practice. Candidate-list and cache-dir overrides:
      `BEVY_PLAYTEST_DISCOVER_KEYS` / `BEVY_PLAYTEST_DISCOVER_CACHE` (parent-side only;

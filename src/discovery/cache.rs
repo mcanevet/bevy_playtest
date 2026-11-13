@@ -162,14 +162,17 @@ fn truncate_char_safe(s: &str, n: usize) -> &str {
 /// The probe-plan fingerprint ingredient of a [`CacheKey`]:
 /// everything in [`super::probe_scenarios::ProbePlan`] that can
 /// change the learned surface — candidate set (order-insensitive),
-/// control key, tps, duration bit pattern — folded into one opaque
-/// hex string with the internal FNV-1a. Pure and public so the flow
-/// layer (which owns the plan) computes it exactly once per run.
+/// control key, tps, duration bit pattern, and the mouse-grid
+/// parameters (dims, per-axis click extents, control position) —
+/// folded into one opaque hex string with the internal FNV-1a.
+/// Pure and public so the flow layer (which owns the plan) computes
+/// it exactly once per run.
 pub fn plan_fingerprint(
     candidates: &[String],
     control_key: &str,
     tps: u32,
     duration_s: f32,
+    mouse: MouseFingerprint,
 ) -> String {
     let mut sorted: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
     sorted.sort();
@@ -184,7 +187,57 @@ pub fn plan_fingerprint(
     acc.push_str(&tps.to_string());
     acc.push('\u{1}');
     acc.push_str(&duration_s.to_bits().to_string());
+    acc.push('\u{1}');
+    // Order matters here (dims are not a set), but it is FIXED by
+    // the plan field order, so the fingerprint is byte-stable
+    // across runs for any one plan.
+    acc.push_str(&mouse.grid_cols.to_string());
+    acc.push('\u{1}');
+    acc.push_str(&mouse.grid_rows.to_string());
+    acc.push('\u{1}');
+    acc.push_str(&mouse.click_extent_w_px.to_bits().to_string());
+    acc.push('\u{1}');
+    acc.push_str(&mouse.click_extent_h_px.to_bits().to_string());
+    acc.push('\u{1}');
+    acc.push_str(&mouse.control_norm_x.to_bits().to_string());
+    acc.push('\u{1}');
+    acc.push_str(&mouse.control_norm_y.to_bits().to_string());
     hex16(&fnv1a(&acc))
+}
+
+/// The mouse-grid slice of [`PlanFingerprint`](self) inputs, carried
+/// separately so direct-call tests keep spelling four scalars.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MouseFingerprint {
+    /// Plan grid width (cells); 0 disables mouse probing.
+    pub grid_cols: u32,
+    /// Plan grid height (cells); 0 disables mouse probing.
+    pub grid_rows: u32,
+    /// Assumed window width (logical px) clicks are scaled against.
+    pub click_extent_w_px: f32,
+    /// Assumed window height (logical px) clicks are scaled against.
+    pub click_extent_h_px: f32,
+    /// Normalized control-click x.
+    pub control_norm_x: f32,
+    /// Normalized control-click y.
+    pub control_norm_y: f32,
+}
+
+impl MouseFingerprint {
+    /// Extract the mouse slice from a plan (field-for-field; any new
+    /// plan knob that can change a click position or the cell count
+    /// MUST be threaded here — a missed knob silently aliases cache
+    /// entries for plans that differ only in it).
+    pub fn from_plan(plan: &super::probe_scenarios::ProbePlan) -> Self {
+        Self {
+            grid_cols: plan.mouse_grid_cols,
+            grid_rows: plan.mouse_grid_rows,
+            click_extent_w_px: plan.mouse_click_extent_w_px,
+            click_extent_h_px: plan.mouse_click_extent_h_px,
+            control_norm_x: plan.mouse_control_norm_x,
+            control_norm_y: plan.mouse_control_norm_y,
+        }
+    }
 }
 
 /// FNV-1a over bytes, hex-encoded (same hasher constants as
@@ -206,7 +259,9 @@ fn hex16(v: &u64) -> String {
 
 /// The persisted discovery result: the canonical
 /// [`DiscoveredSurface`] plus the key it was learned under.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// (Not `Eq`: the surface's `mouse_cells` carry `f32` normalized
+/// coordinates; no consumer holds it in an `Eq`-bound container.)
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CachedSurface {
     /// The key this entry was written under. Compared exactly on
     /// read: any mismatch is a stale entry.
@@ -1104,13 +1159,34 @@ mod tests {
 
     #[test]
     fn plan_fingerprint_is_candidate_order_insensitive() {
-        let a = plan_fingerprint(&["Digit1".to_string(), "KeyQ".to_string()], "KeyQ", 60, 3.0);
-        let b = plan_fingerprint(&["KeyQ".to_string(), "Digit1".to_string()], "KeyQ", 60, 3.0);
+        // The mouse-grid slice defaults to the DISABLED grid so this
+        // keyboard-layer pin stays about the keyboard inputs; the
+        // mouse knob gets its own independence pin below.
+        let a = plan_fingerprint(
+            &["Digit1".to_string(), "KeyQ".to_string()],
+            "KeyQ",
+            60,
+            3.0,
+            MouseFingerprint::default(),
+        );
+        let b = plan_fingerprint(
+            &["KeyQ".to_string(), "Digit1".to_string()],
+            "KeyQ",
+            60,
+            3.0,
+            MouseFingerprint::default(),
+        );
         assert_eq!(a, b, "candidate order must not change the fingerprint");
         // Every plan input independently changes it.
         assert_ne!(
             a,
-            plan_fingerprint(&["Digit1".to_string()], "KeyQ", 60, 3.0),
+            plan_fingerprint(
+                &["Digit1".to_string()],
+                "KeyQ",
+                60,
+                3.0,
+                MouseFingerprint::default()
+            ),
             "candidate set"
         );
         assert_ne!(
@@ -1119,18 +1195,31 @@ mod tests {
                 &["Digit1".to_string(), "KeyQ".to_string()],
                 "Escape",
                 60,
-                3.0
+                3.0,
+                MouseFingerprint::default()
             ),
             "control key"
         );
         assert_ne!(
             a,
-            plan_fingerprint(&["Digit1".to_string(), "KeyQ".to_string()], "KeyQ", 30, 3.0),
+            plan_fingerprint(
+                &["Digit1".to_string(), "KeyQ".to_string()],
+                "KeyQ",
+                30,
+                3.0,
+                MouseFingerprint::default()
+            ),
             "tps"
         );
         assert_ne!(
             a,
-            plan_fingerprint(&["Digit1".to_string(), "KeyQ".to_string()], "KeyQ", 60, 5.0),
+            plan_fingerprint(
+                &["Digit1".to_string(), "KeyQ".to_string()],
+                "KeyQ",
+                60,
+                5.0,
+                MouseFingerprint::default()
+            ),
             "duration"
         );
         // Canonical shape: 16 lowercase hex chars.
@@ -1138,6 +1227,120 @@ mod tests {
         assert!(a
             .chars()
             .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+    }
+
+    #[test]
+    fn plan_fingerprint_changes_with_every_mouse_knob() {
+        // The mouse-grid slice is part of the plan's identity: any
+        // knob that can change a click position or the cell count
+        // must change the fingerprint, or plans that differ only in
+        // mouse geometry would silently share cache entries.
+        let base = MouseFingerprint {
+            grid_cols: 5,
+            grid_rows: 4,
+            click_extent_w_px: 1280.0,
+            click_extent_h_px: 720.0,
+            control_norm_x: 0.5,
+            control_norm_y: 0.5,
+        };
+        let fp = |mouse: MouseFingerprint| {
+            plan_fingerprint(&["Digit1".to_string()], "KeyQ", 60, 3.0, mouse)
+        };
+        let a = fp(base);
+        assert_ne!(
+            a,
+            fp(MouseFingerprint {
+                grid_cols: 6,
+                ..base
+            }),
+            "cols"
+        );
+        assert_ne!(
+            a,
+            fp(MouseFingerprint {
+                grid_rows: 3,
+                ..base
+            }),
+            "rows"
+        );
+        // Off-vs-on (the 0x0 opt-out) changes it most of all.
+        assert_ne!(
+            a,
+            fp(MouseFingerprint {
+                grid_cols: 0,
+                grid_rows: 0,
+                ..base
+            }),
+            "disabled grid"
+        );
+        assert_ne!(
+            a,
+            fp(MouseFingerprint {
+                click_extent_w_px: 1920.0,
+                ..base
+            }),
+            "width extent"
+        );
+        assert_ne!(
+            a,
+            fp(MouseFingerprint {
+                click_extent_h_px: 1080.0,
+                ..base
+            }),
+            "height extent"
+        );
+        assert_ne!(
+            a,
+            fp(MouseFingerprint {
+                control_norm_x: 0.25,
+                ..base
+            }),
+            "control x"
+        );
+        assert_ne!(
+            a,
+            fp(MouseFingerprint {
+                control_norm_y: 0.75,
+                ..base
+            }),
+            "control y"
+        );
+        // Identical inputs are byte-stable (cross-process caching).
+        assert_eq!(a, fp(base));
+    }
+
+    #[test]
+    fn mouse_fingerprint_extracts_every_plan_knob() {
+        // from_plan is the one extraction path production uses, so a
+        // future plan knob that misses threading into the fingerprint
+        // must fail HERE (field-for-field pin against a plan with
+        // non-default knobs).
+        use crate::discovery::probe_scenarios::ProbePlan;
+        let plan = ProbePlan {
+            mouse_grid_cols: 7,
+            mouse_grid_rows: 3,
+            mouse_click_extent_w_px: 1000.0,
+            mouse_click_extent_h_px: 500.0,
+            mouse_control_norm_x: 0.25,
+            mouse_control_norm_y: 0.75,
+            ..ProbePlan::default()
+        };
+        let extracted = MouseFingerprint::from_plan(&plan);
+        assert_eq!(extracted.grid_cols, 7);
+        assert_eq!(extracted.grid_rows, 3);
+        assert_eq!(extracted.click_extent_w_px, 1000.0);
+        assert_eq!(extracted.click_extent_h_px, 500.0);
+        assert_eq!(extracted.control_norm_x, 0.25);
+        assert_eq!(extracted.control_norm_y, 0.75);
+        // Disabled plans extract as fully-disabled fingerprints.
+        let off = ProbePlan {
+            mouse_grid_cols: 0,
+            mouse_grid_rows: 0,
+            ..ProbePlan::default()
+        };
+        let extracted = MouseFingerprint::from_plan(&off);
+        assert_eq!(extracted.grid_cols, 0);
+        assert_eq!(extracted.grid_rows, 0);
     }
 
     #[test]

@@ -92,6 +92,11 @@ fn draft_with_mutation(tag: &str, mutation: &str) -> DraftOutcome {
     let config = DiscoveryConfig {
         plan: ProbePlan {
             candidate_keys: candidate_keys(),
+            // Mouse grid OFF: this fixture measures the KEYBOARD
+            // draft sweep's alarms (the `0 × 0` sanctioned slim
+            // mode — no mouse jobs in the battery).
+            mouse_grid_cols: 0,
+            mouse_grid_rows: 0,
             ..ProbePlan::default()
         },
         cache_dir,
@@ -428,6 +433,8 @@ fn draft_pristine(tag: &str) -> DraftOutcome {
     let config = DiscoveryConfig {
         plan: ProbePlan {
             candidate_keys: candidate_keys(),
+            mouse_grid_cols: 0,
+            mouse_grid_rows: 0,
             ..ProbePlan::default()
         },
         cache_dir,

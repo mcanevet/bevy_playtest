@@ -118,6 +118,17 @@ name = "takeover_demo_picking"
 path = "src/bin/takeover_demo_picking.rs"
 required-features = ["takeover"]
 
+# Quadrant-clickable child for the mouse-GRID
+# position-discrimination test: a UI node covering the top-left
+# ~45% of the window (vs. `takeover_demo_picking`'s fullscreen
+# node), so only grid cells overlapping the quadrant diverge —
+# the fixture that catches a grid which finds clicks but cannot
+# tell WHERE (see tests/discovery_flow.rs).
+[[bin]]
+name = "takeover_demo_mouse_quadrant"
+path = "src/bin/takeover_demo_mouse_quadrant.rs"
+required-features = ["takeover"]
+
 # Minimal no-op child for probe-pool tests: runs, exits 0, never
 # writes any file — the platform-neutral stand-in for "a game that
 # exits without reporting" (see tests/probe_pool.rs,

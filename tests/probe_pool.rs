@@ -13,6 +13,10 @@
 //!   trace; an inert probe key (KeyQ) does not (at this pool layer
 //!   that's visible as IDENTICAL digest series to the control — the
 //!   divergence classification itself is Phase 3's `diff.rs`),
+//! - the mouse matrix (additive MVP): cell probes and the doubled
+//!   mouse control really reach a pointer-driven game
+//!   (`takeover_demo_picking`) through the wrapped-event path, and
+//!   a click the game binds diverges from the control trace,
 //! - no-report runs surface as infrastructure errors (refusal over
 //!   silence), never as silent "no effect".
 
@@ -52,6 +56,30 @@ fn hang_binary() -> std::path::PathBuf {
     bin
 }
 
+/// A keyboard-focused plan with the mouse matrix switched OFF —
+/// the sanctioned `0 × 0` slim mode for tests that pin the keyboard
+/// layer. Passing `keys` narrows the keyboard candidates the same
+/// way the tests used to narrow the whole plan.
+fn keyboard_only(keys: &[&str]) -> ProbePlan {
+    ProbePlan {
+        candidate_keys: keys.iter().map(|k| k.to_string()).collect(),
+        mouse_grid_cols: 0,
+        mouse_grid_rows: 0,
+        ..ProbePlan::default()
+    }
+}
+
+/// The pointer-driven demo game: the world moves ONLY after a UI
+/// `PointerClick` lands on its fullscreen node (bevy_picking reads
+/// wrapped window events — the delivery path mouse cell probes must
+/// ride). Any in-window click position hits the node, so every cell
+/// of any grid is a bound click for this game.
+fn picking_binary() -> std::path::PathBuf {
+    let bin = std::path::PathBuf::from(env!("CARGO_BIN_EXE_takeover_demo_picking"));
+    assert!(bin.is_file(), "picking binary missing: {bin:?}");
+    bin
+}
+
 /// Digest series of a report, as plain (frame, hash) pairs.
 fn digest_series(report: &PlaytestReport) -> Vec<(u64, u64)> {
     report
@@ -67,12 +95,18 @@ struct SplitKinds {
     probes: Vec<(String, &'static str, PlaytestReport)>,
     /// (point label, report)
     controls: Vec<(&'static str, PlaytestReport)>,
+    /// (cell id, report)
+    mouse_cells: Vec<(String, PlaytestReport)>,
+    /// Mouse control copies, in input order (pair-wise: a/b).
+    mouse_controls: Vec<PlaytestReport>,
 }
 
 fn split_kinds(results: &Results) -> SplitKinds {
     use bevy_playtest::discovery::probe_pool::ProbeJobKind;
     let mut probes = vec![];
     let mut controls = vec![];
+    let mut mouse_cells = vec![];
+    let mut mouse_controls = vec![];
     for r in results {
         let outcome = r.as_ref().expect("job must succeed");
         match &outcome.kind {
@@ -82,9 +116,20 @@ fn split_kinds(results: &Results) -> SplitKinds {
             ProbeJobKind::Control { point } => {
                 controls.push((point.label, outcome.report.clone()));
             }
+            ProbeJobKind::MouseCell { cell, .. } => {
+                mouse_cells.push((cell.id(), outcome.report.clone()));
+            }
+            ProbeJobKind::MouseControl { .. } => {
+                mouse_controls.push(outcome.report.clone());
+            }
         }
     }
-    SplitKinds { probes, controls }
+    SplitKinds {
+        probes,
+        controls,
+        mouse_cells,
+        mouse_controls,
+    }
 }
 
 #[test]
@@ -92,11 +137,10 @@ fn pool_matrix_probes_bound_key_and_gates_determinism() {
     let _slot = common::run_slot();
     // Shrink the matrix to the two keys that matter (bound Digit1,
     // inert KeyQ) to keep this test fast: 2 keys × 2 points = 4
-    // probes + 4 controls (2 points × 2 copies).
-    let plan = ProbePlan {
-        candidate_keys: vec!["Digit1".into(), "KeyQ".into()],
-        ..ProbePlan::default()
-    };
+    // probes + 4 controls (2 points × 2 copies). The mouse grid is
+    // OFF (0×0) — this test pins the keyboard layer; the picking
+    // game below pins the mouse matrix.
+    let plan = keyboard_only(&["Digit1", "KeyQ"]);
     assert_eq!(plan.candidate_keys.len(), 2);
 
     let jobs = build_job_list(&plan).expect("job list");
@@ -176,14 +220,124 @@ fn pool_matrix_probes_bound_key_and_gates_determinism() {
 }
 
 #[test]
+fn mouse_matrix_reaches_pointer_games_and_gates_determinism() {
+    let _slot = common::run_slot();
+    // The mouse matrix's end-to-end pin, against the PICKING game:
+    // every click position hits its fullscreen node (any cell is
+    // bound), so cell probes and the mouse control all deliver real
+    // clicks through the wrapped-event path — and the control pair
+    // must be byte-identical (the mouse determinism gate).
+    let plan = ProbePlan {
+        candidate_keys: vec!["Digit1".into()], // one key: keeps the matrix slim
+        mouse_grid_cols: 3,
+        mouse_grid_rows: 2,
+        ..ProbePlan::default()
+    };
+    let jobs = build_job_list(&plan).expect("job list");
+    // 1 key × 2 points = 2 probes + 2 points × 2 = 4 key controls,
+    // then 3×2 = 6 cells + 2 mouse controls.
+    assert_eq!(jobs.len(), 2 + 4 + 6 + 2);
+
+    let config = ProbePoolConfig::new(picking_binary());
+    let results = run_jobs(&config, &jobs);
+    assert_eq!(results.len(), jobs.len());
+    for r in &results {
+        r.as_ref().expect("every mouse job must produce a report");
+    }
+
+    let split = split_kinds(&results);
+    // Every cell ran, once, in row-major order.
+    let cell_ids: Vec<&str> = split
+        .mouse_cells
+        .iter()
+        .map(|(id, _)| id.as_str())
+        .collect();
+    assert_eq!(
+        cell_ids,
+        vec!["r0c0", "r0c1", "r0c2", "r1c0", "r1c1", "r1c2"],
+        "cells arrive row-major with stable ids"
+    );
+    // Two mouse controls, byte-identical: the determinism gate.
+    assert_eq!(split.mouse_controls.len(), 2);
+    assert_eq!(
+        digest_series(&split.mouse_controls[0]),
+        digest_series(&split.mouse_controls[1]),
+        "mouse double-control determinism gate FAILED"
+    );
+
+    // Every cell probe on this game is BOUND (fullscreen node): it
+    // must diverge from the mouse control trace. That is the
+    // visible-at-the-pool-layer effect of a click reaching
+    // bevy_picking through the wrapped-event path.
+    let control_series = digest_series(&split.mouse_controls[0]);
+    for (id, report) in &split.mouse_cells {
+        assert_ne!(
+            digest_series(report),
+            control_series,
+            "cell {id} must diverge from the mouse control on the picking game"
+        );
+    }
+}
+
+#[test]
+fn disabled_mouse_grid_contributes_no_jobs() {
+    // No subprocesses needed: `build_job_list` is a pure function of
+    // the plan (its subprocess plumbing is exercised by every other
+    // test here); pin the 0×0 off-switch at the job-list layer.
+    use bevy_playtest::discovery::probe_pool::ProbeJobKind;
+    let jobs = build_job_list(&keyboard_only(&["Digit1"])).expect("job list");
+    assert_eq!(
+        jobs.len(),
+        2 + 4,
+        "keyboard matrix only: 1 key × 2 points + 2 points × 2 controls"
+    );
+    assert!(
+        jobs.iter().all(|j| !matches!(
+            j.kind,
+            ProbeJobKind::MouseCell { .. } | ProbeJobKind::MouseControl { .. }
+        )),
+        "a disabled grid must contribute zero mouse jobs"
+    );
+
+    // Default grid: 5×4 = 20 cells plus the doubled mouse control,
+    // all appended AFTER the keyboard matrix (stable staging
+    // indices for the keyboard jobs — see build_job_list).
+    let jobs = build_job_list(&ProbePlan::default()).expect("job list");
+    let mouse_count =
+        |pred: &dyn Fn(&ProbeJobKind) -> bool| jobs.iter().filter(|j| pred(&j.kind)).count();
+    assert_eq!(
+        mouse_count(&|k| matches!(k, ProbeJobKind::MouseCell { .. })),
+        20
+    );
+    assert_eq!(
+        mouse_count(&|k| matches!(k, ProbeJobKind::MouseControl { .. })),
+        2,
+        "mouse control is doubled (determinism gate)"
+    );
+    let first_mouse = jobs
+        .iter()
+        .position(|j| {
+            matches!(
+                j.kind,
+                ProbeJobKind::MouseCell { .. } | ProbeJobKind::MouseControl { .. }
+            )
+        })
+        .expect("mouse jobs exist");
+    assert!(
+        jobs[..first_mouse].iter().all(|j| !matches!(
+            j.kind,
+            ProbeJobKind::MouseCell { .. } | ProbeJobKind::MouseControl { .. }
+        )),
+        "mouse jobs must be appended after the keyboard matrix"
+    );
+}
+
+#[test]
 fn missing_binary_is_an_infrastructure_error_not_silence() {
     let _slot = common::run_slot();
     // Refusal over silence: a run that cannot produce a report must
     // surface as ProbeError::NoReport, never as a "no effect" result.
-    let plan = ProbePlan {
-        candidate_keys: vec!["Digit1".into()],
-        ..ProbePlan::default()
-    };
+    let plan = keyboard_only(&["Digit1"]);
     let jobs = build_job_list(&plan).expect("job list");
 
     let mut config = ProbePoolConfig::new("/nonexistent/binary/that/does/not/exist");
@@ -217,10 +371,7 @@ fn runaway_child_is_killed_by_the_wall_clock_watchdog() {
     // scales with machine speed — an observed 30s of simulated time
     // took ~8.6s wall on an M-series Mac, and a fast-enough runner
     // would finish before the 1s deadline.)
-    let plan = ProbePlan {
-        candidate_keys: vec!["Digit1".into()],
-        ..ProbePlan::default()
-    };
+    let plan = keyboard_only(&["Digit1"]);
     let jobs = build_job_list(&plan).expect("job list");
     assert!(
         !jobs.is_empty(),
@@ -573,10 +724,7 @@ fn stray_playtest_env_vars_are_sanitized_in_children() {
     // The run slot serializes the suite, so no sibling spawns children
     // while the stray var is live.
     std::env::set_var("BEVY_PLAYTEST_PROBE_SUITE_STRAY", "1");
-    let plan = ProbePlan {
-        candidate_keys: vec!["Digit1".into()],
-        ..ProbePlan::default()
-    };
+    let plan = keyboard_only(&["Digit1"]);
     let jobs = build_job_list(&plan).expect("job list");
 
     let config = ProbePoolConfig::new(demo_binary());

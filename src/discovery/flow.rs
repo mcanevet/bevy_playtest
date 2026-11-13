@@ -74,6 +74,7 @@ use crate::state::PlaytestReport;
 
 use super::cache::{
     default_cache_dir, plan_fingerprint, read_cached, write_cached, CacheKey, CachedSurface,
+    MouseFingerprint,
 };
 use super::diff::diff_trace;
 use super::group_completion::apply_group_completion;
@@ -81,8 +82,11 @@ use super::probe_pool::{
     build_job_list, run_jobs, ProbeError, ProbeJobKind, ProbeOutcome, ProbePoolConfig,
     DEFAULT_POOL_SIZE, DEFAULT_TIMEOUT_SECS,
 };
-use super::probe_scenarios::{ProbePlan, ProbePoint};
-use super::surface::{DiscoveredSurface, KeyConfidence, KeyFinding, SurfaceConfidence};
+use super::probe_scenarios::{MouseCell, ProbePlan, ProbePoint};
+use super::provenance::ProvenanceGrade;
+use super::surface::{
+    DiscoveredSurface, KeyConfidence, KeyFinding, MouseCellFinding, SurfaceConfidence,
+};
 
 /// Opt-in switch for battery-run discovery (value `"1"`).
 pub const ENV_DISCOVER: &str = "BEVY_PLAYTEST_DISCOVER";
@@ -303,6 +307,7 @@ pub fn discover(config: &DiscoveryConfig) -> Result<DiscoveryOutcome, DiscoveryE
             &plan.control_key,
             plan.tps,
             plan.duration_s,
+            MouseFingerprint::from_plan(&plan),
         ),
     )
     .map_err(|e| {
@@ -372,12 +377,44 @@ pub fn discover(config: &DiscoveryConfig) -> Result<DiscoveryOutcome, DiscoveryE
         Some(plan.expected_last_frame()),
     );
 
+    // Mouse self-probe guard (the control-key analogue, mouse
+    // edition): a cell whose CENTER coincides with the mouse
+    // control position has a probe byte-identical to its own
+    // baseline BY CONSTRUCTION — no differential verdict is possible
+    // whatever the game binds there. The comparison lives on
+    // normalized coordinates (not labels) and needs the PLAN, which
+    // `aggregate`'s outcome-only signature never sees — so the guard
+    // runs here, demoting such cells to `Unclassified` before the
+    // surface is finalized (cached, reconciled). The default 5×4
+    // grid never hits this (centers are odd multiples of 0.5/5 and
+    // 0.5/4); it protects bespoke 1×1 grids and moved control
+    // positions.
+    let mut surface = surface;
+    for cell in surface.mouse_cells.iter_mut() {
+        let norm_match = plan.mouse_cell_is_control_position(&MouseCell {
+            row: cell.row,
+            col: cell.col,
+            norm_x: cell.norm_x,
+            norm_y: cell.norm_y,
+        });
+        if norm_match {
+            cell.confidence = KeyConfidence::Unclassified;
+            cell.effect = None;
+            surface.notes.push(format!(
+                "mouse cell {} at ({:.3},{:.3}) coincides with the mouse \
+                 control position: its probe equals its baseline by \
+                 construction, so it is unclassified — neither effective \
+                 nor a trusted negative",
+                cell.id, cell.norm_x, cell.norm_y
+            ));
+        }
+    }
+
     // Promote the game child's build profile onto the surface (the
     // first control run's report carries it; probe children carry
     // the same stamp). The parent harness's own profile is NOT the
     // game's — this is the only honest channel (roadmap §4 item 5).
     let promoted = outcomes.iter().find_map(|o| o.report.game_build_profile);
-    let mut surface = surface;
     surface.build_profile = promoted;
 
     // Work item 2: promote the contract suggestions the
@@ -632,6 +669,89 @@ pub fn aggregate(
     }
 
     let mut untrusted_inert: Vec<String> = Vec::new();
+
+    // ---- Mouse grid matrix (Phase 1 mouse grammar) ----
+    // Same normalized-pair doctrine as the keyboard matrix, one
+    // baseline family per input class: cell probes and mouse
+    // controls are CLICK-ONLY runs, so their baseline is the mouse
+    // control pair — never a key-press control (a control press
+    // would put a digest-changing key event in the baseline and
+    // contaminate every cell diff). First mouse control copy is the
+    // diff baseline, second is the determinism gate — the exact
+    // mouse analogue of the key-control scheme above.
+    let mut mouse_cells: Vec<(MouseCell, Option<super::diff::Effect>, bool)> = Vec::new();
+    let mut mouse_gate_diverged_at: Option<u64> = None;
+    // Direct-caller malformation ledger, mouse edition: cell probes
+    // with no mouse-control baseline support no verdict and must not
+    // vanish silently (discover() always pairs the matrix with a
+    // doubled mouse control; only a caller bypassing it reaches this
+    // note).
+    let mut unmatched_mouse_cells: Vec<String> = Vec::new();
+    {
+        // Baseline: the FIRST MouseControl outcome; the SECOND
+        // re-checks the gate (later copies are harmless re-checks).
+        let mut mouse_baseline: Option<(usize, u64)> = None; // (index, point frame)
+        for (idx, outcome) in outcomes.iter().enumerate() {
+            let ProbeJobKind::MouseControl { point } = &outcome.kind else {
+                continue;
+            };
+            match mouse_baseline {
+                None => mouse_baseline = Some((idx, point.frame)),
+                Some((base_idx, _)) => {
+                    if let Err(divergence) = digest::compare(
+                        &outcomes[base_idx].report.state_digest,
+                        &outcome.report.state_digest,
+                    ) {
+                        if mouse_gate_diverged_at.is_none() {
+                            mouse_gate_diverged_at = Some(divergence.frame);
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some((base_idx, point_frame)) = mouse_baseline {
+            let baseline = &outcomes[base_idx].report;
+            // One finding per cell, first-seen order (row-major
+            // from build_job_list). Cells are probed at ONE point
+            // (readiness), so there is no multi-point refinement to
+            // fold; the first (and only) verdict stands.
+            for outcome in outcomes {
+                let ProbeJobKind::MouseCell { cell, point } = &outcome.kind else {
+                    continue;
+                };
+                let _ = point; // cells ride the readiness point; the baseline frame governs the diff
+                let coverage_trusted = !coverage_mismatch(&outcome.report, baseline)
+                    && expected_span_covered(&outcome.report, baseline, expected_last_frame);
+                let effect = diff_trace(
+                    &outcome.report.state_digest,
+                    &baseline.state_digest,
+                    point_frame,
+                );
+                match mouse_cells.iter_mut().find(|(c, _, _)| c.id() == cell.id()) {
+                    None => mouse_cells.push((*cell, effect, coverage_trusted)),
+                    Some((_, slot, trusted)) => {
+                        if slot.is_none() {
+                            *slot = effect;
+                            *trusted &= coverage_trusted;
+                        }
+                    }
+                }
+            }
+        } else {
+            // No baseline: collect the orphaned cell ids for the
+            // loud note below.
+            for outcome in outcomes {
+                let ProbeJobKind::MouseCell { cell, .. } = &outcome.kind else {
+                    continue;
+                };
+                if !unmatched_mouse_cells.iter().any(|id| id == &cell.id()) {
+                    unmatched_mouse_cells.push(cell.id());
+                }
+            }
+        }
+    }
+
     let mut surface = DiscoveredSurface {
         keys: probes
             .into_iter()
@@ -661,8 +781,36 @@ pub fn aggregate(
                 }
             })
             .collect(),
+        mouse_cells: mouse_cells
+            .into_iter()
+            .map(|(cell, effect, coverage_trusted)| {
+                if effect.is_none() && !coverage_trusted {
+                    // Keep the coverage-caveat ledger in sync with the
+                    // keys path: an untrusted inert mouse cell must be
+                    // named in the loud note, not degraded silently.
+                    untrusted_inert.push(cell.id());
+                }
+                MouseCellFinding {
+                    id: cell.id(),
+                    row: cell.row,
+                    col: cell.col,
+                    norm_x: cell.norm_x,
+                    norm_y: cell.norm_y,
+                    effect,
+                    confidence: if effect.is_none() && !coverage_trusted {
+                        // Same coverage-backstop honesty as keys: an
+                        // inert cell verdict from an asymmetric or
+                        // short-span pair is UNTRUSTED, not a negative.
+                        KeyConfidence::Unclassified
+                    } else {
+                        KeyConfidence::Exact
+                    },
+                    provenance: ProvenanceGrade::ProbeVerified,
+                }
+            })
+            .collect(),
         probed_at: baselines.iter().map(|(p, _)| p.frame).collect(),
-        confidence: if gate_diverged_at.is_none() {
+        confidence: if gate_diverged_at.is_none() && mouse_gate_diverged_at.is_none() {
             SurfaceConfidence::Exact
         } else {
             SurfaceConfidence::Statistical
@@ -675,6 +823,17 @@ pub fn aggregate(
             "determinism gate FAILED at frame {frame}: identical control runs \
              diverged — effects are statistical, inert keys are NOT trusted \
              negatives"
+        ));
+    }
+    // Mouse determinism gate: same honesty rule, separate channel —
+    // a diverged mouse-control pair taints the mouse matrix's inert
+    // cell verdicts, and its note names the MOUSE matrix so consumers
+    // can qualify exactly which section went statistical.
+    if let Some(frame) = mouse_gate_diverged_at {
+        surface.notes.push(format!(
+            "mouse determinism gate FAILED at frame {frame}: identical mouse \
+             control runs diverged — mouse cell effects are statistical, inert \
+             cells are NOT trusted negatives"
         ));
     }
     // Backstop companion to the pool's completeness gate: an inert
@@ -706,6 +865,19 @@ pub fn aggregate(
               they were omitted from the surface",
             unmatched_point_probes.len(),
             unmatched_point_probes.join(", ")
+        ));
+    }
+    // Mouse edition of the same refusal-over-silence rule: cell
+    // probes whose matrix has no mouse-control baseline at all
+    // support no verdict (nothing to diff against) and were omitted
+    // from `mouse_cells` — loudly.
+    if !unmatched_mouse_cells.is_empty() {
+        surface.notes.push(format!(
+            "unmatched mouse cell(s): {} cell probe run(s) ({}) have no \
+              mouse control baseline — no verdict is possible for them and \
+              they were omitted from the surface",
+            unmatched_mouse_cells.len(),
+            unmatched_mouse_cells.join(", ")
         ));
     }
     // The control-key caveat is a property of the METHOD, not of
@@ -1499,6 +1671,16 @@ mod tests {
             "the coverage caveat must be surfaced: {:?}",
             surface.notes
         );
+        // Pin the regression hard: the untrusted inert KEY must be
+        // NAMED in the caveat, not just covered by its existence.
+        assert!(
+            surface
+                .notes
+                .iter()
+                .any(|n| n.contains("coverage caveat") && n.contains("KeyZ")),
+            "the caveat must name KeyZ: {:?}",
+            surface.notes
+        );
         assert!(
             surface.notes.iter().any(|n| n.contains("expected span")),
             "the caveat must say the pair fell short of the expected span: {:?}",
@@ -1687,5 +1869,174 @@ mod tests {
         // The well-formed half is unaffected.
         let keyz = surface.keys.iter().find(|k| k.key == "KeyZ").unwrap();
         assert_eq!(keyz.confidence, KeyConfidence::Exact);
+    }
+
+    // ---- Mouse grid matrix (aggregate layer) ----
+
+    fn cell(row: u32, col: u32) -> MouseCell {
+        MouseCell::at(row, col, 4, 3)
+    }
+
+    fn mouse_cell_outcome(cell: MouseCell, trace: &[(u64, u64)]) -> ProbeOutcome {
+        ProbeOutcome {
+            kind: ProbeJobKind::MouseCell {
+                cell,
+                point: point("readiness", 60),
+            },
+            report: report_with_trace(trace),
+            scan: None,
+        }
+    }
+
+    fn mouse_control_outcome(trace: &[(u64, u64)]) -> ProbeOutcome {
+        ProbeOutcome {
+            kind: ProbeJobKind::MouseControl {
+                point: point("readiness", 60),
+            },
+            report: report_with_trace(trace),
+            scan: None,
+        }
+    }
+
+    #[test]
+    fn mouse_cell_divergence_is_effective_inert_cell_is_a_negative() {
+        // The mouse analogue of bound_key_is_effective: a cell whose
+        // click moves the world diverges from the mouse control
+        // (Effective, Exact); a cell whose click matches the control
+        // is a trusted negative (Exact, effect: None).
+        let control = flat(180);
+        let mut bound_cell_probe = flat(180);
+        bound_cell_probe[61].1 += 1;
+        let outcomes = vec![
+            mouse_cell_outcome(cell(0, 0), &bound_cell_probe),
+            mouse_cell_outcome(cell(1, 2), &flat(180)),
+            mouse_control_outcome(&control),
+            mouse_control_outcome(&control),
+        ];
+
+        let surface = aggregate(DEFAULT_CONTROL_KEY, &outcomes, None, None);
+
+        assert_eq!(
+            surface.mouse_cells.len(),
+            2,
+            "every probed cell stays visible"
+        );
+        let bound = surface
+            .mouse_cells
+            .iter()
+            .find(|c| c.id == "r0c0")
+            .expect("r0c0 must produce a finding");
+        assert_eq!(
+            bound.effect,
+            Some(super::super::diff::Effect {
+                first_divergence_frame_delta: 2
+            })
+        );
+        assert_eq!(bound.confidence, KeyConfidence::Exact);
+        let inert = surface
+            .mouse_cells
+            .iter()
+            .find(|c| c.id == "r1c2")
+            .expect("r1c2 must produce a finding");
+        assert_eq!(inert.effect, None);
+        assert_eq!(inert.confidence, KeyConfidence::Exact);
+    }
+
+    #[test]
+    fn short_mouse_cell_trace_never_becomes_a_trusted_negative() {
+        // Coverage backstop, mouse edition: a cell whose trace ends
+        // early reads as vacuously inert against a full-span mouse
+        // control — the aggregate layer must keep it Unclassified
+        // and say so in the coverage caveat.
+        let control = flat(180);
+        let outcomes = vec![
+            mouse_cell_outcome(cell(0, 0), &flat(101)),
+            mouse_control_outcome(&control),
+            mouse_control_outcome(&control),
+        ];
+
+        let surface = aggregate(DEFAULT_CONTROL_KEY, &outcomes, None, None);
+
+        let c = surface.mouse_cells.iter().find(|c| c.id == "r0c0").unwrap();
+        assert_eq!(c.effect, None, "no divergence was observed");
+        assert_eq!(
+            c.confidence,
+            KeyConfidence::Unclassified,
+            "a common-prefix-only inert cell is NOT a trusted negative"
+        );
+        let caveat = surface
+            .notes
+            .iter()
+            .find(|n| n.contains("coverage caveat"))
+            .expect("the coverage caveat must be surfaced");
+        // Pin the regression hard: untrusted inert MOUSE cells must be
+        // NAMED in the caveat. Before the fix the cells path silently
+        // dropped their ids (only keys were listed), and a mere
+        // note-exists assertion stayed green throughout.
+        assert!(
+            caveat.contains("r0c0"),
+            "the caveat must name the untrusted inert cell, got: {caveat}"
+        );
+    }
+
+    #[test]
+    fn mouse_control_divergence_flags_statistical_with_mouse_named_note() {
+        // The mouse determinism gate degrades the WHOLE surface to
+        // Statistical and names the MOUSE channel — consumers must
+        // be able to qualify which matrix lost trust.
+        let control = flat(180);
+        let mut control_b = flat(180);
+        control_b[90].1 += 5;
+        let mut bound_cell_probe = flat(180);
+        bound_cell_probe[61].1 += 1;
+        let outcomes = vec![
+            mouse_cell_outcome(cell(0, 0), &bound_cell_probe),
+            mouse_control_outcome(&control),
+            mouse_control_outcome(&control_b), // gate FAILS
+        ];
+
+        let surface = aggregate(DEFAULT_CONTROL_KEY, &outcomes, None, None);
+
+        assert_eq!(surface.confidence, SurfaceConfidence::Statistical);
+        let note = surface
+            .notes
+            .iter()
+            .find(|n| n.starts_with("mouse determinism gate FAILED"))
+            .expect("the mouse gate failure must be surfaced");
+        assert!(note.contains("frame 90"), "note carries the frame: {note}");
+        // The effect is still reported, just untrusted-grade.
+        let c = surface.mouse_cells.iter().find(|c| c.id == "r0c0").unwrap();
+        assert!(c.effect.is_some());
+    }
+
+    #[test]
+    fn mouse_cells_without_a_mouse_baseline_are_omitted_loudly() {
+        // Direct-caller backstop, mouse edition: cell probes with NO
+        // mouse control anywhere in the matrix support no verdict.
+        // They must not enter the surface silently — the note names
+        // the cells (refusal over silence, same rule as unmatched
+        // key probes).
+        let outcomes = vec![
+            mouse_cell_outcome(cell(0, 0), &flat(180)),
+            mouse_cell_outcome(cell(1, 3), &flat(180)),
+            // Keyboard half stays well-formed.
+            control_outcome(point("readiness", 60), &flat(180)),
+            control_outcome(point("readiness", 60), &flat(180)),
+        ];
+
+        let surface = aggregate(DEFAULT_CONTROL_KEY, &outcomes, None, None);
+
+        assert!(
+            surface.mouse_cells.is_empty(),
+            "baseline-less cells must not enter the surface: {:?}",
+            surface.mouse_cells
+        );
+        let note = surface
+            .notes
+            .iter()
+            .find(|n| n.starts_with("unmatched mouse cell"))
+            .expect("the unmatched-mouse note must be surfaced");
+        assert!(note.contains("r0c0"), "note names the cells: {note}");
+        assert!(note.contains("r1c3"), "note names the cells: {note}");
     }
 }
