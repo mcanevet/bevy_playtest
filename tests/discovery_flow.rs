@@ -97,10 +97,14 @@ impl Drop for EnvGuard {
 /// 8 subprocesses (~5s at pool=8). Candidates cover the interesting
 /// cases (bound Digit1, plus the control key KeyQ — probing the
 /// control against itself is structurally unclassifiable, and the
-/// surface must SAY so, not report a trusted negative).
+/// surface must SAY so, not report a trusted negative). The mouse
+/// grid is switched OFF (`0 × 0`, the sanctioned slim mode) so
+/// keyboard-layer tests pay no mouse jobs.
 fn slim_config() -> DiscoveryConfig {
     let mut config = DiscoveryConfig::new(demo_binary());
     config.plan.candidate_keys = vec!["Digit1".into(), "KeyQ".into()];
+    config.plan.mouse_grid_cols = 0;
+    config.plan.mouse_grid_rows = 0;
     config.cache_dir = temp_dir();
     config
 }
@@ -767,6 +771,212 @@ fn draft_pins_inert_keys_as_observations_not_silence() {
     assert!(
         !draft.findings.iter().any(|f| f.input == "KeyW"),
         "inert keys carry no live-residue finding"
+    );
+
+    std::fs::remove_dir_all(&config.cache_dir).unwrap();
+}
+
+/// Positive mouse fixture: `takeover_demo_picking` moves its world
+/// only after a UI `PointerClick` on a FULLSCREEN node — every
+/// in-window click position is a bound click. Discovery's mouse
+/// grid must therefore report EVERY cell with an observed effect
+/// against the mouse control (which leaves the world frozen).
+///
+/// Slim matrix (3 × 2 grid, keyboard candidates narrowed to the
+/// control key only — cells are what is under test): 1 key probe
+/// pair × 2 points + 4 key controls + 6 cells + 2 mouse controls
+/// = 14 subprocesses.
+#[test]
+fn mouse_grid_finds_effects_on_pointer_driven_game() {
+    let _slot = common::run_slot();
+    let picking = env!("CARGO_BIN_EXE_takeover_demo_picking");
+    let mut config = DiscoveryConfig::new(picking);
+    // Keyboard candidates: the control key alone — it renders as an
+    // Unclassified keyboard finding, and the mouse layer (the
+    // subject here) stays cheap.
+    config.plan.candidate_keys = vec!["KeyQ".into()];
+    config.plan.mouse_grid_cols = 3;
+    config.plan.mouse_grid_rows = 2;
+    config.cache_dir = temp_dir();
+
+    let cold = discover(&config).expect("cold discovery of the picking game");
+    assert!(!cold.from_cache);
+
+    assert_eq!(cold.surface.mouse_cells.len(), 6, "3 × 2 grid");
+    for cell in &cold.surface.mouse_cells {
+        assert!(
+            cell.effect.is_some(),
+            "cell {} is a bound click for the fullscreen-node game — \
+             its probe must diverge from the mouse control",
+            cell.id
+        );
+        assert_eq!(cell.confidence, KeyConfidence::Exact);
+    }
+    // Row-major order, stable ids.
+    let ids: Vec<&str> = cold
+        .surface
+        .mouse_cells
+        .iter()
+        .map(|c| c.id.as_str())
+        .collect();
+    assert_eq!(ids, ["r0c0", "r0c1", "r0c2", "r1c0", "r1c1", "r1c2"]);
+
+    // Deterministic game: the mouse gate passed, whole surface Exact.
+    assert_eq!(cold.surface.confidence, SurfaceConfidence::Exact);
+
+    // Warm run: identical surface from the cache (mouse cells ride
+    // the same entry).
+    let warm = discover(&config).expect("warm discovery");
+    assert!(warm.from_cache);
+    assert_eq!(warm.surface, cold.surface, "cached surface is identical");
+
+    std::fs::remove_dir_all(&config.cache_dir).unwrap();
+}
+
+/// Negative control: `takeover_demo_input` moves ONLY on
+/// `just_pressed(Digit1)` — it binds NO pointer input, so a mouse
+/// click anywhere leaves the world unchanged and every cell reads
+/// as a TRUSTED inert (Exact, effect: null) against the mouse
+/// control. The correspondence the mouse grid must draw: a
+/// pointer-driven game HAS cell effects, a keyboard-only game
+/// LACKS them.
+#[test]
+fn mouse_grid_finds_no_effects_on_keyboard_only_game() {
+    let _slot = common::run_slot();
+    let mut config = DiscoveryConfig::new(demo_binary());
+    config.plan.candidate_keys = vec!["Digit1".into()];
+    config.plan.mouse_grid_cols = 2;
+    config.plan.mouse_grid_rows = 2;
+    config.cache_dir = temp_dir();
+
+    let cold = discover(&config).expect("cold discovery of the keyboard game");
+    assert!(!cold.from_cache);
+
+    assert_eq!(cold.surface.mouse_cells.len(), 4, "2 × 2 grid");
+    for cell in &cold.surface.mouse_cells {
+        assert!(
+            cell.effect.is_none(),
+            "cell {} must be inert — the demo binds no pointer input",
+            cell.id
+        );
+        // Trusted negative: deterministic game, symmetric coverage.
+        assert_eq!(cell.confidence, KeyConfidence::Exact);
+    }
+    assert_eq!(cold.surface.confidence, SurfaceConfidence::Exact);
+
+    // Contrast: Digit1 is still effective on the keyboard layer,
+    // so the game is demonstrably responsive — the inert mouse
+    // cells mean "no pointer input bound", not "dead game".
+    let digit1 = cold
+        .surface
+        .keys
+        .iter()
+        .find(|k| k.key == "Digit1")
+        .expect("Digit1 was probed");
+    assert!(digit1.effect.is_some());
+
+    std::fs::remove_dir_all(&config.cache_dir).unwrap();
+}
+
+/// Position discrimination, the strongest control of the mouse
+/// grid: `takeover_demo_mouse_quadrant` binds clicks ONLY on a UI
+/// node covering the top-left ~45% of the window. With the
+/// DEFAULT 5×4 grid, exactly four cell centers land inside the
+/// quadrant (x ∈ {0.1, 0.3}, y ∈ {0.125, 0.375} → r0c0, r0c1,
+/// r1c0, r1c1); every other cell's click misses the node and must
+/// read inert. The mouse control (window center, (0.5, 0.5)) also
+/// misses — the baseline is a genuinely inert click, so the bound
+/// cells' divergence is attributable to POSITION alone.
+///
+/// This is the fixture that fails a grid which delivers clicks
+/// but cannot resolve WHERE (e.g. a fullscreen-node game passes
+/// position-blind too). Job count: 1 key pair × 2 + 4 key
+/// controls + 20 cells + 2 mouse controls = 28 subprocesses.
+#[test]
+fn mouse_grid_discriminates_cell_positions() {
+    let _slot = common::run_slot();
+    let quadrant = env!("CARGO_BIN_EXE_takeover_demo_mouse_quadrant");
+    let mut config = DiscoveryConfig::new(quadrant);
+    config.plan.candidate_keys = vec!["KeyQ".into()];
+    // DEFAULT 5×4 grid — the geometry assertions below are spelled
+    // against its exact cell centers.
+    config.cache_dir = temp_dir();
+
+    let cold = discover(&config).expect("cold discovery of the quadrant game");
+    assert!(!cold.from_cache);
+
+    assert_eq!(cold.surface.mouse_cells.len(), 20, "default 5 × 4 grid");
+    let bound = |id: &str| {
+        cold.surface
+            .mouse_cells
+            .iter()
+            .find(|c| c.id == id)
+            .unwrap_or_else(|| panic!("cell {id} must be in the surface"))
+    };
+    // Quadrant cells diverge.
+    for id in ["r0c0", "r0c1", "r1c0", "r1c1"] {
+        let cell = bound(id);
+        assert!(
+            cell.effect.is_some(),
+            "cell {id} overlaps the clickable quadrant — its probe must diverge"
+        );
+        assert_eq!(cell.confidence, KeyConfidence::Exact);
+    }
+    // Every other cell is inert AND a trusted negative — the whole
+    // point of this fixture: the grid says WHERE, not just THAT.
+    for cell in &cold.surface.mouse_cells {
+        if ["r0c0", "r0c1", "r1c0", "r1c1"].contains(&cell.id.as_str()) {
+            continue;
+        }
+        assert!(
+            cell.effect.is_none(),
+            "cell {} lies outside the quadrant — its click misses the node and \
+             must match the mouse control trace",
+            cell.id
+        );
+        assert_eq!(
+            cell.confidence,
+            KeyConfidence::Exact,
+            "deterministic game, full coverage: the inert verdict is trusted"
+        );
+    }
+
+    std::fs::remove_dir_all(&config.cache_dir).unwrap();
+}
+
+/// Self-coincidence negative control: a 1×1 grid's sole cell sits at
+/// the window dead center — exactly the mouse control position — so
+/// its probe is byte-identical to its own baseline BY CONSTRUCTION.
+/// Whatever the game binds there (this game binds Digit1-likes only,
+/// making the click inert, but the property is structural), the
+/// cell must come back `Unclassified` with the coincidence note,
+/// never a trusted negative. The mouse analogue of the control-key
+/// self-probe guard. Job count: 1 key pair × 2 + 4 key controls + 1
+/// cell + 2 mouse controls = 9 subprocesses.
+#[test]
+fn mouse_cell_coinciding_with_control_position_is_unclassified() {
+    let _slot = common::run_slot();
+    let mut config = DiscoveryConfig::new(demo_binary());
+    config.plan.candidate_keys = vec!["Digit1".into()];
+    config.plan.mouse_grid_cols = 1;
+    config.plan.mouse_grid_rows = 1;
+    config.cache_dir = temp_dir();
+
+    let cold = discover(&config).expect("cold discovery");
+    assert!(!cold.from_cache);
+
+    assert_eq!(cold.surface.mouse_cells.len(), 1);
+    let cell = &cold.surface.mouse_cells[0];
+    assert_eq!(cell.id, "r0c0");
+    assert_eq!(cell.confidence, KeyConfidence::Unclassified);
+    assert!(cell.effect.is_none());
+    assert!(
+        cold.surface
+            .notes
+            .iter()
+            .any(|n| n.contains("coincides with the mouse control position")),
+        "the coincidence must be surfaced loudly: {:?}",
+        cold.surface.notes
     );
 
     std::fs::remove_dir_all(&config.cache_dir).unwrap();

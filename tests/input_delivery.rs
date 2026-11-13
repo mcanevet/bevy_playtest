@@ -39,7 +39,12 @@
 //! left mines/game_menu-style games totally blind to cursor movement
 //! and clicks. The mouse bots now write both forms. The picking
 //! regression asserts on the full chain: wrapped events → picking's
-//! `PointerInput` → `PointerOver`/`PointerClick` observers firing.
+//! `PointerInput` → `PointerOver`/`PointerClick` observers firing —
+//! and, critically, that those events TARGET the fullscreen probe
+//! node itself. A bare firing count would pass on window-entity
+//! (empty-space) events, which propagate to unfiltered observers
+//! even when UI hit-testing never engages — the trap the quadrant
+//! demo surfaced.
 
 #![cfg(feature = "takeover")]
 
@@ -144,16 +149,31 @@ fn just_pressed_delivery_under_default_plugins_graph() {
 struct PickingProbe {
     pointer_over: u32,
     pointer_click: u32,
+    /// Entities that received each event. Asserted to CONTAIN the
+    /// fullscreen node: bevy_picking targets the WINDOW ENTITY for
+    /// empty-space clicks, so a plain firing count would pass even
+    /// if UI hit-testing never engaged — the exact trap the
+    /// quadrant demo fell into.
+    over_targets: Vec<Entity>,
+    click_targets: Vec<Entity>,
 }
+
+/// Marker for the probe's fullscreen node, so tests can find its
+/// entity without trusting spawn order.
+#[derive(Component)]
+struct ProbeNode;
 
 fn setup_picking_ui(mut commands: Commands) {
     // Fullscreen UI node: any in-window cursor position hovers it.
     // Layout fills the window regardless of its size.
-    commands.spawn((Node {
-        width: Val::Percent(100.0),
-        height: Val::Percent(100.0),
-        ..default()
-    },));
+    commands.spawn((
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            ..default()
+        },
+        ProbeNode,
+    ));
     commands.spawn(Camera2d);
 }
 
@@ -176,19 +196,30 @@ fn wrapping_window_events_reach_picking_in_process() {
     app.add_systems(Startup, setup_picking_ui);
     // Observer for PointerOver: fires whenever the cursor enters a selectable node.
     app.add_observer(
-        |_trigger: On<PointerOver>, mut probe: ResMut<PickingProbe>| {
+        |trigger: On<PointerOver>, mut probe: ResMut<PickingProbe>| {
             probe.pointer_over += 1;
+            probe.over_targets.push(trigger.entity);
         },
     );
     // Observer for PointerClick: fires on any pointer click.
     app.add_observer(
-        |_trigger: On<PointerClick>, mut probe: ResMut<PickingProbe>| {
+        |trigger: On<PointerClick>, mut probe: ResMut<PickingProbe>| {
             probe.pointer_click += 1;
+            probe.click_targets.push(trigger.entity);
         },
     );
 
     let report = run_scenario(&mut app, &scenario).expect("run completes");
 
+    // Resolve the probe node's entity FIRST (needs &mut World for
+    // queries) — subsequent assertions borrow `app` immutably.
+    let node = {
+        let world = app.world_mut();
+        world
+            .query_filtered::<Entity, With<ProbeNode>>()
+            .single(world)
+            .expect("probe node exists")
+    };
     let probe = app.world().resource::<PickingProbe>();
     assert!(
         probe.pointer_over > 0,
@@ -203,6 +234,26 @@ fn wrapping_window_events_reach_picking_in_process() {
          PointerClick never fired (probe: {probe:?}). Raw MouseButtonInput alone is \
          insufficient — bevy_picking consumes `WindowEvent::MouseButtonInput`.",
         report.metrics.input_count
+    );
+    // The events must actually TARGET the UI node — not merely fire
+    // (empty-space clicks target the window entity and would satisfy
+    // a plain count).
+    assert!(
+        probe.over_targets.contains(&node),
+        "picking fired {} PointerOver events but NONE targeted the fullscreen \
+         UI node (targets: {:?}) — hit-testing never engaged; the bot's \
+         cursor positions may be off-window or the UI backend is blind.",
+        probe.pointer_over,
+        probe.over_targets
+    );
+    assert!(
+        probe.click_targets.contains(&node),
+        "picking fired {} PointerClick events but NONE targeted the fullscreen \
+         UI node (targets: {:?}) — clicks are landing on the window entity \
+         (empty-space path), so games binding clicks to UI nodes would see \
+         nothing.",
+        probe.pointer_click,
+        probe.click_targets
     );
 }
 
@@ -234,18 +285,29 @@ fn scripted_clicks_reach_picking_in_process() {
     app.insert_resource(PickingProbe::default());
     app.add_systems(Startup, setup_picking_ui);
     app.add_observer(
-        |_trigger: On<PointerOver>, mut probe: ResMut<PickingProbe>| {
+        |trigger: On<PointerOver>, mut probe: ResMut<PickingProbe>| {
             probe.pointer_over += 1;
+            probe.over_targets.push(trigger.entity);
         },
     );
     app.add_observer(
-        |_trigger: On<PointerClick>, mut probe: ResMut<PickingProbe>| {
+        |trigger: On<PointerClick>, mut probe: ResMut<PickingProbe>| {
             probe.pointer_click += 1;
+            probe.click_targets.push(trigger.entity);
         },
     );
 
     let report = run_scenario(&mut app, &scenario).expect("run completes");
 
+    // Resolve the probe node's entity FIRST (needs &mut World for
+    // queries) — subsequent assertions borrow `app` immutably.
+    let node = {
+        let world = app.world_mut();
+        world
+            .query_filtered::<Entity, With<ProbeNode>>()
+            .single(world)
+            .expect("probe node exists")
+    };
     let probe = app.world().resource::<PickingProbe>();
     assert!(
         probe.pointer_over > 0,
@@ -260,6 +322,25 @@ fn scripted_clicks_reach_picking_in_process() {
          PointerClick never fired (probe: {probe:?}) — scripted_mouse_system must \
          emit wrapped WindowEvent::MouseButtonInput.",
         report.metrics.input_count
+    );
+    // Same strengthening as the chaos test: events must TARGET the
+    // fullscreen node, not merely fire somewhere (empty-space clicks
+    // target the window entity).
+    assert!(
+        probe.over_targets.contains(&node),
+        "scripted clicks produced {} PointerOver events but NONE targeted the \
+         fullscreen UI node (targets: {:?}) — the scripted cursor positions \
+         are not being hit-tested.",
+        probe.pointer_over,
+        probe.over_targets
+    );
+    assert!(
+        probe.click_targets.contains(&node),
+        "scripted clicks produced {} PointerClick events but NONE targeted the \
+         fullscreen UI node (targets: {:?}) — clicks land on the window entity \
+         (empty-space path), so UI-bound games see nothing.",
+        probe.pointer_click,
+        probe.click_targets
     );
 }
 

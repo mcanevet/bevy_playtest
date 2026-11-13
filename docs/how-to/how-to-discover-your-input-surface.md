@@ -17,7 +17,8 @@ report (`discovered_surface`), and any frozen-world finding gains a
 BEVY_PLAYTEST_DISCOVER=1 cargo test --test playtest -- --nocapture
 ```
 
-The first discovery costs ~40s (the full candidate matrix runs 6–8
+The first discovery costs ~55s (the full candidate matrix plus the
+default 20-cell mouse grid runs 6–8
 subprocesses in parallel); the result is cached under
 `.bevy_playtest/cache/` keyed by the game binary, the harness
 version, the active features, and the probe plan, so subsequent runs
@@ -83,6 +84,27 @@ never-probed group-completion siblings and the control key are
 visible in `discovered_surface.keys` but excluded from the count, so
 the denominator never overstates what the matrix actually tapped.
 
+When the mouse grid is enabled (the default), the block also carries
+`mouse_cells` — one entry per grid cell (default 5 × 4), each naming
+the cell (`"r2c3"`), its normalized window position (0.0–1.0 cell
+center), the observed `effect` of a left click there (diffed against
+a click-only control run — `null` if the click did nothing), and a
+confidence. `null` with `Exact` confidence is a trusted negative
+("no pointer input bound here"); `Unclassified` means no differential
+verdict was possible (vacuous or coverage-short pair). A keyboard-only
+game reports every cell inert; a pointer-driven game shows effects
+where clicks bind. The grid can be disabled with a `0 × 0` plan
+(library callers) or read straight out of any draft artifact's
+`surface` block.
+
+One assumption to know about: cell clicks land at normalized
+positions scaled by a fixed assumed window size (1280 × 720 logical
+pixels — Bevy's default). If your game overrides its window
+resolution, adjust the plan's `mouse_click_extent_w_px`/
+`mouse_click_extent_h_px` to match, or cell effects will be probed
+against the wrong geometry (see the explanation doc's Mouse Grid
+Probing section for details).
+
 That is the diagnostic payoff: a frozen world where several keys
 provably move things looks very different from one where nothing in
 the probed set does.
@@ -111,8 +133,9 @@ Rules worth knowing:
   never injected into, whether or not it declares its own
   `raw_surface`. Injection targets only the zero-config battery
   run.
-- **Mouse chaos is untouched** — the MVP probe matrix is
-  keyboard-only, so the injected scenario keeps default mouse
+- **Mouse chaos is untouched** — the probe matrix discovers click
+  POSITIONS (a bounded grid, reported as `mouse_cells`), not mouse
+  buttons or motion, so the injected scenario keeps default mouse
   buttons; discovery never licenses disabling them.
 - A game that consumes no probed keys gets an empty injected key
   list (mouse-only chaos) — honest, not vacuous.
@@ -174,9 +197,12 @@ for finding in &outcome.surface.keys {
 
 ## Limits (MVP, by design)
 
-- **Keyboard only, tap only.** The candidate set is ~26 prior-likely
-  keys; mouse/gamepad/wheel are future probe classes. The keyboard
-  class is never pruned (fail-open).
+- **Keyboard keys + mouse positions, tap only.** The candidate set is
+  ~26 prior-likely keys plus a bounded grid of click positions
+  (default 5 × 4, probed as single left-clicks at cell centers and
+  reported in `mouse_cells` with normalized coordinates);
+  mouse buttons/motion, gamepad and wheel are future probe classes.
+  The keyboard class is never pruned (fail-open).
 - **Two probe points.** Readiness and mid-duration. A key consumed
   only in a state neither point samples reads as inert — group
   completion catches the near-universal movement clusters; anything

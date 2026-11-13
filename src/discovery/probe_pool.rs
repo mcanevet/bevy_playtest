@@ -61,7 +61,7 @@ use crate::plugin::{ENV_REPORT, ENV_SCENARIO};
 use crate::scenario::Scenario;
 use crate::state::PlaytestReport;
 
-use super::probe_scenarios::{ProbePlan, ProbePoint};
+use super::probe_scenarios::{MouseCell, ProbePlan, ProbePoint};
 
 /// Default concurrency: 8 processes (upper bound of the design doc's
 /// 6–8 range; each process is bounded by its scenario duration).
@@ -96,8 +96,9 @@ pub struct ProbeJob {
     pub export_scan: bool,
 }
 
-/// What a [`ProbeJob`] is.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// What a [`ProbeJob`] is. (Not `Eq`: mouse cells carry `f32`
+/// normalized coordinates.)
+#[derive(Clone, Debug, PartialEq)]
 pub enum ProbeJobKind {
     /// Probing this candidate key at this point.
     Probe { key: String, point: ProbePoint },
@@ -105,6 +106,18 @@ pub enum ProbeJobKind {
     /// discovery flow — the pair of identical reports is the
     /// determinism gate.
     Control { point: ProbePoint },
+    /// Mouse grid probe: one scripted left click at this cell's
+    /// center, at the readiness probe point's frame (mouse cells are
+    /// probed at ONE point — the MVP asks whether the game reacts to
+    /// a click at all, not when). Separate variant from key probes:
+    /// aggregation keys key baselines by `point.label`, and a mouse
+    /// click must never be able to collide with a key-probe label.
+    MouseCell { cell: MouseCell, point: ProbePoint },
+    /// Normalized mouse control run (a click at the plan's control
+    /// position, readiness frame). Scheduled TWICE like key controls
+    /// — the identical pair is the mouse matrix's determinism gate,
+    /// and the first copy is the per-cell diff baseline.
+    MouseControl { point: ProbePoint },
 }
 
 /// Outcome of one executed job.
@@ -381,6 +394,46 @@ pub fn build_job_list(plan: &ProbePlan) -> Result<Vec<ProbeJob>, ProbeError> {
             export_scan: false,
         });
     }
+    // Mouse matrix, appended AFTER the key jobs so the job indices —
+    // and thus the scenario/report staging filenames — of the key
+    // matrix stay byte-stable across grid changes (cache-friendly
+    // diffs, readable workspaces). Cell probes first (row-major,
+    // plan order), then the control TWICE (determinism gate; first
+    // copy is the per-cell diff baseline). A disabled grid (0×0)
+    // contributes nothing here.
+    let mouse_cells = plan.mouse_cells();
+    if !mouse_cells.is_empty() {
+        let readiness = plan
+            .points()
+            .map_err(|e| ProbeError::Plan(e.to_string()))?
+            .into_iter()
+            .next()
+            .expect("points() returns [readiness, mid]");
+        for cell in mouse_cells {
+            jobs.push(ProbeJob {
+                scenario: plan
+                    .mouse_cell_scenario(&cell)
+                    .map_err(|e| ProbeError::Plan(e.to_string()))?,
+                kind: ProbeJobKind::MouseCell {
+                    cell,
+                    point: readiness,
+                },
+                expected_last_frame,
+                export_scan: false,
+            });
+        }
+        let control_scenario = plan
+            .mouse_control_scenario()
+            .map_err(|e| ProbeError::Plan(e.to_string()))?;
+        for _ in 0..2 {
+            jobs.push(ProbeJob {
+                scenario: control_scenario.clone(),
+                kind: ProbeJobKind::MouseControl { point: readiness },
+                expected_last_frame,
+                export_scan: false,
+            });
+        }
+    }
     Ok(jobs)
 }
 
@@ -598,6 +651,11 @@ fn execute_job(
     let point_frame = match &job.kind {
         ProbeJobKind::Probe { point, .. } => point.frame,
         ProbeJobKind::Control { point } => point.frame,
+        // Mouse jobs deliver their click at the readiness point's
+        // frame (same Update→PreUpdate delivery lag as key taps, so
+        // the same strictly-after coverage gate applies verbatim).
+        ProbeJobKind::MouseCell { point, .. } => point.frame,
+        ProbeJobKind::MouseControl { point } => point.frame,
     };
     let has_post_tap_coverage = report.state_digest.iter().any(|d| d.frame > point_frame);
     if !has_post_tap_coverage
