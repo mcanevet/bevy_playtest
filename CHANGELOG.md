@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/mcanevet/bevy_playtest/compare/v0.8.0...v0.9.0) - 2026-11-14
+
+### Added
+
+- *(takeover)* mouse-motion parity and probing for input-surface discovery
+- *(discovery)* mouse-grid probing for input-surface discovery
+
+### Other
+
+- ci Update Rust to v1.100.0
+- ci Update dependency rust to 1.100
+- single source of truth for toolchain version
+
 ## [0.8.0](https://github.com/mcanevet/bevy_playtest/compare/v0.7.0...v0.8.0) - 2026-11-12
 
 ### Added
