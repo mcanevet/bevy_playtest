@@ -187,16 +187,32 @@ section, declared-but-dead wiring alarms, everything honest stays a
 note. See [declare your actions with Leafwing Input
 Manager](docs/how-to/declare-actions-leafwing.md).
 
+With no flags at all, the battery parent runs a milliseconds-cost
+source scan: it collects every `KeyCode::` variant the game's own
+sources mention and layers those keys onto the default
+WASD+arrows chaos surface (poison keys like `Escape`/`Tab`
+filtered, capped, all decisions reported). A game whose bindings
+sit outside WASD+arrows therefore plays correctly out of the
+box — the widened run records `source_derived_keys` on its
+report, and the frozen-bot false positive the injection flag
+existed to fix no longer happens by default.
+`BEVY_PLAYTEST_SOURCE_SCAN_DISABLE=1` restores the blind
+default, and `BEVY_PLAYTEST_SOURCE_ROOT` points the scan at a
+non-standard source root. See [input-surface
+discovery](docs/explanation/input-surface-discovery.md).
+
 Discovery can also aim the battery itself: with
 `BEVY_PLAYTEST_DISCOVER_INJECT=1` the parent discovers the surface
 first and — when the scenario declares no key surface of its own
 (the zero-config battery run) — drives the game with an injected
 scenario whose chaos bot samples exactly the discovered effective
 keys, recording them as `injected_surface_keys` on the report. An
-authored scenario file always wins (declaration beats inference).
-Without it, a game whose bindings sit outside the default
-WASD+arrows chaos set reads as frozen even though the bot is
-healthy — it is just pressing keys the game ignores.
+authored scenario file always wins (declaration beats inference),
+and an injected surface replaces the source scan's candidates
+with measured truth. Injection is the escalation path when the
+scan's candidates are wrong or insufficient: keys mentioned in
+code but inert in practice, or pointer-only surfaces a keyboard
+scan cannot see.
 
 ## How in-process takeover works
 

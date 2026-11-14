@@ -182,7 +182,100 @@ On the motivating fixture the effect is decisive: the bot plays
 the game (periodic Digit1/Digit2 level reloads keep
 `Changed<Transform>` flowing well within the liveness budget) and
 the run goes clean for the full duration where the undiscovered
-battery pinned a `frozen_world` finding at frame ~521.
+battery pinned a `frozen_world` finding at frame ~521. With the
+source-derived tier (next section), the undecorated battery goes
+clean on that fixture too — injection remains for the cases the
+scan cannot solve: keys whose mention is guarded away (inert in
+practice), and pointer-only surfaces the text scan cannot see at
+all.
+
+## The Source-Derived Tier (Out-of-the-Box Surface Widening)
+
+Injection needs a `BEVY_PLAYTEST_*` flag and a ~55s probe matrix.
+Most games need neither: their own sources already say which keys
+they read. The source-derived tier is a milliseconds-cost text
+pass over the game's Rust sources collecting every `KeyCode::`
+variant token the code mentions (`discovery::source_scan`), and
+layering those keys into the default chaos surface — out of the
+box, before any probing and without authoring a scenario.
+
+**Candidate extractor, never a truth source.** "The code mentions
+`KeyE`" earns a key a place in the chaos LIST (where a wrong guess
+costs one inert keypress), and nothing more. Key→meaning mapping
+appears nowhere in the scan; semantics stay discovery's behavioral
+job. Today the scan layers candidates into the battery's default
+surface only; emitting them as schema entries with
+`ProvenanceGrade::SourceCited` and `Evidence::SourceRef { file,
+line, enclosing }` evidence is the planned next step (the schema
+IR and the scan's hit records are already shaped for each other).
+
+**Layering contract** (`layered_chaos_keys`):
+
+- the WASD/arrows backbone always stays (liveness economics:
+  movement keys reward repetition, so the layered default keeps
+  depth where it pays);
+- a short POISON list (`Escape`, `Tab`) is removed — the two keys
+  a blind chaos bot can use to derail the run into a different
+  context (pause menu, focus cycling), converting the remaining
+  coverage into menu coverage;
+- extras cap at 24: the battery's ~200 chaos presses (20 s at
+  10 Hz input rate) spread
+  thinner as the surface grows, so most-referenced keys win
+  (then alphabetical, deterministic), and the drop is recorded
+  as a note — refusal over silence: every filtering decision
+  (unsupported variants like `F1`/`Numpad*`, unreadable files,
+  poison drops) is reported, never guessed at.
+
+**Precedence** (same shape as injection, one tier below):
+
+1. an authored scenario file always wins (declaration beats
+   inference);
+2. a discovery-INJECTED surface wins (measured truth replaces
+   candidates — the scan is skipped for injected runs);
+3. the source scan widens the default — only for the built-in
+   battery literal (an undeclared surface);
+4. the blind WASD+arrows backbone stands when nothing above
+   applies.
+
+**Root resolution, zero-config:** the battery parent IS the
+game's own test process, so its runtime `CARGO_MANIFEST_DIR` is
+the game crate directory — no configuration needed.
+`BEVY_PLAYTEST_SOURCE_ROOT` names a different root explicitly
+(an empty value disables). Self-skip: when the parent is
+bevy_playtest testing itself, no scan runs (otherwise every
+harness self-test battery would layer its own demo keys).
+`BEVY_PLAYTEST_SOURCE_SCAN_DISABLE=1` is the off switch —
+reproducing the old blind-default behavior exactly.
+
+**Honest reporting.** The widened run carries
+`source_derived_keys` on its report (the FULL layered surface,
+backbone + extras) plus `source_derived_notes` (the scan's
+provenance and filtering decisions — poison drops, cap drops,
+unreadable files) — stamped only when the scan actually widened
+beyond the backbone; `None` means no layering happened, not "the
+scan found nothing" (a scan yielding only backbone keys leaves
+the default unchanged and stays unrecorded, since the outcome
+equals the old default).
+
+**Fail-open by construction.** A missing root, an unreadable
+file, a non-UTF-8 source — each degrades to fewer hits, never an
+error: the layered default falls back to the backbone, which is
+exactly what existed before the scan.
+
+**The headline claim, tested e2e** (`tests/discovery_flow.rs`):
+the loading_screen-shaped demo (world moves only on `Digit1`)
+runs the built-in battery with no discovery variables set — the
+scan finds `KeyCode::Digit1` in its source, the bot presses it,
+the world awakens, and the run goes clean where the blind default
+pinned a `frozen_world` finding. Zero config, zero scenarios,
+zero probes.
+
+**What the scan cannot do:** it sees only what the game's code
+mentions — a key guarded away in practice (mentioned but
+context-inert) still gets layered and presses inertly (harmless:
+one wasted press), and a pointer-only surface (`game_menu`)
+gains nothing from a keyboard scan. Those remain discovery's and
+the mouse-region follow-up's jobs respectively.
 
 ## Static Scan: Annotation + Conservative Pruning Only
 

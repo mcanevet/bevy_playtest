@@ -42,6 +42,7 @@ pub mod lw;
 pub mod probe_pool;
 pub mod probe_scenarios;
 pub mod provenance;
+pub mod source_scan;
 pub mod static_scan;
 pub mod suggestions;
 pub mod surface;
