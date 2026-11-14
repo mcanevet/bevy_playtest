@@ -26,7 +26,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
-          toolchain: "1.99"
+          toolchain: "1.100"
       - name: Install Linux dependencies
         # semver-checks / cargo doc build wayland-sys, which needs
         # pkg-config + libwayland-dev to compile.
@@ -64,7 +64,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
-          toolchain: "1.99"
+          toolchain: "1.100"
       - name: Install Linux dependencies
         # semver-checks / cargo doc build wayland-sys, which needs
         # pkg-config + libwayland-dev to compile.
