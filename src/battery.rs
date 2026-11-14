@@ -48,11 +48,20 @@
 //! plugin lines are cfg'd out and zero playtest bytes ship.
 
 use crate::discovery::flow;
+use crate::discovery::source_scan;
 use crate::plugin::ENV_REPORT;
 use crate::plugin::ENV_SCENARIO;
+use crate::scenario::BACKBONE_KEYS;
 use crate::state::PlaytestReport;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
+
+/// [`BACKBONE_KEYS`] as an owned `Vec<String>` for equality checks
+/// against the layered surface (allocation is fine — battery
+/// parents run once per test).
+fn backbone_keys_vec() -> Vec<String> {
+    BACKBONE_KEYS.iter().map(|s| s.to_string()).collect()
+}
 
 /// Scenario selector for [`run`]: the built-in default battery
 /// (zero-config battery run — chaos bot, all oracles, generous
@@ -431,6 +440,52 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
         injected_keys = Some(keys);
     }
 
+    // Source-derived surface layering (D1.5 slice 5, parent-side).
+    // Same precedence shape as injection above, one tier below:
+    // an authored scenario file always wins (declaration beats
+    // inference), and so does an INJECTED surface — the source scan
+    // is the out-of-the-box UPGRADE of the blind default, not a
+    // competitor with measured truth. Applicability mirrors
+    // injection's: only the built-in battery literal (a scenario
+    // file may declare its own surface, and injected keys already
+    // encode verified evidence).
+    //
+    // Cost: milliseconds (a text pass over the game's `src/`),
+    // paid per battery run — no probing, no game execution beyond
+    // the run itself. Provenance: report.source_derived_keys +
+    // report.source_derived_notes today; emitting schema entries
+    // with `ProvenanceGrade::SourceCited` evidence is the planned
+    // next step (the scan's hit records already carry file:line).
+    let mut source_layered: Option<crate::discovery::source_scan::LayeredKeys> = None;
+    if scenario_arg == BUILTIN_BATTERY && !flow::inject_requested() && !source_scan::scan_disabled()
+    {
+        if let Some(root) = source_scan::scan_root_from_env() {
+            let result = source_scan::scan_from_root(&root);
+            let layered = source_scan::layered_chaos_keys(&result);
+            if layered.keys != backbone_keys_vec() {
+                // The scan widened the default: rewrite the
+                // scenario the child receives, same pattern as
+                // injection (the parent writes a variant file).
+                let mut scenario = crate::plugin::battery_scenario().map_err(|e| {
+                    BatteryError::Spawn(format!("source-layered battery scenario: {e}"))
+                })?;
+                scenario.bot.raw_surface = Some(crate::scenario::RawSurface {
+                    keys: layered.keys.clone(),
+                    ..Default::default()
+                });
+                let layered_path = dir.join("scenario.source_layered.json");
+                let json = serde_json::to_string_pretty(&scenario).map_err(|e| {
+                    BatteryError::Spawn(format!("serialize source-layered scenario: {e}"))
+                })?;
+                std::fs::write(&layered_path, json).map_err(|e| {
+                    BatteryError::Spawn(format!("write source-layered scenario: {e}"))
+                })?;
+                scenario_arg = layered_path.to_string_lossy().into_owned();
+                source_layered = Some(layered);
+            }
+        }
+    }
+
     let mut cmd = std::process::Command::new(&config.binary);
     // Isolate the run from the developer's shell FIRST. The takeover
     // REJECTS unknown BEVY_PLAYTEST_* variables (strict env contract),
@@ -563,6 +618,13 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
         report.injected_surface_keys = injected_keys;
         report.discovered_surface = Some(surface);
         report.annotate_frozen_world_with_surface();
+    }
+    // Source-scan honesty field: stamped whenever the parent layered
+    // scan-derived keys onto the run's surface (independent of
+    // discovery). Records the FULL layered list.
+    if let Some(layered) = source_layered {
+        report.source_derived_keys = Some(layered.keys);
+        report.source_derived_notes = Some(layered.notes);
     }
     Ok(report)
 }

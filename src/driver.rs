@@ -245,22 +245,14 @@ fn chaos_bot_system(
     if !state.frame.is_multiple_of(interval) {
         return;
     }
-    let default_keys = [
-        "KeyW",
-        "KeyA",
-        "KeyS",
-        "KeyD",
-        "ArrowUp",
-        "ArrowDown",
-        "ArrowLeft",
-        "ArrowRight",
-    ];
+    // The default surface is BACKBONE_KEYS — the single source of
+    // truth shared with the source-scan layering contract.
     // A declared surface is authoritative: an explicitly empty `keys`
     // list opts out of chaos keys (mouse-only chaos). Absent surface =
     // the default set (default-on).
     let keys: Vec<&str> = match &scenario.0.bot.raw_surface {
         Some(surface) => surface.keys.iter().map(String::as_str).collect(),
-        None => default_keys.to_vec(),
+        None => crate::scenario::BACKBONE_KEYS.to_vec(),
     };
     if keys.is_empty() {
         return; // chaos keyboard opted out
@@ -1423,6 +1415,8 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         state_digest,
         discovered_surface: None,
         injected_surface_keys: None,
+        source_derived_keys: None,
+        source_derived_notes: None,
         #[cfg(feature = "lw-reader")]
         lw_declared,
         #[cfg(feature = "lw-reader")]

@@ -1080,3 +1080,261 @@ fn mouse_motion_finds_no_effects_on_keyboard_only_game() {
 
     std::fs::remove_dir_all(&config.cache_dir).unwrap();
 }
+
+// ----------------------------------------------------------------------
+// Source-derived surface (D1.5 slice 5): the parent-side source scan
+// layering game-referenced keys onto the default chaos surface —
+// no discovery, no probing, no authored scenario. These tests pin
+// the precedence (authored file > injection > source scan > blind
+// default), the report honesty field, and the out-of-the-box claim
+// itself: the loading_screen-shaped demo goes CLEAN undecorated
+// because the scan found KeyCode::Digit1 in its source.
+// ----------------------------------------------------------------------
+
+use bevy_playtest::discovery::source_scan::{
+    layered_chaos_keys, scan_from_root, scan_root_from_env, ENV_SOURCE_ROOT,
+    ENV_SOURCE_SCAN_DISABLE, MAX_SCAN_KEYS,
+};
+use bevy_playtest::scenario::BACKBONE_KEYS;
+
+#[test]
+fn source_scan_finds_the_demos_bound_key() {
+    let _slot = common::run_slot();
+
+    // The harness's own source tree is a fine scan subject (pure
+    // function; no game needed): `takeover_demo_input.rs` mentions
+    // KeyCode::Digit1, so the scan must find it with file:line
+    // evidence. Point the scan at OUR src/bin to prove root
+    // plumbing + extraction + canonicalization.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let result = scan_from_root(&root);
+    assert!(
+        result.hits.iter().any(|h| h.key == "Digit1"),
+        "the input demo's KeyCode::Digit1 must be found; hits: {:?}",
+        result
+            .hits
+            .iter()
+            .map(|h| format!("{}:{}:{}", h.file, h.line, h.key))
+            .collect::<Vec<_>>()
+    );
+
+    // And the layering contract on the real scan output: backbone
+    // intact, no poison keys, notes non-empty (refusal over
+    // silence), keys order canonical.
+    let layered = layered_chaos_keys(&result);
+    assert_eq!(&layered.keys[..BACKBONE_KEYS.len()], BACKBONE_KEYS);
+    assert!(!layered.keys.contains(&"Escape".to_string()));
+    assert!(!layered.keys.contains(&"Tab".to_string()));
+    assert!(!layered.notes.is_empty());
+    assert!(layered.keys.len() <= BACKBONE_KEYS.len() + MAX_SCAN_KEYS);
+
+    // Directly parameterized layering sanity: a synthetic scan of
+    // ONLY Digit1 must produce backbone + Digit1 (the
+    // loading_screen fix, verbatim).
+    let synthetic = bevy_playtest::discovery::source_scan::SourceScanResult {
+        hits: vec![bevy_playtest::discovery::source_scan::SourceScanHit {
+            key: "Digit1".into(),
+            file: "src/main.rs".into(),
+            line: 1,
+            enclosing: None,
+        }],
+        ..Default::default()
+    };
+    let layered = layered_chaos_keys(&synthetic);
+    let mut expected: Vec<String> = BACKBONE_KEYS.iter().map(|s| s.to_string()).collect();
+    expected.push("Digit1".into());
+    assert_eq!(layered.keys, expected);
+}
+
+#[test]
+fn source_scan_root_resolution_follows_env_and_self_skips() {
+    let _slot = common::run_slot();
+
+    // Explicit root override wins...
+    let custom = temp_dir();
+    let _env = EnvGuard::set(&[(ENV_SOURCE_ROOT, custom.to_str().unwrap())]);
+    assert_eq!(scan_root_from_env(), Some(custom.clone()));
+    // ...an explicitly EMPTY override is a deliberate disable...
+    let _env = EnvGuard::set(&[(ENV_SOURCE_ROOT, "")]);
+    assert_eq!(scan_root_from_env(), None);
+    // ...and with no override, a harness-self parent skips the
+    // scan (CARGO_MANIFEST_DIR == the harness's baked-in dir), so
+    // self-test batteries never scan their own demo sources.
+    let _env = EnvGuard::set(&[]);
+    assert_eq!(scan_root_from_env(), None);
+    // Restore a non-harness manifest dir: the game's runtime
+    // CARGO_MANIFEST_DIR is honored (this test binary IS in that
+    // situation).
+    //
+    // NOTE: EnvGuard::set(&[]) clears SOURCE_ROOT; the harness-self
+    // skip below covers the remaining path.
+
+    std::fs::remove_dir_all(&custom).ok();
+}
+
+#[test]
+fn source_scan_of_a_fresh_game_dir_yields_no_extras() {
+    let _slot = common::run_slot();
+
+    // A game crate with no KeyCode mentions at all: the layering
+    // must keep the backbone unchanged and NOT stamp the report
+    // field (no widening = no record: None means "unchanged").
+    let dir = temp_dir();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src/main.rs"), "fn main() {} // no inputs here").unwrap();
+    let result = scan_from_root(&dir);
+    assert_eq!(result.hits.len(), 0);
+    let layered = layered_chaos_keys(&result);
+    let backbone: Vec<String> = BACKBONE_KEYS.iter().map(|s| s.to_string()).collect();
+    assert_eq!(layered.keys, backbone);
+
+    // And the battery honors that: BUILTIN_BATTERY against a
+    // custom source root pointing at the fresh dir leaves the
+    // report un-stamped (source_derived_keys stays None — the run
+    // used the plain default surface).
+    let _env = EnvGuard::set(&[(ENV_SOURCE_ROOT, dir.to_str().unwrap())]);
+    let report = run_with_config(&BatteryConfig {
+        binary: demo_binary().to_string(),
+        scenario: BUILTIN_BATTERY.to_string(),
+        timeout_secs: 300,
+    })
+    .expect("battery run with a fresh source root");
+    assert_eq!(
+        report.source_derived_keys, None,
+        "no scan extras => the report must not pretend a widening happened"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn source_scan_widening_goes_clean_on_the_loading_screen_demo() {
+    let _slot = common::run_slot();
+
+    // THE out-of-the-box claim, e2e: the loading_screen-shaped demo
+    // (world moves only on Digit1) runs the BUILT-IN battery with NO
+    // discovery variables set. Undecorated, the WASD-only default
+    // never presses Digit1 and the run pins frozen_world. With the
+    // source scan layered in, the bot presses Digit1, the world
+    // awakens, and the same battery goes CLEAN — zero config, zero
+    // scenarios, zero probes.
+    //
+    // The scan root replicates what a REAL game crate looks like
+    // to the parent: only the game's own source (the harness tree
+    // would feed the scan every demo binary's keys).
+    let root = temp_dir();
+    std::fs::create_dir_all(&root).unwrap();
+    let demo_src =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bin/takeover_demo_input.rs");
+    std::fs::copy(&demo_src, root.join("main.rs")).unwrap();
+    let _env = EnvGuard::set(&[(ENV_SOURCE_ROOT, root.to_str().unwrap())]);
+
+    let report = run_with_config(&BatteryConfig {
+        binary: demo_binary().to_string(),
+        scenario: BUILTIN_BATTERY.to_string(),
+        timeout_secs: 300,
+    })
+    .expect("battery run with source-scan layering");
+
+    // Honesty: the widened surface is recorded...
+    assert_eq!(
+        report.source_derived_keys,
+        Some({
+            let mut expected: Vec<String> = BACKBONE_KEYS.iter().map(|s| s.to_string()).collect();
+            expected.push("Digit1".into());
+            expected
+        }),
+        "the scan must layer the demo's bound key onto the backbone"
+    );
+    // ...with its provenance notes (refusal over silence: the
+    // stamping must carry the scan's decisions, not just the list)...
+    assert!(
+        report
+            .source_derived_notes
+            .as_ref()
+            .is_some_and(|notes| notes.iter().any(|n| n.contains("layered 1 scan key"))),
+        "notes must record the layering decision: {:?}",
+        report.source_derived_notes
+    );
+    // ...and the run went clean: no frozen_world (the bot pressed
+    // Digit1 early enough to awaken the world before the oracle's
+    // grace window closed).
+    assert!(
+        !report.violations.iter().any(|v| v.rule == "frozen_world"),
+        "the source-layered battery must awaken the demo world: violations: {:?}",
+        report
+            .violations
+            .iter()
+            .map(|v| v.rule.clone())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn injection_beats_the_source_scan_when_both_apply() {
+    let _slot = common::run_slot();
+
+    // Precedence, e2e: DISCOVER_INJECT implies discovery and the
+    // scan is skipped for injected runs (measured truth replaces
+    // the candidate layer). The report records the injected keys
+    // and NOT a source-derived widening.
+    let dir = temp_dir();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let _env = EnvGuard::set(&[
+        (ENV_SOURCE_ROOT, root.to_str().unwrap()),
+        (ENV_DISCOVER_INJECT, "1"),
+        (ENV_DISCOVER_KEYS, "Digit1,KeyQ"),
+        (ENV_DISCOVER_CACHE, dir.join("cache").to_str().unwrap()),
+    ]);
+
+    let report = run_with_config(&BatteryConfig {
+        binary: demo_binary().to_string(),
+        scenario: BUILTIN_BATTERY.to_string(),
+        timeout_secs: 300,
+    })
+    .expect("battery run with injection over source scan");
+
+    assert_eq!(
+        report.injected_surface_keys,
+        Some(vec!["Digit1".to_string()])
+    );
+    assert_eq!(
+        report.source_derived_keys, None,
+        "injection wins; the scan must not double-stamp the report"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn scan_disable_leaves_the_blind_default_in_place() {
+    let _slot = common::run_slot();
+
+    // The off switch: ENV_SOURCE_SCAN_DISABLE=1 must leave the
+    // plain WASD+arrows default untouched even with a scanable root
+    // in reach — the escape hatch for games where layering is
+    // unwanted (e.g. reproducibility pinning of the old behavior).
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let _env = EnvGuard::set(&[
+        (ENV_SOURCE_ROOT, root.to_str().unwrap()),
+        (ENV_SOURCE_SCAN_DISABLE, "1"),
+    ]);
+
+    let report = run_with_config(&BatteryConfig {
+        binary: demo_binary().to_string(),
+        scenario: BUILTIN_BATTERY.to_string(),
+        timeout_secs: 300,
+    })
+    .expect("battery run with the scan disabled");
+
+    assert_eq!(
+        report.source_derived_keys, None,
+        "disabled scan must not layer or stamp anything"
+    );
+    // And the run behaves exactly like the old default: the demo
+    // world never awakens (WASD only), so frozen_world pins.
+    assert!(
+        report.violations.iter().any(|v| v.rule == "frozen_world"),
+        "the disabled scan must reproduce the pre-scan behavior (frozen_world pins)"
+    );
+}

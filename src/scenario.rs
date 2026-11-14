@@ -224,19 +224,27 @@ fn default_mouse_buttons() -> Vec<String> {
     vec!["Left".into(), "Right".into(), "Middle".into()]
 }
 
+/// The default chaos keyboard backbone: WASD + arrows. Movement keys
+/// reward repetition (position integration compounds), so the
+/// source-derived layered default keeps this backbone alongside
+/// game-specific scan hits. Single source of truth for the runtime
+/// default surface, the driver's inline default, and
+/// [`crate::discovery::source_scan::layered_chaos_keys`].
+pub const BACKBONE_KEYS: &[&str] = &[
+    "KeyW",
+    "KeyA",
+    "KeyS",
+    "KeyD",
+    "ArrowUp",
+    "ArrowDown",
+    "ArrowLeft",
+    "ArrowRight",
+];
+
 /// Default chaos keyboard surface: WASD + arrows (kept in lockstep with
 /// the runtime default).
 fn default_surface_keys() -> Vec<String> {
-    vec![
-        "KeyW".into(),
-        "KeyA".into(),
-        "KeyS".into(),
-        "KeyD".into(),
-        "ArrowUp".into(),
-        "ArrowDown".into(),
-        "ArrowLeft".into(),
-        "ArrowRight".into(),
-    ]
+    BACKBONE_KEYS.iter().map(|s| s.to_string()).collect()
 }
 
 impl Default for RawSurface {

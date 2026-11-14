@@ -128,7 +128,11 @@ its grade:
   pressed-never-fired) alarms
   `declared_but_dead` and nothing else ever does.
 - `SourceRef { file, line, enclosing }` — the mechanically-checkable
-  citation format.
+  citation format. Reserved for the source-derived tier
+  (`discovery::source_scan`): the scan already collects its hits in
+  exactly this shape (file, line, enclosing item), but no producer
+  emits `SourceRef`-backed entries yet — the planned wiring turns
+  scan hits into schema entries.
 - `DeclaredIn { source_kind }` — e.g. `"leafwing_input_map"`.
 
 ## Discovery findings

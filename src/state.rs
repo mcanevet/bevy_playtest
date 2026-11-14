@@ -149,6 +149,29 @@ pub struct PlaytestReport {
     /// imply an authored one.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub injected_surface_keys: Option<Vec<String>>,
+    /// Source-derived chaos keys layered onto this run's surface by
+    /// the parent's source scan (`BEVY_PLAYTEST_SOURCE_ROOT`, or
+    /// the game crate's runtime `CARGO_MANIFEST_DIR`): the FULL
+    /// layered surface (backbone + game-referenced extras). Present
+    /// only when a scan applied AND found keys beyond the WASD/
+    /// arrows backbone — a scan yielding only backbone keys leaves
+    /// the default unchanged, and `None` means "no scan layered"
+    /// rather than "scan found nothing". Honesty field mirroring
+    /// [`Self::injected_surface_keys`]: lets a consumer distinguish
+    /// "the default surface" from "the default widened with what
+    /// the game's own sources mention" — the out-of-the-box
+    /// surface-widening tier (discovery stays the verification
+    /// layer on top).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub source_derived_keys: Option<Vec<String>>,
+    /// Provenance notes from the parent's source scan (why the
+    /// layered surface looks like it does: poison filtering, cap
+    /// drops, unreadable files, unsupported variants). Present
+    /// exactly when [`Self::source_derived_keys`] is: refusal over
+    /// silence — every filtering decision the scan made is
+    /// reported rather than dropped.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub source_derived_notes: Option<Vec<String>>,
     /// Leafwing declared bindings read from the game's `InputMap`s
     /// during this run (`lw-reader` feature; `None` when the
     /// feature is off or the game spawns no Leafwing state).
@@ -198,6 +221,8 @@ impl PlaytestReport {
             state_digest: vec![],
             discovered_surface: None,
             injected_surface_keys: None,
+            source_derived_keys: None,
+            source_derived_notes: None,
             #[cfg(feature = "lw-reader")]
             lw_declared: vec![],
             #[cfg(feature = "lw-reader")]
