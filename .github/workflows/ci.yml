@@ -58,10 +58,16 @@ jobs:
           sudo docker image prune --all --force || true
           df -h /
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@ff7f6a3374ce205788da40198ec918bd5d67aea7 # 1.99.0
-        with:
-          components: clippy, rustfmt
+      # Single source of truth for the toolchain version: rust-toolchain.toml.
+      # GitHub runners ship rustup, which auto-installs the pinned toolchain
+      # (plus components) on the first cargo invocation. This removes the
+      # second version source the dtolnay/rust-toolchain action introduced:
+      # its per-Rust-version tags historically desynchronized from
+      # rust-toolchain.toml, producing half-bumped PRs whose CI failed with
+      # confusing "'cargo-fmt' is not installed" errors (e.g. when renovate
+      # bumped the pin past the action tag).
+      - name: Install Rust toolchain components
+        run: rustup component add clippy rustfmt
 
       # azure.archive.ubuntu.com periodically serves archives at ~60kB/s
       # (actions/runner-images#14823, #15040); apt has no

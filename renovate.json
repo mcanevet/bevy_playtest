@@ -13,6 +13,17 @@
       "pinDigests": true
     },
     {
+      "description": "dtolnay/rust-toolchain is no longer used; CI relies on rust-toolchain.toml alone.",
+      "matchDepNames": ["dtolnay/rust-toolchain"],
+      "enabled": false
+    },
+    {
+      "description": "Never bump MSRV via renovate; deliberate, manual decisions only.",
+      "matchManagers": ["cargo"],
+      "matchDepTypes": ["rust-version"],
+      "enabled": false
+    },
+    {
       "description": "Cargo updates: keep both workspaces' lockfiles in sync",
       "matchManagers": ["cargo"],
       "groupName": "rust dependencies"
