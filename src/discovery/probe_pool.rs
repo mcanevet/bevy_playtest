@@ -118,6 +118,15 @@ pub enum ProbeJobKind {
     /// — the identical pair is the mouse matrix's determinism gate,
     /// and the first copy is the per-cell diff baseline.
     MouseControl { point: ProbePoint },
+    /// Motion probe run: the control tap PLUS the zero-net +d/−d
+    /// oscillation from the readiness frame. Diffed against the
+    /// motion control pair; the oscillation is the only bit that
+    /// differs from [`Self::MotionControl`].
+    MotionProbe { point: ProbePoint },
+    /// Normalized motion control run (control tap, no motion).
+    /// Scheduled TWICE — the pair is the motion matrix's own
+    /// determinism gate; the first copy is the motion diff baseline.
+    MotionControl { point: ProbePoint },
 }
 
 /// Outcome of one executed job.
@@ -434,6 +443,42 @@ pub fn build_job_list(plan: &ProbePlan) -> Result<Vec<ProbeJob>, ProbeError> {
             });
         }
     }
+    // Motion matrix, appended AFTER the mouse grid for the same
+    // index-stability reason. Probe, then the control TWICE (its
+    // own determinism gate; first copy is the motion diff baseline).
+    // A disabled probe (`mouse_motion_enable: false`) contributes
+    // nothing. Motion is NEVER pruned on scan data (same doctrine as
+    // the mouse grid — see docs/explanation/input-surface-discovery.md,
+    // Motion Probing section): the jobs are built whenever the plan
+    // enables the motion matrix, and an inert result is handled by
+    // the flow's loud untrusted-inert ledger, not by skipping runs.
+    if plan.mouse_motion_enable {
+        let readiness = plan
+            .points()
+            .map_err(|e| ProbeError::Plan(e.to_string()))?
+            .into_iter()
+            .next()
+            .expect("points() returns [readiness, mid]");
+        jobs.push(ProbeJob {
+            scenario: plan
+                .motion_probe_scenario()
+                .map_err(|e| ProbeError::Plan(e.to_string()))?,
+            kind: ProbeJobKind::MotionProbe { point: readiness },
+            expected_last_frame,
+            export_scan: false,
+        });
+        let control_scenario = plan
+            .motion_control_scenario()
+            .map_err(|e| ProbeError::Plan(e.to_string()))?;
+        for _ in 0..2 {
+            jobs.push(ProbeJob {
+                scenario: control_scenario.clone(),
+                kind: ProbeJobKind::MotionControl { point: readiness },
+                expected_last_frame,
+                export_scan: false,
+            });
+        }
+    }
     Ok(jobs)
 }
 
@@ -656,6 +701,10 @@ fn execute_job(
         // the same strictly-after coverage gate applies verbatim).
         ProbeJobKind::MouseCell { point, .. } => point.frame,
         ProbeJobKind::MouseControl { point } => point.frame,
+        // Motion jobs oscillate from the readiness frame; the same
+        // strictly-after coverage gate applies.
+        ProbeJobKind::MotionProbe { point } => point.frame,
+        ProbeJobKind::MotionControl { point } => point.frame,
     };
     let has_post_tap_coverage = report.state_digest.iter().any(|d| d.frame > point_frame);
     if !has_post_tap_coverage

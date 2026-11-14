@@ -218,6 +218,16 @@ name = "takeover_demo_raw_winit"
 path = "src/bin/takeover_demo_raw_winit.rs"
 required-features = ["takeover"]
 
+# Demo "game" for the mouse-MOTION probe tests: the canonical
+# AccumulatedMouseMotion consumer (camera-pan idiom, signed delta).
+# The motion probes' positive control — discovery MUST report a
+# mouse_motion finding with an effect on this game. See
+# tests/discovery_flow.rs: mouse_motion_finds_effects_on_motion_driven_game.
+[[bin]]
+name = "takeover_demo_motion"
+path = "src/bin/takeover_demo_motion.rs"
+required-features = ["takeover"]
+
 [[bin]]
 name = "takeover_demo_transient"
 path = "src/bin/takeover_demo_transient.rs"

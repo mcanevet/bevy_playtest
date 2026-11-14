@@ -31,7 +31,13 @@ jobs:
   #   - clippy -D warnings, fmt, rustdoc
   ci:
     runs-on: ubuntu-26.04
-    timeout-minutes: 45
+    # Warm-cache green runs measure 34-42m (workspace suite +
+    # battery dominate); cold-cache and slow-runner runs need
+    # headroom for the full-gate battery plus the target/ cache
+    # save (tar+zstd of several GB) at the tail. 45m proved too
+    # tight: two consecutive runs died in the cache-save step after
+    # every gate had already passed.
+    timeout-minutes: 60
     steps:
       # Actions pinned to full commit SHAs (mutable major tags are a
       # supply-chain risk).

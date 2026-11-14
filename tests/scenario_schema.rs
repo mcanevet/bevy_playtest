@@ -295,6 +295,71 @@ fn mouse_clicks_default_hold_and_position() {
 }
 
 #[test]
+fn mouse_motion_defaults_and_parses() {
+    // Minimal motion: frame + deltas only; repeat defaults to 1
+    // frame. Motion alone satisfies the synthetic_keyboard non-empty
+    // check (orthogonal input channel, same doctrine as clicks).
+    let mut json = minimal_scenario("synthetic_keyboard");
+    json["bot"]["mouse_motion"] = serde_json::json!([{ "frame": 3, "dx": 10.0, "dy": -5.0 }]);
+    let s: Scenario = serde_json::from_value(json).unwrap();
+    assert_eq!(s.bot.mouse_motion.len(), 1);
+    assert_eq!(s.bot.mouse_motion[0].frame, 3);
+    assert_eq!(s.bot.mouse_motion[0].dx, 10.0);
+    assert_eq!(s.bot.mouse_motion[0].dy, -5.0);
+    assert_eq!(s.bot.mouse_motion[0].repeat_frames, 1);
+    validate_scenario(&s).expect("motion-only synthetic bot is valid");
+}
+
+#[test]
+fn mouse_motion_rejects_zero_repeat() {
+    let mut json = minimal_scenario("synthetic_keyboard");
+    json["bot"]["mouse_motion"] =
+        serde_json::json!([{ "frame": 0, "dx": 1.0, "dy": 0.0, "repeat_frames": 0 }]);
+    let s = parse(json);
+    let err = validate_scenario(&s).unwrap_err().to_string();
+    assert!(err.contains("repeat_frames"), "{err}");
+}
+
+#[test]
+fn mouse_motion_rejects_non_finite_deltas() {
+    // serde_json::json! cannot express NaN literally, but arbitrary
+    // precision / non-standard sources can deliver huge exponents
+    // that overflow f32 to infinity — the finiteness guard is what
+    // stands between them and poisoned cursor arithmetic.
+    let mut json = minimal_scenario("synthetic_keyboard");
+    json["bot"]["mouse_motion"] =
+        serde_json::json!([{ "frame": 0, "dx": 1.0e40, "dy": 0.0, "repeat_frames": 5 }]);
+    let s = parse(json);
+    let err = validate_scenario(&s).unwrap_err().to_string();
+    assert!(err.contains("finite"), "{err}");
+}
+
+#[test]
+fn mouse_motion_rejects_entry_past_run_end() {
+    // duration_s 1.0 at the default tps 60 → 60 ticks, so frame 60
+    // starts at/past the run end and would apply on no frame — the
+    // same silent no-op zero-repeat guards against. Also covers the
+    // driver's window-bound arithmetic with huge frames: the
+    // rejection keeps author-controlled u64s out of it entirely.
+    let mut json = minimal_scenario("synthetic_keyboard");
+    json["bot"]["mouse_motion"] = serde_json::json!([{ "frame": 60, "dx": 1.0, "dy": 0.0 }]);
+    let s = parse(json);
+    let err = validate_scenario(&s).unwrap_err().to_string();
+    assert!(err.contains("silent"), "{err}");
+
+    // The extreme end of the same class: u64::MAX would have
+    // overflowed the driver's `frame + repeat_frames` bound before
+    // the saturating_add fix; the validation now keeps such entries
+    // out of the driver entirely.
+    let mut json = minimal_scenario("synthetic_keyboard");
+    json["bot"]["mouse_motion"] =
+        serde_json::json!([{ "frame": u64::MAX, "dx": 1.0, "dy": 0.0, "repeat_frames": u64::MAX }]);
+    let s = parse(json);
+    let err = validate_scenario(&s).unwrap_err().to_string();
+    assert!(err.contains("silent"), "{err}");
+}
+
+#[test]
 fn chaos_surface_mouse_buttons_must_be_known() {
     let mut json = minimal_scenario("chaos");
     json["bot"]["raw_surface"] =

@@ -65,6 +65,9 @@ fn keyboard_only(keys: &[&str]) -> ProbePlan {
         candidate_keys: keys.iter().map(|k| k.to_string()).collect(),
         mouse_grid_cols: 0,
         mouse_grid_rows: 0,
+        // Motion probes stay default-ON in production plans; this
+        // helper pins the KEYBOARD layer, so slim it away.
+        mouse_motion_enable: false,
         ..ProbePlan::default()
     }
 }
@@ -99,6 +102,10 @@ struct SplitKinds {
     mouse_cells: Vec<(String, PlaytestReport)>,
     /// Mouse control copies, in input order (pair-wise: a/b).
     mouse_controls: Vec<PlaytestReport>,
+    /// Motion probe, if the plan enables it.
+    motion_probe: Option<PlaytestReport>,
+    /// Motion control copies, in input order (pair-wise: a/b).
+    motion_controls: Vec<PlaytestReport>,
 }
 
 fn split_kinds(results: &Results) -> SplitKinds {
@@ -107,6 +114,8 @@ fn split_kinds(results: &Results) -> SplitKinds {
     let mut controls = vec![];
     let mut mouse_cells = vec![];
     let mut mouse_controls = vec![];
+    let mut motion_probe = None;
+    let mut motion_controls = vec![];
     for r in results {
         let outcome = r.as_ref().expect("job must succeed");
         match &outcome.kind {
@@ -122,6 +131,12 @@ fn split_kinds(results: &Results) -> SplitKinds {
             ProbeJobKind::MouseControl { .. } => {
                 mouse_controls.push(outcome.report.clone());
             }
+            ProbeJobKind::MotionProbe { .. } => {
+                motion_probe = Some(outcome.report.clone());
+            }
+            ProbeJobKind::MotionControl { .. } => {
+                motion_controls.push(outcome.report.clone());
+            }
         }
     }
     SplitKinds {
@@ -129,6 +144,8 @@ fn split_kinds(results: &Results) -> SplitKinds {
         controls,
         mouse_cells,
         mouse_controls,
+        motion_probe,
+        motion_controls,
     }
 }
 
@@ -235,8 +252,9 @@ fn mouse_matrix_reaches_pointer_games_and_gates_determinism() {
     };
     let jobs = build_job_list(&plan).expect("job list");
     // 1 key × 2 points = 2 probes + 2 points × 2 = 4 key controls,
-    // then 3×2 = 6 cells + 2 mouse controls.
-    assert_eq!(jobs.len(), 2 + 4 + 6 + 2);
+    // then 3×2 = 6 cells + 2 mouse controls, then 1 motion probe +
+    // 2 motion controls (default plan keeps the motion layer on).
+    assert_eq!(jobs.len(), 2 + 4 + 6 + 2 + 1 + 2);
 
     let config = ProbePoolConfig::new(picking_binary());
     let results = run_jobs(&config, &jobs);
@@ -263,6 +281,35 @@ fn mouse_matrix_reaches_pointer_games_and_gates_determinism() {
         digest_series(&split.mouse_controls[0]),
         digest_series(&split.mouse_controls[1]),
         "mouse double-control determinism gate FAILED"
+    );
+
+    // Motion layer rides the same run. Two pins:
+    //
+    // 1. Determinism: the doubled motion control pair must be
+    //    byte-identical (the motion gate — same doctrine as the
+    //    mouse gate above).
+    // 2. DIVERGENCE, not inertness: bevy_picking consumes the
+    //    WRAPPED `CursorMoved` messages the motion driver also
+    //    writes, so the oscillation perturbs hover/picking state —
+    //    digest-visible, a genuine motion effect. This makes the
+    //    picking game the motion probe's WRAPPED-form positive
+    //    control, complementing `takeover_demo_motion` (the RAW
+    //    AccumulatedMouseMotion consumer) in the discovery-flow
+    //    tests. Asserting inertness here would be factually wrong
+    //    AND would weaken the matrix: a probe that cannot see
+    //    wrapped-form motion readers is blind to a whole class.
+    assert_eq!(split.motion_controls.len(), 2);
+    assert_eq!(
+        digest_series(&split.motion_controls[0]),
+        digest_series(&split.motion_controls[1]),
+        "motion double-control determinism gate FAILED"
+    );
+    let motion_probe = split.motion_probe.as_ref().expect("motion probe ran");
+    assert_ne!(
+        digest_series(motion_probe),
+        digest_series(&split.motion_controls[0]),
+        "bevy_picking consumes wrapped CursorMoved — the motion probe \
+         must find the hover-state effect on the picking game"
     );
 
     // Every cell probe on this game is BOUND (fullscreen node): it

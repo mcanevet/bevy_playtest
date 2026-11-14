@@ -202,6 +202,16 @@ pub fn plan_fingerprint(
     acc.push_str(&mouse.control_norm_x.to_bits().to_string());
     acc.push('\u{1}');
     acc.push_str(&mouse.control_norm_y.to_bits().to_string());
+    acc.push('\u{1}');
+    // Motion-probe knobs: any change in the oscillation's shape or
+    // presence changes the probe runs (and thus the cached surface).
+    acc.push_str(&mouse.motion_enable.to_string());
+    acc.push('\u{1}');
+    acc.push_str(&mouse.motion_dx.to_bits().to_string());
+    acc.push('\u{1}');
+    acc.push_str(&mouse.motion_dy.to_bits().to_string());
+    acc.push('\u{1}');
+    acc.push_str(&mouse.motion_cycles.to_string());
     hex16(&fnv1a(&acc))
 }
 
@@ -221,6 +231,14 @@ pub struct MouseFingerprint {
     pub control_norm_x: f32,
     /// Normalized control-click y.
     pub control_norm_y: f32,
+    /// Whether the motion-probe runs are part of the matrix.
+    pub motion_enable: bool,
+    /// Motion oscillation amplitude, x (logical px/frame).
+    pub motion_dx: f32,
+    /// Motion oscillation amplitude, y (logical px/frame).
+    pub motion_dy: f32,
+    /// Motion oscillation cycles per run.
+    pub motion_cycles: u32,
 }
 
 impl MouseFingerprint {
@@ -236,6 +254,10 @@ impl MouseFingerprint {
             click_extent_h_px: plan.mouse_click_extent_h_px,
             control_norm_x: plan.mouse_control_norm_x,
             control_norm_y: plan.mouse_control_norm_y,
+            motion_enable: plan.mouse_motion_enable,
+            motion_dx: plan.mouse_motion_dx,
+            motion_dy: plan.mouse_motion_dy,
+            motion_cycles: plan.mouse_motion_cycles,
         }
     }
 }
@@ -1242,6 +1264,10 @@ mod tests {
             click_extent_h_px: 720.0,
             control_norm_x: 0.5,
             control_norm_y: 0.5,
+            motion_enable: true,
+            motion_dx: 10.0,
+            motion_dy: 5.0,
+            motion_cycles: 30,
         };
         let fp = |mouse: MouseFingerprint| {
             plan_fingerprint(&["Digit1".to_string()], "KeyQ", 60, 3.0, mouse)
@@ -1305,6 +1331,38 @@ mod tests {
             }),
             "control y"
         );
+        assert_ne!(
+            a,
+            fp(MouseFingerprint {
+                motion_enable: false,
+                ..base
+            }),
+            "motion off"
+        );
+        assert_ne!(
+            a,
+            fp(MouseFingerprint {
+                motion_dx: 20.0,
+                ..base
+            }),
+            "motion dx"
+        );
+        assert_ne!(
+            a,
+            fp(MouseFingerprint {
+                motion_dy: 10.0,
+                ..base
+            }),
+            "motion dy"
+        );
+        assert_ne!(
+            a,
+            fp(MouseFingerprint {
+                motion_cycles: 20,
+                ..base
+            }),
+            "motion cycles"
+        );
         // Identical inputs are byte-stable (cross-process caching).
         assert_eq!(a, fp(base));
     }
@@ -1323,6 +1381,10 @@ mod tests {
             mouse_click_extent_h_px: 500.0,
             mouse_control_norm_x: 0.25,
             mouse_control_norm_y: 0.75,
+            mouse_motion_enable: false,
+            mouse_motion_dx: 20.0,
+            mouse_motion_dy: 10.0,
+            mouse_motion_cycles: 15,
             ..ProbePlan::default()
         };
         let extracted = MouseFingerprint::from_plan(&plan);
@@ -1332,6 +1394,10 @@ mod tests {
         assert_eq!(extracted.click_extent_h_px, 500.0);
         assert_eq!(extracted.control_norm_x, 0.25);
         assert_eq!(extracted.control_norm_y, 0.75);
+        assert!(!extracted.motion_enable);
+        assert_eq!(extracted.motion_dx, 20.0);
+        assert_eq!(extracted.motion_dy, 10.0);
+        assert_eq!(extracted.motion_cycles, 15);
         // Disabled plans extract as fully-disabled fingerprints.
         let off = ProbePlan {
             mouse_grid_cols: 0,

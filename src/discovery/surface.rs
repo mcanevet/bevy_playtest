@@ -410,6 +410,29 @@ pub struct MouseCellFinding {
     pub provenance: ProvenanceGrade,
 }
 
+/// The motion-probe finding (Phase 1 mouse grammar, continuation):
+/// the zero-net +d/−d oscillation probed at the readiness point and
+/// diffed against the motion control pair (same inert-key baseline,
+/// no motion). Answers "does the game react to mouse movement AT
+/// ALL" — not which directions (see [`DiscoveredSurface::mouse_motion`]).
+///
+/// Confidence vocabulary reuses [`KeyConfidence`]: `Exact` =
+/// observed divergence vs the motion control; `Unclassified` =
+/// coverage-untrusted inert verdict (asymmetric or short-span
+/// probe/control pair). `Inferred` is never assigned (group
+/// completion is keyboard-only).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MouseMotionFinding {
+    /// Observed effect (first divergence vs the motion control
+    /// trace), or `None` if the probe matched the control.
+    pub effect: Option<Effect>,
+    /// How the verdict was earned (see the type docs).
+    pub confidence: KeyConfidence,
+    /// Derivation record: the differential probe sweep that
+    /// injected the oscillation (`probe_verified`).
+    pub provenance: ProvenanceGrade,
+}
+
 /// The discovered input surface of one game (per
 /// `docs/explanation/input-surface-discovery.md`, Report
 /// Integration section).
@@ -421,8 +444,18 @@ pub struct DiscoveredSurface {
     pub keys: Vec<KeyFinding>,
     /// Mouse buttons probed, same shape as `keys`.
     pub mouse_buttons: Vec<KeyFinding>,
-    /// Motion-probe effect, if mouse motion was probed.
-    pub mouse_motion: Option<Effect>,
+    /// Motion-probe finding, if mouse motion was probed: whether the
+    /// game reacted to the zero-net oscillation. Answers "does the
+    /// game react to mouse movement AT ALL" — not to which
+    /// directions (a single diagonal oscillation cannot resolve
+    /// direction; `mouse_motion_cardinals` is a future knob).
+    ///
+    /// `#[serde(default)]` + additive promotion: pre-motion-era
+    /// artifacts serialized `"mouse_motion": null` (or omitted) and
+    /// deserialize unchanged to `None`; new artifacts serialize a
+    /// [`MouseMotionFinding`] OBJECT instead of a bare effect.
+    #[serde(default)]
+    pub mouse_motion: Option<MouseMotionFinding>,
     /// Wheel-probe effect, if the wheel was probed.
     pub wheel: Option<Effect>,
     /// Gamepad buttons probed, same shape as `keys`.

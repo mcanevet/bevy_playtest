@@ -107,6 +107,11 @@ pub struct BotConfig {
     /// same layer the chaos bot samples.
     #[serde(default)]
     pub mouse_clicks: Vec<MouseClickInput>,
+    /// Frame-indexed scripted mouse motion (any bot), orthogonal to
+    /// clicks and keys: apply `(dx, dy)` per frame for
+    /// `repeat_frames` frames.
+    #[serde(default)]
+    pub mouse_motion: Vec<MotionInput>,
     /// Input surface for the chaos bot: which keys it may press.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_surface: Option<RawSurface>,
@@ -137,6 +142,32 @@ fn default_click_position() -> f32 {
 
 fn default_click_button() -> String {
     "left".into()
+}
+
+/// A scripted mouse-motion delta: apply `(dx, dy)` every frame for
+/// `repeat_frames` frames starting at `frame`. Orthogonal to the bot
+/// type like `mouse_clicks`; the driver advances the cursor position
+/// by the delta each frame and writes BOTH the raw `MouseMotion`
+/// and the wrapped `WindowEvent::CursorMoved` (winit parity — real
+/// winit sources them from different event streams; the takeover
+/// synthesizes both from one position stream).
+#[derive(Deserialize, Serialize, Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct MotionInput {
+    /// Frame index the motion starts at.
+    pub frame: u64,
+    /// Logical-pixel delta applied to the cursor each frame.
+    pub dx: f32,
+    /// See [`Self::dx`].
+    pub dy: f32,
+    /// Apply the delta for N frames (default 1; 0 is rejected — a
+    /// zero-repeat motion writes nothing and would silently no-op).
+    #[serde(default = "default_repeat_frames")]
+    pub repeat_frames: u64,
+}
+
+fn default_repeat_frames() -> u64 {
+    1
 }
 
 /// Liveness configuration.
@@ -622,9 +653,13 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
         // `key_presses` OR `mouse_clicks` must be non-empty: a
         // mouse-only scripted scenario is valid (the docs advertise
         // `mouse_clicks` as orthogonal to the bot's keyboard half).
-        if scenario.bot.key_presses.is_empty() && scenario.bot.mouse_clicks.is_empty() {
+        if scenario.bot.key_presses.is_empty()
+            && scenario.bot.mouse_clicks.is_empty()
+            && scenario.bot.mouse_motion.is_empty()
+        {
             return Err(ScenarioError::Rejected(
-                "synthetic_keyboard bot requires a non-empty key_presses or mouse_clicks list"
+                "synthetic_keyboard bot requires a non-empty key_presses, \
+                 mouse_clicks or mouse_motion list"
                     .into(),
             ));
         }
@@ -652,6 +687,38 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                  zero-frame hold is a same-frame press+release, which \
                  ButtonInput cancels)",
                 click.frame
+            )));
+        }
+    }
+    // Scripted mouse motion: a zero-repeat entry writes nothing (a
+    // silent no-op the author probably meant as "repeat forever"),
+    // and NaN/infinite deltas would poison cursor arithmetic
+    // silently.
+    for motion in &scenario.bot.mouse_motion {
+        if motion.repeat_frames == 0 {
+            return Err(ScenarioError::Rejected(format!(
+                "mouse_motion at frame {}: repeat_frames must be >= 1 (a \
+                 zero-repeat motion writes nothing — a silent no-op)",
+                motion.frame
+            )));
+        }
+        if !motion.dx.is_finite() || !motion.dy.is_finite() {
+            return Err(ScenarioError::Rejected(format!(
+                "mouse_motion at frame {}: dx/dy must be finite (got \
+                 ({}, {})) — NaN/infinite deltas poison cursor arithmetic",
+                motion.frame, motion.dx, motion.dy
+            )));
+        }
+        // An entry starting at/past the run end writes nothing across
+        // the whole run — the same silent no-op zero-repeat guards
+        // against, and the driver's window bound would otherwise add
+        // two author-controlled u64s unchecked.
+        if motion.frame >= total_ticks {
+            return Err(ScenarioError::Rejected(format!(
+                "mouse_motion at frame {}: entry starts at/past the run \
+                 end ({} ticks) — it would apply on no frame (a silent \
+                 no-op)",
+                motion.frame, total_ticks
             )));
         }
     }
