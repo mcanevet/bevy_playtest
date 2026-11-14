@@ -25,7 +25,8 @@
 
 use crate::enums::BotType;
 use crate::scenario::{
-    validate_scenario, BotConfig, KeyPressInput, MouseClickInput, Scenario, ScenarioError,
+    validate_scenario, BotConfig, KeyPressInput, MotionInput, MouseClickInput, Scenario,
+    ScenarioError,
 };
 
 /// Simulated ticks per second for probe runs. Frames in generated
@@ -69,6 +70,21 @@ pub const DEFAULT_CONTROL_KEY: &str = "KeyQ";
 /// finer grids can refine without reinterpreting old artifacts.
 pub const MOUSE_GRID_COLS: u32 = 5;
 pub const MOUSE_GRID_ROWS: u32 = 4;
+
+/// Motion probe oscillation amplitude, x axis (logical px per
+/// frame; docs' deferred candidate "delta (10.0, 5.0)"). Applied
+/// ALTERNATING +dx then −dx, so the cursor stays inside a ~2·dx
+/// band and net displacement is zero.
+pub const MOUSE_MOTION_DX: f32 = 10.0;
+/// See [`MOUSE_MOTION_DX`].
+pub const MOUSE_MOTION_DY: f32 = 5.0;
+/// Motion probe cycles per run. Default sized so the oscillation
+/// (2 frames per cycle, one +d frame and one −d frame) covers a
+/// modest share of the post-readiness span: divergence from a
+/// motion reader appears within a couple of cycles (the camera
+/// moves on the FIRST +d frame), so more cycles buy little signal
+/// but real runtime. 30 cycles = 60 frames = 1s at 60 tps.
+pub const MOUSE_MOTION_CYCLES: u32 = 30;
 
 /// Logical window HEIGHT mouse cell coordinates are scaled against
 /// (see [`MOUSE_CLICK_EXTENT_W_PX`]). Per-axis, deliberately: the
@@ -277,6 +293,20 @@ pub struct ProbePlan {
     /// Normalized window y of the mouse control click
     /// ([`MOUSE_CONTROL_NORM_Y`] by default).
     pub mouse_control_norm_y: f32,
+    /// Whether the motion probe runs (a balanced +d/−d oscillation
+    /// at the readiness point, zero net displacement). `false`
+    /// disables it (tests slim the matrix this way). Default ON to
+    /// match the grid's default-on.
+    pub mouse_motion_enable: bool,
+    /// Motion oscillation amplitude, x (logical px per frame; see
+    /// [`MOUSE_MOTION_DX`]).
+    pub mouse_motion_dx: f32,
+    /// Motion oscillation amplitude, y (see [`MOUSE_MOTION_DY`]).
+    pub mouse_motion_dy: f32,
+    /// Full oscillation CYCLES per probe run (+d frames then −d
+    /// frames = one cycle). Sized to cover a meaningful share of the
+    /// post-readiness span without dominating it.
+    pub mouse_motion_cycles: u32,
 }
 
 impl Default for ProbePlan {
@@ -292,6 +322,10 @@ impl Default for ProbePlan {
             mouse_click_extent_h_px: MOUSE_CLICK_EXTENT_H_PX,
             mouse_control_norm_x: MOUSE_CONTROL_NORM_X,
             mouse_control_norm_y: MOUSE_CONTROL_NORM_Y,
+            mouse_motion_enable: true,
+            mouse_motion_dx: MOUSE_MOTION_DX,
+            mouse_motion_dy: MOUSE_MOTION_DY,
+            mouse_motion_cycles: MOUSE_MOTION_CYCLES,
         }
     }
 }
@@ -397,6 +431,10 @@ impl ProbePlan {
             mouse_click_extent_h_px: self.mouse_click_extent_h_px,
             mouse_control_norm_x: self.mouse_control_norm_x,
             mouse_control_norm_y: self.mouse_control_norm_y,
+            mouse_motion_enable: self.mouse_motion_enable,
+            mouse_motion_dx: self.mouse_motion_dx,
+            mouse_motion_dy: self.mouse_motion_dy,
+            mouse_motion_cycles: self.mouse_motion_cycles,
         })
     }
 
@@ -560,6 +598,96 @@ impl ProbePlan {
         Ok(runs)
     }
 
+    // ---- Motion probe (Phase 1 continuation: "does the game react
+    // to mouse MOVEMENT at all") ----
+
+    /// Half the motion oscillation: `cycles` frames of +d followed
+    /// by `cycles` frames of −d is `2·cycles` inputs; but a motion
+    /// input carries a REPEAT, so one entry covers a whole half:
+    /// `(dx, dy)` repeated `cycles` times, then the negation. Net
+    /// displacement exactly zero, cursor parked at the origin
+    /// throughout a ~±dx-band excursion.
+    fn motion_inputs(&self, frame: u64) -> [MotionInput; 2] {
+        [
+            MotionInput {
+                frame,
+                dx: self.mouse_motion_dx,
+                dy: self.mouse_motion_dy,
+                repeat_frames: self.mouse_motion_cycles as u64,
+            },
+            MotionInput {
+                frame: frame + self.mouse_motion_cycles as u64,
+                dx: -self.mouse_motion_dx,
+                dy: -self.mouse_motion_dy,
+                repeat_frames: self.mouse_motion_cycles as u64,
+            },
+        ]
+    }
+
+    /// Frame-safety for the motion probe: the FULL oscillation
+    /// (2·cycles frames from `frame`) must fit strictly inside the
+    /// run, mirroring `validate_mouse_fit` (an oscillation cut
+    /// short loses its zero-net property AND its post-motion
+    /// coverage — both load-bearing for the probe's honesty).
+    fn validate_motion_fit(&self, frame: u64) -> Result<(), ScenarioError> {
+        let ticks = total_ticks(self.duration_s, self.tps);
+        let span = 2 * self.mouse_motion_cycles as u64;
+        if frame + span >= ticks {
+            return Err(ScenarioError::Rejected(format!(
+                "motion probe at frame {frame} spans {span} frames and does \
+                  not fit a {}s run at {} tps ({} ticks) — lengthen the \
+                  duration or reduce mouse_motion_cycles",
+                self.duration_s, self.tps, ticks
+            )));
+        }
+        Ok(())
+    }
+
+    /// The motion PROBE scenario: the control run PLUS the
+    /// zero-net oscillation from the readiness point's frame — probe
+    /// and control differ by exactly ONE bit (the injected motion).
+    /// The inert control key appears in BOTH runs (the schema has no
+    /// zero-input bot, mirroring the key matrix's rationale).
+    pub fn motion_probe_scenario(&self) -> Result<Scenario, ScenarioError> {
+        let readiness = probe_points(self.duration_s, self.tps)[0].frame;
+        self.validate_motion_fit(readiness)?;
+        let mut scenario = self.base_scenario("probe_motion_readiness".to_string());
+        scenario.bot.key_presses = vec![Self::tap_press(readiness, &self.control_key)];
+        scenario.bot.mouse_motion = self.motion_inputs(readiness).to_vec();
+        validate_scenario(&scenario)?;
+        Ok(scenario)
+    }
+
+    /// The motion CONTROL scenario: identical to the probe run minus
+    /// the oscillation — the same inert control-key tap at the same
+    /// frame, cursor parked, NO motion. (Not a click-control reuse:
+    /// the click-grid control includes a dead-center click, so the
+    /// two baselines are different runs; the motion control has no
+    /// mouse input at all.)
+    /// Like the mouse control, `discover` schedules it TWICE — the
+    /// motion matrix has its own determinism gate.
+    pub fn motion_control_scenario(&self) -> Result<Scenario, ScenarioError> {
+        let readiness = probe_points(self.duration_s, self.tps)[0].frame;
+        self.validate_motion_fit(readiness)?;
+        let mut scenario = self.base_scenario("probe_motion_control_readiness".to_string());
+        scenario.bot.key_presses = vec![Self::tap_press(readiness, &self.control_key)];
+        validate_scenario(&scenario)?;
+        Ok(scenario)
+    }
+
+    /// The motion probe + control scenarios (control NOT doubled
+    /// here; the pool's job builder appends the second copy). Empty
+    /// when the motion probe is disabled.
+    pub fn motion_runs(&self) -> Result<Vec<Scenario>, ScenarioError> {
+        if !self.mouse_motion_enable {
+            return Ok(Vec::new());
+        }
+        Ok(vec![
+            self.motion_probe_scenario()?,
+            self.motion_control_scenario()?,
+        ])
+    }
+
     /// Base scenario every probe/control run shares: deterministic
     /// (fixed seed, simulated time, single-threaded), digest
     /// recording ON (the diff input), replay verification OFF
@@ -573,6 +701,7 @@ impl ProbePlan {
                 input_rate_hz: 10,
                 key_presses: vec![],
                 mouse_clicks: vec![],
+                mouse_motion: vec![],
                 raw_surface: None,
             },
             tps: self.tps,
@@ -1125,6 +1254,109 @@ mod tests {
             ..Default::default()
         };
         assert!(fits.mouse_runs().is_ok());
+    }
+
+    #[test]
+    fn motion_runs_shape_and_one_bit_diff() {
+        // The motion matrix: probe + control (the control is doubled
+        // by the POOL, not here — same contract as `mouse_runs`).
+        // Doctrine pin: probe and control differ by exactly ONE
+        // bit — the oscillation. Both carry the SAME inert control
+        // key tap at the SAME frame (there is no zero-input bot in
+        // the schema, mirroring the key matrix's rationale).
+        let plan = ProbePlan::default();
+        let runs = plan.motion_runs().unwrap();
+        assert_eq!(runs.len(), 2, "probe + control (pool doubles the control)");
+        let [probe, control] = &runs[..] else {
+            panic!("exactly two motion runs");
+        };
+        assert_eq!(probe.name.as_deref(), Some("probe_motion_readiness"));
+        assert_eq!(
+            control.name.as_deref(),
+            Some("probe_motion_control_readiness")
+        );
+        // The one bit: probe has the oscillation, control does not.
+        assert_eq!(probe.bot.mouse_motion.len(), 2);
+        assert!(control.bot.mouse_motion.is_empty());
+        // Everything else is identical: same inert key tap (compared
+        // field-by-field — `KeyPressInput` deliberately carries no
+        // `PartialEq`)...
+        assert_eq!(probe.bot.key_presses.len(), 1);
+        assert_eq!(control.bot.key_presses.len(), 1);
+        assert_eq!(
+            (
+                probe.bot.key_presses[0].frame,
+                probe.bot.key_presses[0].key.as_str(),
+                probe.bot.key_presses[0].hold_frames
+            ),
+            (
+                control.bot.key_presses[0].frame,
+                control.bot.key_presses[0].key.as_str(),
+                control.bot.key_presses[0].hold_frames
+            )
+        );
+        // ...same bot shape, same run geometry.
+        assert_eq!(probe.bot.bot_type, control.bot.bot_type);
+        assert_eq!(probe.bot.seed, control.bot.seed);
+        assert_eq!(probe.tps, control.tps);
+        assert_eq!(probe.duration_s, control.duration_s);
+        assert!(probe.record_digest && control.record_digest);
+        // Oscillation geometry: +d for `cycles` frames then −d for
+        // `cycles` frames — balanced, so net displacement is zero.
+        let readiness = probe.bot.key_presses[0].frame;
+        let [plus, minus] = &probe.bot.mouse_motion[..] else {
+            panic!("probe carries exactly two motion entries");
+        };
+        assert_eq!(plus.frame, readiness);
+        assert_eq!(minus.frame, readiness + plan.mouse_motion_cycles as u64);
+        assert_eq!(
+            (plus.dx, plus.dy),
+            (plan.mouse_motion_dx, plan.mouse_motion_dy)
+        );
+        assert_eq!(
+            (minus.dx, minus.dy),
+            (-plan.mouse_motion_dx, -plan.mouse_motion_dy)
+        );
+        assert_eq!(plus.repeat_frames, plan.mouse_motion_cycles as u64);
+        assert_eq!(minus.repeat_frames, plan.mouse_motion_cycles as u64);
+    }
+
+    #[test]
+    fn motion_fit_is_validated_like_clicks() {
+        // The oscillation spans 2·cycles frames from the readiness
+        // point and must fit strictly inside the run — a truncated
+        // oscillation loses BOTH its zero-net property and its
+        // post-motion coverage (load-bearing for the probe's
+        // honesty), so it rejects instead of silently shrinking.
+        // Default plan: readiness 60, span 60 → needs > 120 ticks;
+        // a 2.0s run (120 ticks) is one frame too short.
+        let tight = ProbePlan {
+            duration_s: 2.0,
+            ..Default::default()
+        };
+        let err = tight.motion_probe_scenario().unwrap_err().to_string();
+        assert!(err.contains("does not fit"), "must explain: {err}");
+        // 3.0s (the default duration) fits: 180 ticks > 60 + 60 + 1.
+        assert!(ProbePlan::default().motion_probe_scenario().is_ok());
+        // Fewer cycles can rescue a tight run (the knob is honored,
+        // not decorative).
+        let slim = ProbePlan {
+            duration_s: 2.0,
+            mouse_motion_cycles: 20,
+            ..Default::default()
+        };
+        assert!(slim.motion_probe_scenario().is_ok());
+    }
+
+    #[test]
+    fn disabled_motion_probe_means_zero_motion_runs() {
+        // `mouse_motion_enable: false` is the motion off-switch —
+        // slim tests use it to leave the motion layer untouched.
+        let plan = ProbePlan {
+            mouse_motion_enable: false,
+            ..Default::default()
+        };
+        assert!(plan.motion_runs().unwrap().is_empty());
     }
 
     #[test]

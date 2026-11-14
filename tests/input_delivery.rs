@@ -344,6 +344,303 @@ fn scripted_clicks_reach_picking_in_process() {
     );
 }
 
+// --------------------------------------------------------------------------
+// Mouse-motion delivery tests (raw MouseMotion / AccumulatedMouseMotion)
+// --------------------------------------------------------------------------
+
+/// Probe observing the CANONICAL Bevy motion API. Camera-pan and
+/// look-control games poll `AccumulatedMouseMotion.delta` each frame;
+/// before the dual-form fix the bot wrote only wrapped
+/// `WindowEvent::CursorMoved` (bevy_picking's form), leaving
+/// motion-reader games input-starved — the motion twin of the
+/// wrapped-WindowEvent click bug.
+#[derive(Resource, Default, Debug)]
+struct MotionProbe {
+    /// Frames with a nonzero accumulated delta.
+    moving_frames: u32,
+    /// Sum of every accumulated delta observed — must be nonzero, and
+    /// tracks direction honestly (signed), unlike a per-frame abs.
+    total_delta: Vec2,
+}
+
+fn motion_probe(
+    motion: Res<bevy::input::mouse::AccumulatedMouseMotion>,
+    mut probe: ResMut<MotionProbe>,
+) {
+    if motion.delta != Vec2::ZERO {
+        probe.moving_frames += 1;
+        probe.total_delta += motion.delta;
+    }
+}
+
+/// Chaos mouse path: cursor position is redrawn per input interval,
+/// producing real (nonzero) deltas between successive positions.
+/// Movement lets the frozen_world oracle pass and keeps the probe
+/// from being masked by an unrelated liveness failure.
+#[test]
+fn chaos_cursor_moves_reach_accumulated_motion_in_process() {
+    let _slot = common::run_slot();
+    let scenario: Scenario = serde_json::from_str(
+        r#"{"name":"motion-chaos","bot":{"type":"chaos","seed":42,"raw_surface":{"keys":[],"mouse_buttons":["Left"]},"input_rate_hz":10},"duration_s":2.0,"tps":60,"invariants":[]}"#,
+    )
+    .expect("scenario parses");
+
+    // Same graph as fixtures: DefaultPlugins minus WinitPlugin
+    // (InputPlugin present — the accumulator runs once, via the
+    // plugin, not the harness fallback).
+    let mut app = App::new();
+    app.add_plugins(
+        bevy::DefaultPlugins
+            .build()
+            .disable::<bevy_winit::WinitPlugin>(),
+    );
+    app.insert_resource(MotionProbe::default());
+    app.add_systems(Update, motion_probe);
+    // Moving entity so frozen_world cannot mask the probe assertions.
+    app.add_systems(Startup, |mut commands: Commands| {
+        commands.spawn(Transform::from_xyz(0.0, 0.0, 0.0));
+    });
+    app.add_systems(Update, |mut q: Query<&mut Transform>| {
+        for mut t in q.iter_mut() {
+            t.translation.x += 0.05;
+        }
+    });
+
+    let report = run_scenario(&mut app, &scenario).expect("run completes");
+
+    let probe = app.world().resource::<MotionProbe>();
+    assert!(
+        probe.moving_frames > 0,
+        "RAW MouseMotion regression (chaos path): the bot delivered {} inputs \
+         but AccumulatedMouseMotion never saw a nonzero delta (probe: {probe:?}) \
+         — motion-reader games (camera pan, look controls) are deaf to the \
+         bot. The bot must write raw MouseMotion alongside the wrapped \
+         WindowEvent::CursorMoved, mirroring winit's pipeline.",
+        report.metrics.input_count
+    );
+    assert!(
+        probe.total_delta != Vec2::ZERO,
+        "accumulated deltas summed to zero over {} moving frames — every \
+         chaos cursor redraw produced a zero delta, which cannot happen \
+         under a working raw-motion path (probe: {probe:?})",
+        probe.moving_frames
+    );
+}
+
+/// Scripted-clicks path: `scripted_mouse_system` writes
+/// `cursor_moved` on its own code path — dropping the raw write there
+/// (while keeping it in the chaos path) would leave this test red and
+/// every other test green. Positions are deliberately DIFFERENT per
+/// click so the moved cursor yields nonzero deltas.
+#[test]
+fn scripted_cursor_moves_reach_accumulated_motion_in_process() {
+    let _slot = common::run_slot();
+    let scenario: Scenario = serde_json::from_str(
+        r#"{"name":"motion-scripted","bot":{"type":"synthetic_keyboard","seed":1,"raw_surface":{"keys":[],"mouse_buttons":[]},"mouse_clicks":[{"frame":10,"button":"left","x":100.0,"y":100.0,"hold_frames":2},{"frame":40,"button":"left","x":300.0,"y":250.0,"hold_frames":2},{"frame":70,"button":"right","x":700.0,"y":400.0,"hold_frames":2}]},"duration_s":2.0,"tps":60,"invariants":[]}"#,
+    )
+    .expect("scenario parses");
+
+    let mut app = App::new();
+    app.add_plugins(
+        bevy::DefaultPlugins
+            .build()
+            .disable::<bevy_winit::WinitPlugin>(),
+    );
+    app.insert_resource(MotionProbe::default());
+    app.add_systems(Update, motion_probe);
+    app.add_systems(Startup, |mut commands: Commands| {
+        commands.spawn(Transform::from_xyz(0.0, 0.0, 0.0));
+    });
+    app.add_systems(Update, |mut q: Query<&mut Transform>| {
+        for mut t in q.iter_mut() {
+            t.translation.x += 0.05;
+        }
+    });
+
+    let report = run_scenario(&mut app, &scenario).expect("run completes");
+
+    let probe = app.world().resource::<MotionProbe>();
+    // Exactly 2 moving frames, not 3: the FIRST scripted click is a
+    // TELEPORT-IN (cursor resource starts at None, so `last_pos` is
+    // None and no delta exists) — winit parity, same as a real mouse
+    // entering the window. The later hops (300,250) and (700,400)
+    // carry real deltas. Pinning the count guards both directions:
+    // fewer means the raw write is missing, MORE would mean phantom
+    // deltas on teleports.
+    assert_eq!(
+        probe.moving_frames, 2,
+        "RAW MouseMotion regression (scripted path): {} scripted clicks \
+         delivered but AccumulatedMouseMotion saw {} moving frames \
+         (probe: {probe:?}) — expected exactly 2: the first click is a \
+         teleport-in (no delta, winit parity); hops 2 and 3 carry \
+         deltas. Fewer means scripted_mouse_system is missing the raw \
+         MouseMotion write; more means phantom deltas on teleports.",
+        report.metrics.input_count, probe.moving_frames
+    );
+    // Signed totals: the three hops are (+200,+150), (+400,+150) —
+    // everything positive, so the sum must be exactly (600, 300).
+    // Pinning exact magnitudes catches a sign-flip AND a wrong
+    // baseline, which a mere nonzero or >threshold check would not.
+    assert_eq!(
+        probe.total_delta,
+        Vec2::new(600.0, 300.0),
+        "accumulated motion total is wrong: expected exactly (600, 300) from \
+         hops (100,100)→(300,250)→(700,400), got {probe:?} — the delta may be \
+         computed against the wrong baseline or sign.",
+    );
+}
+
+/// Windowless path: a bare MinimalPlugins-style app has NO primary
+/// window, so the wrapped `WindowEvent::CursorMoved` is impossible
+/// (it targets a window) — but raw `MouseMotion` is a device event
+/// with no window field and MUST still be delivered. Regression for
+/// the window-gate bug: both writer call sites used to skip the
+/// entire write chain (including the raw form) when no primary
+/// window existed, starving windowless motion-reader games despite
+/// the seeding block promising exactly those apps the accumulator.
+#[test]
+fn scripted_cursor_moves_reach_accumulated_motion_windowless() {
+    let _slot = common::run_slot();
+    let scenario: Scenario = serde_json::from_str(
+        r#"{"name":"motion-windowless","bot":{"type":"synthetic_keyboard","seed":1,"raw_surface":{"keys":[],"mouse_buttons":[]},"mouse_clicks":[{"frame":10,"button":"left","x":100.0,"y":100.0,"hold_frames":2},{"frame":40,"button":"left","x":300.0,"y":250.0,"hold_frames":2}]},"duration_s":2.0,"tps":60,"invariants":[]}"#,
+    )
+    .expect("scenario parses");
+
+    // Bare app: no plugins, so no InputPlugin (the harness fallback
+    // accumulator runs) and NO window entity (primary_window query
+    // is None on every frame).
+    let mut app = App::new();
+    app.insert_resource(MotionProbe::default());
+    app.add_systems(Update, motion_probe);
+    app.add_systems(Startup, |mut commands: Commands| {
+        commands.spawn(Transform::from_xyz(0.0, 0.0, 0.0));
+    });
+    app.add_systems(Update, |mut q: Query<&mut Transform>| {
+        for mut t in q.iter_mut() {
+            t.translation.x += 0.05;
+        }
+    });
+
+    let report = run_scenario(&mut app, &scenario).expect("run completes");
+
+    let probe = app.world().resource::<MotionProbe>();
+    assert_eq!(
+        probe.moving_frames, 1,
+        "RAW MouseMotion regression (windowless path): {} scripted clicks \
+         delivered but AccumulatedMouseMotion saw {} moving frames \
+         (probe: {probe:?}) — expected exactly 1: no primary window exists, \
+         but the raw MouseMotion write must not be gated on one (it is a \
+         windowless device event in real winit).",
+        report.metrics.input_count, probe.moving_frames
+    );
+    // Only the second hop carries a delta ((100,100)→(300,250)); the
+    // first click is a teleport-in.
+    assert_eq!(
+        probe.total_delta,
+        Vec2::new(200.0, 150.0),
+        "windowless accumulated motion total is wrong: expected exactly \
+         (200, 150) from the single hop (100,100)→(300,250), got {probe:?}.",
+    );
+}
+
+/// Scripted-motion path (`bot.mouse_motion`): frame-indexed deltas
+/// applied per frame through BOTH delivery forms. Unlike clicks (a
+/// first click is a teleport-in carrying no motion), a motion script
+/// parks the cursor at the origin and delivers the raw `MouseMotion`
+/// from its very FIRST frame — the delta IS the input. The probe here
+/// is a balanced oscillation (+10, +5) then (−10, −5), 20 repeats
+/// each: net cursor displacement must be ZERO (the zero-net property
+/// the motion probes rely on to kill the position confound), while
+/// the accumulated motion is nonzero — motion effects observed
+/// without any position drift.
+#[test]
+fn scripted_mouse_motion_reaches_both_delivery_forms_and_nets_zero() {
+    let _slot = common::run_slot();
+    let scenario: Scenario = serde_json::from_str(
+        r#"{"name":"motion-scripted","bot":{"type":"synthetic_keyboard","seed":1,"raw_surface":{"keys":[],"mouse_buttons":[]},"mouse_motion":[{"frame":10,"dx":10.0,"dy":5.0,"repeat_frames":20},{"frame":30,"dx":-10.0,"dy":-5.0,"repeat_frames":20}]},"duration_s":2.0,"tps":60,"invariants":[]}"#,
+    )
+    .expect("scenario parses");
+
+    let mut app = App::new();
+    app.add_plugins(
+        bevy::DefaultPlugins
+            .build()
+            .disable::<bevy_winit::WinitPlugin>(),
+    );
+    app.insert_resource(MotionProbe::default());
+    // Track the wrapped form too: an observer of CursorMoved deltas
+    // must see the same oscillation (winit-parity synthesis).
+    // WindowEvent is a MESSAGE (not an event), so no On<> observer —
+    // a reader system is the direct consumer shape.
+    #[derive(Resource, Default, Debug)]
+    struct WrappedProbe {
+        net: Vec2,
+        end_position: Vec2,
+        saw_events: bool,
+    }
+    app.insert_resource(WrappedProbe::default());
+    app.add_systems(Update, motion_probe);
+    app.add_systems(
+        Update,
+        |mut reader: bevy::ecs::message::MessageReader<bevy::window::WindowEvent>,
+         mut probe: ResMut<WrappedProbe>| {
+            for event in reader.read() {
+                if let bevy::window::WindowEvent::CursorMoved(moved) = event {
+                    probe.saw_events = true;
+                    probe.net += moved.delta.unwrap_or_default();
+                    probe.end_position = moved.position;
+                }
+            }
+        },
+    );
+    app.add_systems(Startup, |mut commands: Commands| {
+        commands.spawn(Transform::from_xyz(0.0, 0.0, 0.0));
+    });
+    app.add_systems(Update, |mut q: Query<&mut Transform>| {
+        for mut t in q.iter_mut() {
+            t.translation.x += 0.05;
+        }
+    });
+
+    run_scenario(&mut app, &scenario).expect("run completes");
+
+    let probe = app.world().resource::<MotionProbe>();
+    // RAW path: 40 frames of nonzero deltas (2 × 20 repeats).
+    assert_eq!(
+        probe.moving_frames, 40,
+        "scripted mouse_motion regression: AccumulatedMouseMotion saw only {} \
+         moving frames (probe: {probe:?}) — expected exactly 40 (2 windows × \
+         20 repeat_frames). scripted_motion_system must apply the delta \
+         every frame of its window.",
+        probe.moving_frames
+    );
+    // Net displacement zero: +20×(10,5) then 20×(−10,−5) cancels.
+    assert_eq!(
+        probe.total_delta,
+        Vec2::ZERO,
+        "oscillation did not net zero: accumulated total {probe:?} — the \
+         zero-net-displacement property the motion probes rely on is broken.",
+    );
+    let wrapped = app.world().resource::<WrappedProbe>();
+    assert!(
+        wrapped.saw_events,
+        "scripted motion never delivered the wrapped WindowEvent::CursorMoved \
+         — a picking/hover reader would see nothing (winit-parity synthesis \
+         requires both forms)."
+    );
+    assert_eq!(
+        wrapped.net,
+        Vec2::ZERO,
+        "wrapped CursorMoved deltas did not net zero: {wrapped:?}"
+    );
+    assert_eq!(
+        wrapped.end_position,
+        Vec2::ZERO,
+        "cursor end position is not the origin: {wrapped:?} — a balanced \
+         oscillation must park the cursor back where it started."
+    );
+}
+
 #[test]
 fn picking_delivery_end_to_end() {
     let _slot = common::run_slot();

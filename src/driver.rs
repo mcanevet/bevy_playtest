@@ -431,11 +431,13 @@ impl BotKeyboardWriters<'_> {
 const HEADLESS_CLICK_EXTENT: f32 = 1280.0;
 
 /// Bundled message writers for the mouse bots: the raw
-/// `MouseButtonInput` form (feeds `ButtonInput<MouseButton>`) and the
-/// wrapped `bevy_window::WindowEvent` form (what bevy_picking reads).
+/// `MouseButtonInput` form (feeds `ButtonInput<MouseButton>`), the raw
+/// `MouseMotion` form (feeds `AccumulatedMouseMotion`), and the wrapped
+/// `bevy_window::WindowEvent` form (what bevy_picking reads).
 #[derive(SystemParam)]
 struct BotMouseWriters<'w> {
     raw: MessageWriter<'w, bevy_input::mouse::MouseButtonInput>,
+    motion: MessageWriter<'w, bevy_input::mouse::MouseMotion>,
     window: MessageWriter<'w, bevy_window::WindowEvent>,
 }
 
@@ -463,17 +465,47 @@ impl BotMouseWriters<'_> {
         }
     }
 
-    /// Writes the cursor move through the wrapped `WindowEvent` form
-    /// (the only form bevy_picking consumes). `delta` is computed
-    /// against the bot's last position, matching winit's shape.
-    fn cursor_moved(&mut self, primary_window: Entity, pos: Vec2, last_pos: Option<Vec2>) {
-        self.window.write(bevy_window::WindowEvent::CursorMoved(
-            bevy_window::CursorMoved {
-                window: primary_window,
-                position: pos,
-                delta: last_pos.map(|last| pos - last),
-            },
-        ));
+    /// Writes the cursor move through BOTH message forms, mirroring
+    /// winit's split: the raw `MouseMotion` (what
+    /// `accumulate_mouse_motion_system` sums into
+    /// `AccumulatedMouseMotion` — Bevy's canonical frame-delta motion
+    /// API) and the wrapped `WindowEvent::CursorMoved` (the only form
+    /// bevy_picking consumes). Without the raw form, motion-reader
+    /// games (camera pan, look-based controls) see NOTHING from the
+    /// bot: winit derives `MouseMotion` from device events, and a
+    /// headless takeover has no device-event source.
+    ///
+    /// The raw form is written even WINDOWLESS: `MouseMotion` has no
+    /// window field (it is a device event in real winit), so unlike
+    /// the wrapped form it needs no primary window — a MinimalPlugins
+    /// app still gets motion, matching the seeding block's rationale.
+    ///
+    /// Parity is approximate, not literal: real winit sources
+    /// `MouseMotion` from unconditional device events and
+    /// `CursorMoved.delta` from window events, so the two can
+    /// disagree; the harness synthesizes both from one logical-px
+    /// position stream, so `MouseMotion.delta` and
+    /// `CursorMoved.delta` always match. Sound as a takeover model
+    /// (same deltas a real OS-level mouse move would produce), but
+    /// not what winit literally emits in multi-window or
+    /// device-event-only setups.
+    ///
+    /// Like winit's `CursorMoved.delta`, the motion is `None` when no
+    /// prior cursor position existed (first appearance is a
+    /// teleport, not a movement).
+    fn cursor_moved(&mut self, primary_window: Option<Entity>, pos: Vec2, last_pos: Option<Vec2>) {
+        if let Some(delta) = last_pos.map(|last| pos - last) {
+            self.motion.write(bevy_input::mouse::MouseMotion { delta });
+        }
+        if let Some(entity) = primary_window {
+            self.window.write(bevy_window::WindowEvent::CursorMoved(
+                bevy_window::CursorMoved {
+                    window: entity,
+                    position: pos,
+                    delta: last_pos.map(|last| pos - last),
+                },
+            ));
+        }
     }
 }
 
@@ -653,13 +685,72 @@ fn chaos_mouse_system(
     let pos = Vec2::new(x_norm * extent.x, y_norm * extent.y);
     let last_pos = cursor.position();
     cursor.set(pos);
-    if let Some((entity, _)) = window {
-        writers.cursor_moved(entity, pos, last_pos);
-    }
+    // Both forms: raw MouseMotion needs no window (device event in
+    // real winit); the wrapped CursorMoved targets a window.
+    writers.cursor_moved(window.map(|(e, _)| e), pos, last_pos);
     writers.click(window.map(|(e, _)| e), button, ButtonState::Pressed);
     state.metrics.input_count += 1;
     hold_state.press(button);
     hold_state.chaos_pending = Some((button, state.frame + hold_frames));
+}
+
+/// Scripted mouse motion (`mouse_motion`): frame-indexed logical-px
+/// deltas, applied for `repeat_frames` frames starting at `frame`.
+/// Orthogonal to the bot type like `mouse_clicks`, and to clicks in
+/// the same scenario (clicks apply first within a frame — system
+/// order in the Update tuple; a same-frame click then moves FROM the
+/// click's position, the sequence a real user produces).
+///
+/// Semantics vs the first appearance: a motion script applies its
+/// first delta from the cursor's CURRENT position — the window-space
+/// origin (0, 0) when the cursor was previously unset (e.g. a
+/// motion-only scenario). Unlike a scripted click (a teleport-in
+/// carrying no motion), the delta IS the input here, so the raw
+/// `MouseMotion` is delivered on EVERY frame of the window, including
+/// the first, and the wrapped `CursorMoved` carries the full delta
+/// from the starting position. This mirrors real winit, whose
+/// device-event `MouseMotion` is unconditional. Consequence for probe
+/// design: probes carry no clicks, so a balanced +d/−d oscillation
+/// starts at the origin and returns there — net displacement zero.
+/// Overlapping windows are legal: each window containing the current
+/// frame applies its delta in entry order, emitting one
+/// `MouseMotion` and `CursorMoved` pair per entry — real winit
+/// batches multiple device deltas per frame the same way.
+///
+/// Timing nuance vs real winit: the bot writes `MouseMotion` during
+/// `Update`, and `accumulate_mouse_motion_system` (engine or
+/// fallback) drains it in `PreUpdate`, so a game reading
+/// `AccumulatedMouseMotion` sees a bot delta one frame LATER than
+/// under real winit (whose device events arrive before the frame's
+/// `PreUpdate`). Probe and control share the timing, so the
+/// differential is unaffected.
+fn scripted_motion_system(
+    mut state: ResMut<RunState>,
+    scenario: Res<ScenarioResource>,
+    mut cursor: ResMut<CursorInputResource>,
+    primary_window: Query<Entity, With<bevy_window::PrimaryWindow>>,
+    mut writers: BotMouseWriters,
+) {
+    let window = primary_window.single().ok();
+    for motion in &scenario.0.bot.mouse_motion {
+        // Window [frame, frame + repeat_frames): strict bounds so a
+        // zero-repeat entry (rejected by validation, but defensive)
+        // applies nothing. Saturating add: frame windows are
+        // author-controlled u64s and validation only rejects entries
+        // starting at/past the run end, not huge spans.
+        if state.frame < motion.frame
+            || state.frame >= motion.frame.saturating_add(motion.repeat_frames)
+        {
+            continue;
+        }
+        let delta = Vec2::new(motion.dx, motion.dy);
+        // Park-at-origin on first application (see system docs).
+        let last_pos = cursor.position().unwrap_or(Vec2::ZERO);
+        let pos = last_pos + delta;
+        cursor.set(pos);
+        writers.cursor_moved(window, pos, Some(last_pos));
+        state.metrics.input_count += 1;
+    }
 }
 
 /// Scripted mouse clicks (`mouse_clicks`): frame-indexed position +
@@ -702,9 +793,9 @@ fn scripted_mouse_system(
         let pos = Vec2::new(click.x, click.y);
         let last_pos = cursor.position();
         cursor.set(pos);
-        if let Some(entity) = window {
-            writers.cursor_moved(entity, pos, last_pos);
-        }
+        // Both forms: raw MouseMotion needs no window (device event
+        // in real winit); the wrapped CursorMoved targets a window.
+        writers.cursor_moved(window, pos, last_pos);
         writers.click(window, button, ButtonState::Pressed);
         state.metrics.input_count += 1;
         let hold_frames = click.hold_frames.max(1);
@@ -951,6 +1042,18 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     // event->ButtonInput translation system.
     app.add_message::<bevy_input::mouse::MouseButtonInput>();
     app.init_resource::<ButtonInput<bevy_input::mouse::MouseButton>>();
+    // Raw mouse motion: same seeding rationale — winit writes
+    // `MouseMotion` (derived from device events) and InputPlugin's
+    // `accumulate_mouse_motion_system` sums it into
+    // `AccumulatedMouseMotion`, which motion-reader games (camera
+    // pan, look controls) poll each frame. MinimalPlugins apps lack
+    // both, so the harness registers the message, seeds the resource
+    // and runs the accumulator. Under InputPlugin graphs the
+    // accumulator must NOT be duplicated: two copies double-sum the
+    // same messages and games read 2× deltas — vacuously failing
+    // motion-magnitude thresholds, desyncing replay comparisons.
+    app.add_message::<bevy_input::mouse::MouseMotion>();
+    app.init_resource::<bevy_input::mouse::AccumulatedMouseMotion>();
     // Wrapped window-event forms: bevy_picking's mouse backend reads
     // `WindowEvent::CursorMoved`/`WindowEvent::MouseButtonInput` (what
     // winit writes). The mouse bots write these alongside the raw
@@ -978,6 +1081,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             (
                 bevy_input::keyboard::keyboard_input_system,
                 bevy_input::mouse::mouse_button_input_system,
+                bevy_input::mouse::accumulate_mouse_motion_system,
             ),
         );
     }
@@ -1068,6 +1172,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             chaos_mouse_system.run_if(is_chaos_bot),
             synthetic_keyboard_bot_system.run_if(is_synthetic_keyboard_bot),
             scripted_mouse_system,
+            scripted_motion_system,
             frame_timing_oracle_system,
             frozen_world_oracle_system,
             crate::invariant_eval::evaluate_invariants_system,

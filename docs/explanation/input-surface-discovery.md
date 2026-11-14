@@ -265,13 +265,14 @@ TypeId::of::<Messages<bevy_window::CursorMoved>>()
 ### Candidates
 
 Per the prior-likelihood set (as shipped in
-`PROBE_CANDIDATE_KEYS`: 30 canonical keys — WASD + arrows,
+`PROBE_CANDIDATE_KEYS`: 29 canonical keys — WASD + arrows,
 digits 0-9, navigation cluster, modifiers, and common action
 letters E/F/R):
 - **Keys:** WASD, arrows, digits 0-9, Space, Enter, Escape, Tab, Backspace, Shift/Ctrl/Alt, E/F/R (Q is the default control key — a probe of the control against itself is structurally unclassifiable, so it is excluded from candidates; a bespoke matrix probing it gets an `Unclassified` finding, never a trusted negative)
 - **Mouse positions (Phase 1):** the bounded grid of cell centers (default 5 × 4, `0 × 0` disabled) — see the Mouse Grid Probing section
 - **Mouse buttons:** Left, Right, Middle (deferred — Phase 1 probes positions only)
-- **Mouse motion:** delta (10.0, 5.0) (deferred)
+- **Mouse motion:** delta (10.0, 5.0) — zero-net oscillation, see the
+  Motion Probing section
 - **Wheel:** dy = 1.0 (deferred)
 - **Gamepad:** face buttons (South/East/North/West), DPad, Start/Select, axes (LeftStickX/Y) (deferred)
 
@@ -471,8 +472,10 @@ spot is surfaced in-band rather than hidden.
 ## Mouse Grid Probing (Phase 1 Mouse Grammar)
 
 The keyboard matrix asks "WHICH key matters"; the mouse matrix asks
-"WHERE a click matters". Phase 1 ships position probing only —
-button and motion candidates stay a future knob.
+"WHERE a click matters". Phase 1 ships position probing first
+(this section); motion probing follows in
+[its own section](#mouse-motion-probing-phase-1-mouse-grammar-continued).
+Button and wheel candidates stay future knobs.
 
 **Delivery without a new bot.** Mouse cell probes ride the EXISTING
 scenario schema: any bot accepts `bot.mouse_clicks` (frame-indexed
@@ -482,6 +485,21 @@ probe children emit `CursorMoved` + `MouseButtonInput` + wrapped
 window events before the click, so bevy_picking sees the same
 sequence a real pointer produces). No new bot type, no schema
 change.
+
+**Two delivery forms per cursor move.** Every bot cursor move
+(real and scripted) writes the raw `MouseMotion` alongside the
+wrapped `WindowEvent::CursorMoved`, mirroring winit's split between
+device events and window events. `MouseMotion` is windowless — it
+is delivered even to MinimalPlugins apps with no window entity —
+and `accumulate_mouse_motion_system` sums it into
+`AccumulatedMouseMotion`, so camera-pan and look-control games
+(observed as `AccumulatedMouseMotion` readers in the census) see the
+same frame deltas a real mouse would produce (from the following
+frame — see the driver's motion-delivery docs for the one-frame
+accumulator latency note). A teleport-in (first cursor appearance)
+emits no motion, matching winit's `CursorMoved` delta being
+`None` there. (Clicks deliver a third form, `MouseButtonInput` —
+that is the click channel, not the move channel.)
 
 **The grid.** `ProbePlan` gains a bounded position grid, probed at
 cell centers in normalized window space (0.0..=1.0):
@@ -543,6 +561,67 @@ pruned on weak evidence, and "probed, no divergence" is an answer
 
 **Cost.** +22 jobs per default plan (20 cells + 2 mouse control
 copies), folded into the same subprocess pool.
+
+## Mouse Motion Probing (Phase 1 Mouse Grammar, Continued)
+
+The grid asks "where a CLICK matters"; the motion probe asks
+"does MOVEMENT matter at all". It fills the
+`DiscoveredSurface::mouse_motion` placeholder with a real verdict:
+does the game react to mouse movement — position-independent,
+direction-unresolved.
+
+**Zero-net oscillation.** The probe injects a balanced oscillation
+from the readiness frame: `(+dx, +dy)` every frame for
+`mouse_motion_cycles` frames (default amplitudes 10/5 logical px,
+30 cycles = 1 s at 60 tps), then the negation. Net cursor
+displacement is exactly ZERO — the probe observes MOTION effects
+while killing the position confound: any divergence from the
+control cannot be explained by "the cursor ended up somewhere
+else". Mid-oscillation the world provably does sit elsewhere (a
+signed-delta pan integrates +d before −d), and the per-frame
+digest series records those frames, so a motion reader diverges
+from the FIRST +d frame; only a diff of the FINAL frame alone
+could be fooled by the eventual cancel.
+
+**Delivery through the same two move forms.** Motion scripts
+(`bot.mouse_motion`, frame-indexed `(dx, dy, repeat_frames)`
+deltas, valid for any bot) apply from the cursor's current position —
+the origin in a motion-only scenario — and
+deliver the raw `MouseMotion` from the very FIRST frame — the
+delta IS the input, unlike a click's teleport-in — plus the
+wrapped `CursorMoved` carrying the cumulative delta. Games reading
+`AccumulatedMouseMotion` (the camera-pan idiom) and games reading
+wrapped cursor moves (bevy_picking hover state) BOTH diverge from
+the control, which is correct: both are real motion reactions.
+
+**Normalized pair, motion edition.** The motion control is the
+same inert control-key tap at the same frame as the probe, minus
+the oscillation — the one-bit doctrine preserved (there is no
+zero-input bot in the schema, so both runs carry the inert tap,
+mirroring the key matrix's rationale). The control runs TWICE
+(its own determinism gate; a diverged pair degrades the surface to
+`Statistical` with a note naming the MOTION gate), and the probe
+is diffed against the first copy. Coverage backstops apply
+verbatim: an inert verdict from an asymmetric or short-span pair
+lands as `Unclassified` in the loud note, never as a trusted
+negative. An orphaned motion probe with no control produces no
+finding and a loud note instead of silence.
+
+**Honest limits.** A single diagonal oscillation cannot resolve
+DIRECTION (a signed-delta pan and a speed-integrating consumer
+look identical at the verdict level) — direction-resolved probing
+is a future knob. The oscillation must fit strictly inside the run
+(`frame + 2·cycles < ticks`): a truncated oscillation loses both
+its zero-net property and its post-motion coverage, so plan
+validation rejects it loudly. And the probe is never pre-pruned on
+static-scan data: the scan exports after the first control child
+runs, so — exactly like the mouse grid — motion probes run
+whenever the plan enables them (`mouse_motion_enable`, default
+on; `false` is the off-switch for slim test matrices). Games the
+scan PROVES motion-readerless still get probed; their inert
+verdict is fail-open coverage, not waste.
+
+**Cost.** +3 jobs per default plan (1 probe + 2 control copies).
 
 ## Divergence Detection Algorithm
 
@@ -745,7 +824,7 @@ invalidation the cache does not do). Entry shape:
                      "effect": {"first_divergence_frame_delta": 1},
                      "confidence": "Exact",
                      "provenance": "probe_verified"}],
-    "mouse_motion": null,
+    "mouse_motion": {"effect": null, "confidence": "Exact", "provenance": "probe_verified"},
     "wheel": null,
     "gamepad_buttons": [],
     "gamepad_axes": [],
@@ -783,7 +862,11 @@ pub struct DiscoveredSurface {
                                             // artifacts deserialize
                                             // unchanged; never pruned
                                             // on weak evidence)
-    pub mouse_motion: Option<Effect>,   // motion-probe effect, if probed
+    pub mouse_motion: Option<MouseMotionFinding>, // motion-probe finding, if probed
+                                                 // (effect + confidence +
+                                                 // provenance; #[serde(default)]
+                                                 // — pre-motion artifacts had
+                                                 // `null` here and still parse)
     pub wheel: Option<Effect>,          // wheel-probe effect, if probed
     pub gamepad_buttons: Vec<KeyFinding>, // same shape as `keys`
     pub gamepad_axes: Vec<(String, Option<Effect>)>, // axis → effect
@@ -893,21 +976,23 @@ planning estimates below assume 5 s per run to leave headroom for
 heavier games.
 
 Run-count derivation (MVP: tap only, 2 independent probe points per key,
-the shipped 30-key candidate set):
+the shipped 29-key candidate set):
 
 - **Controls:** 4 runs — the double-control determinism gate runs C
   twice PER PROBE POINT, and `build_job_list` emits the pair inside
   the per-point loop (2 points × 2 control copies = 4). Shared across
   all keys — not per-key.
-- **Probe runs:** 30 keys × 2 points = 60 runs.
+- **Probe runs:** 29 keys × 2 points = 58 runs.
 - **Mouse matrix (Phase 1):** +22 runs — 20 grid cells (default 5 × 4)
   + 2 mouse control copies (the determinism gate, mouse channel).
-- **Total:** 86 runs per fixture.
+- **Motion matrix:** +3 runs — 1 motion probe + 2 motion control
+  copies (the determinism gate, motion channel).
+- **Total:** 87 runs per fixture.
 
 Wall-clock:
-- Serial: 86 × 5s = 430s (~7.2 min)
-- Pool of 8: ~430s / 8 ≈ 54s
-- Pool of 6: ~430s / 6 ≈ 72s
+- Serial: 87 × 5s = 435s (~7.2 min)
+- Pool of 8: ~435s / 8 ≈ 54s
+- Pool of 6: ~435s / 6 ≈ 72s
 - **Total (pool=8):** ~55s per fixture
 
 At the spike's measured 1.9s/run (rather than the 5s planning figure),
@@ -1126,10 +1211,11 @@ fixture). They refine the design above.
 
 - 3s scenario ≈ **1.9 s wall-clock per subprocess run** (fixture spends ~1s
   in startup/teardown outside simulated time).
-- Shipped matrix (30 keys × 2 probe points, tap only, + 4 per-point
-  control runs + 22 mouse jobs (20 cells + 2 mouse control copies) =
-  86 runs): ~164 s sequential at the measured 1.9s/run,
-  ~21 s at pool=8. At the 5s planning figure: ~430s serial, ~54s at
+- Shipped matrix (29 keys × 2 probe points, tap only, + 4 per-point
+  control runs + 22 mouse jobs (20 cells + 2 mouse control copies) +
+  3 motion jobs (1 probe + 2 control copies) =
+  87 runs): ~165 s sequential at the measured 1.9s/run,
+  ~22 s at pool=8. At the 5s planning figure: ~435s serial, ~54s at
   pool=8.
 - Even the honest worst case (full 60-key prior set, both tap and hold
   variants, 2 probe points each) stays within a coffee-break budget at

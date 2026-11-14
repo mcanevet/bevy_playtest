@@ -981,3 +981,102 @@ fn mouse_cell_coinciding_with_control_position_is_unclassified() {
 
     std::fs::remove_dir_all(&config.cache_dir).unwrap();
 }
+
+/// Positive motion fixture: `takeover_demo_motion` pans its world by
+/// the SIGNED `AccumulatedMouseMotion` delta every frame — the
+/// camera-pan idiom. The motion probe's zero-net +d/−d oscillation
+/// displaces the world DURING the oscillation window (the digests
+/// record every frame, so the trace diverges from the frozen control
+/// from the first +d frame), and discovery must report a
+/// `mouse_motion` finding with an observed effect and Exact
+/// confidence. Job count: 1 key pair × 2 + 4 key controls + the
+/// disabled grid + 1 motion probe + 2 motion controls = 9
+/// subprocesses.
+#[test]
+fn mouse_motion_finds_effects_on_motion_driven_game() {
+    let _slot = common::run_slot();
+    let motion = env!("CARGO_BIN_EXE_takeover_demo_motion");
+    let mut config = DiscoveryConfig::new(motion);
+    // Keyboard candidates: the control key alone — the motion layer
+    // (the subject here) stays cheap.
+    config.plan.candidate_keys = vec!["KeyQ".into()];
+    // Click grid OFF: cells are not under test here, and the motion
+    // demo binds no clicks — the cell matrix would only burn runtime
+    // producing inert verdicts.
+    config.plan.mouse_grid_cols = 0;
+    config.plan.mouse_grid_rows = 0;
+    config.cache_dir = temp_dir();
+
+    let cold = discover(&config).expect("cold discovery of the motion game");
+    assert!(!cold.from_cache);
+
+    let finding = cold
+        .surface
+        .mouse_motion
+        .as_ref()
+        .expect("the motion probe ran; the surface must carry a motion finding");
+    assert!(
+        finding.effect.is_some(),
+        "the motion-driven game must diverge from its no-motion control"
+    );
+    assert_eq!(finding.confidence, KeyConfidence::Exact);
+
+    // Deterministic game: all three gates passed, whole surface Exact.
+    assert_eq!(cold.surface.confidence, SurfaceConfidence::Exact);
+
+    // Warm run: identical surface from the cache.
+    let warm = discover(&config).expect("warm discovery");
+    assert!(warm.from_cache);
+    assert_eq!(warm.surface, cold.surface, "cached surface is identical");
+
+    std::fs::remove_dir_all(&config.cache_dir).unwrap();
+}
+
+/// Negative motion control: `takeover_demo_input` moves ONLY on
+/// `just_pressed(Digit1)` — it binds no motion reader, so the
+/// oscillation leaves the world byte-identical to the motion
+/// control and the finding must read as a TRUSTED inert (Exact,
+/// effect: null). The correspondence the motion probe must draw: a
+/// motion-driven game HAS a motion effect, a keyboard-only game
+/// does NOT — this is the anti-vacuity pair (without the D0 raw
+/// MouseMotion delivery fix, BOTH sides would read inert and this
+/// test's positive twin would fail while the old machinery looked
+/// green).
+#[test]
+fn mouse_motion_finds_no_effects_on_keyboard_only_game() {
+    let _slot = common::run_slot();
+    let mut config = DiscoveryConfig::new(demo_binary());
+    config.plan.candidate_keys = vec!["Digit1".into()];
+    config.plan.mouse_grid_cols = 0;
+    config.plan.mouse_grid_rows = 0;
+    config.cache_dir = temp_dir();
+
+    let cold = discover(&config).expect("cold discovery of the keyboard game");
+    assert!(!cold.from_cache);
+
+    let finding = cold
+        .surface
+        .mouse_motion
+        .as_ref()
+        .expect("the motion probe ran; the surface must carry a motion finding");
+    assert!(
+        finding.effect.is_none(),
+        "the keyboard-only game must not react to the oscillation"
+    );
+    // Trusted negative: deterministic game, symmetric coverage.
+    assert_eq!(finding.confidence, KeyConfidence::Exact);
+    assert_eq!(cold.surface.confidence, SurfaceConfidence::Exact);
+
+    // Contrast: Digit1 is still effective on the keyboard layer —
+    // the inert motion verdict means "no motion input bound", not
+    // "dead game".
+    let digit1 = cold
+        .surface
+        .keys
+        .iter()
+        .find(|k| k.key == "Digit1")
+        .expect("Digit1 was probed");
+    assert!(digit1.effect.is_some());
+
+    std::fs::remove_dir_all(&config.cache_dir).unwrap();
+}

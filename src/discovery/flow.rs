@@ -85,7 +85,8 @@ use super::probe_pool::{
 use super::probe_scenarios::{MouseCell, ProbePlan, ProbePoint};
 use super::provenance::ProvenanceGrade;
 use super::surface::{
-    DiscoveredSurface, KeyConfidence, KeyFinding, MouseCellFinding, SurfaceConfidence,
+    DiscoveredSurface, KeyConfidence, KeyFinding, MouseCellFinding, MouseMotionFinding,
+    SurfaceConfidence,
 };
 
 /// Opt-in switch for battery-run discovery (value `"1"`).
@@ -752,6 +753,66 @@ pub fn aggregate(
         }
     }
 
+    // ---- Motion matrix (zero-net oscillation probe) ----
+    // Same doctrine once more: the FIRST MotionControl outcome is
+    // the diff baseline, the SECOND re-checks the determinism gate.
+    // The probe differs from the control by exactly one bit (the
+    // oscillation), so the first divergence IS the motion effect.
+    let mut mouse_motion_finding: Option<(Option<super::diff::Effect>, bool)> = None;
+    let mut motion_gate_diverged_at: Option<u64> = None;
+    let mut motion_orphaned = false;
+    {
+        let mut motion_baseline: Option<(usize, u64)> = None; // (index, point frame)
+        for (idx, outcome) in outcomes.iter().enumerate() {
+            let ProbeJobKind::MotionControl { point } = &outcome.kind else {
+                continue;
+            };
+            match motion_baseline {
+                None => motion_baseline = Some((idx, point.frame)),
+                Some((base_idx, _)) => {
+                    if let Err(divergence) = digest::compare(
+                        &outcomes[base_idx].report.state_digest,
+                        &outcome.report.state_digest,
+                    ) {
+                        if motion_gate_diverged_at.is_none() {
+                            motion_gate_diverged_at = Some(divergence.frame);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some((base_idx, point_frame)) = motion_baseline {
+            let baseline = &outcomes[base_idx].report;
+            for outcome in outcomes {
+                let ProbeJobKind::MotionProbe { point } = &outcome.kind else {
+                    continue;
+                };
+                let _ = point; // the readiness point rode the job; the baseline frame governs the diff
+                let coverage_trusted = !coverage_mismatch(&outcome.report, baseline)
+                    && expected_span_covered(&outcome.report, baseline, expected_last_frame);
+                let effect = diff_trace(
+                    &outcome.report.state_digest,
+                    &baseline.state_digest,
+                    point_frame,
+                );
+                match mouse_motion_finding {
+                    None => mouse_motion_finding = Some((effect, coverage_trusted)),
+                    Some((slot, _)) if slot.is_none() && !coverage_trusted => {
+                        mouse_motion_finding = Some((effect, false))
+                    }
+                    Some(_) => {}
+                }
+            }
+        } else {
+            // No motion baseline: a motion probe without its control
+            // pair supports no verdict. Loud note, not silence —
+            // deferred to the surface's notes below.
+            motion_orphaned = outcomes
+                .iter()
+                .any(|o| matches!(o.kind, ProbeJobKind::MotionProbe { .. }));
+        }
+    }
+
     let mut surface = DiscoveredSurface {
         keys: probes
             .into_iter()
@@ -781,6 +842,23 @@ pub fn aggregate(
                 }
             })
             .collect(),
+        mouse_motion: mouse_motion_finding.map(|(effect, coverage_trusted)| {
+            if effect.is_none() && !coverage_trusted {
+                // Same coverage-backstop honesty: an inert motion
+                // verdict from an asymmetric or short-span pair is
+                // UNTRUSTED, and named in the loud note.
+                untrusted_inert.push("mouse_motion".to_string());
+            }
+            MouseMotionFinding {
+                effect,
+                confidence: if effect.is_none() && !coverage_trusted {
+                    KeyConfidence::Unclassified
+                } else {
+                    KeyConfidence::Exact
+                },
+                provenance: ProvenanceGrade::ProbeVerified,
+            }
+        }),
         mouse_cells: mouse_cells
             .into_iter()
             .map(|(cell, effect, coverage_trusted)| {
@@ -810,7 +888,10 @@ pub fn aggregate(
             })
             .collect(),
         probed_at: baselines.iter().map(|(p, _)| p.frame).collect(),
-        confidence: if gate_diverged_at.is_none() && mouse_gate_diverged_at.is_none() {
+        confidence: if gate_diverged_at.is_none()
+            && mouse_gate_diverged_at.is_none()
+            && motion_gate_diverged_at.is_none()
+        {
             SurfaceConfidence::Exact
         } else {
             SurfaceConfidence::Statistical
@@ -835,6 +916,25 @@ pub fn aggregate(
              control runs diverged — mouse cell effects are statistical, inert \
              cells are NOT trusted negatives"
         ));
+    }
+    // Motion determinism gate: same honesty rule, separate channel —
+    // a diverged motion-control pair taints the motion finding's
+    // inert verdict, and its note names the MOTION matrix.
+    if let Some(frame) = motion_gate_diverged_at {
+        surface.notes.push(format!(
+            "motion determinism gate FAILED at frame {frame}: identical motion \
+             control runs diverged — the motion finding is statistical, an \
+             inert motion verdict is NOT a trusted negative"
+        ));
+    }
+    // Motion orphan: a probe without its control pair supports no
+    // verdict; omitted, loudly (mirrors the mouse-cell orphan note).
+    if motion_orphaned {
+        surface.notes.push(
+            "unmatched motion probe: probe run has no motion control baseline — \
+             no verdict is possible and it was omitted from the surface"
+                .to_string(),
+        );
     }
     // Backstop companion to the pool's completeness gate: an inert
     // verdict whose probe/control pair covered asymmetric frames —

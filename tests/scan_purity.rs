@@ -149,19 +149,24 @@ mod in_process {
         // button, motion AND wheel), so a post-run scan shows nonzero
         // on every mouse channel. The captured scan must not.
         //
-        // Expected exact counts on this bare app: MouseButton 1 and
-        // Keyboard 2 are the `!InputPlugin` FALLBACK translators the
-        // harness registers in PreUpdate — engine-named systems
-        // (`keyboard_input_system`, `mouse_button_input_system`) that
-        // a DefaultPlugins/InputPlugin graph carries too (there the
+        // Expected exact counts on this bare app: MouseButton 1,
+        // MouseMotion 1 and Keyboard 2 are the `!InputPlugin` FALLBACK
+        // translators the harness registers in PreUpdate — engine-named
+        // systems (`keyboard_input_system`, `mouse_button_input_system`,
+        // `accumulate_mouse_motion_system`) that a
+        // DefaultPlugins/InputPlugin graph carries too (there the
         // engine registers the identical systems itself). Counting
         // them is the deliberate parity decision; they are engine
         // plumbing, not harness instrumentation. Everything the BOTS
         // write must stay invisible:
         assert_eq!(
             scan.reader_count(DeviceClass::MouseMotion),
-            0,
-            "harness wheel/window writers leaked into the captured scan: {:?}",
+            1,
+            "MouseMotion count drifted from the deliberate-parity pin: expected \
+             exactly 1 (the !InputPlugin fallback accumulate_mouse_motion_system), \
+             got {} (readers: {:?}). 0 means the fallback disappeared; >1 means \
+             something new is reading MouseMotion on this bare app.",
+            scan.reader_count(DeviceClass::MouseMotion),
             scan.readers
         );
         assert_eq!(

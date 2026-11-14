@@ -11,13 +11,17 @@ Public API surface for integrators.
     "type": "chaos" | "synthetic_keyboard",
     "seed": number,               // default 42
     "input_rate_hz": number,      // default 10
-    "key_presses": [              // synthetic_keyboard needs this or mouse_clicks
+    "key_presses": [              // synthetic_keyboard needs this, mouse_clicks or mouse_motion
       { "frame": number, "key": "string", "hold_frames": number }
     ],
     "mouse_clicks": [             // optional; scripted clicks, any bot type
       { "frame": number, "x": number, "y": number,
         "button": "left" | "right" | "middle" | "back" | "forward",
         "hold_frames": number }   // default 1
+    ],
+    "mouse_motion": [             // optional; scripted motion, any bot type
+      { "frame": number, "dx": number, "dy": number,
+        "repeat_frames": number } // default 1; net deltas per frame
     ],
     "raw_surface": {              // optional, chaos only
       "keys": ["KeyW", "ArrowLeft"],
