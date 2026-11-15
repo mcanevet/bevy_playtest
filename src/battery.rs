@@ -445,18 +445,11 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
         // tier had NO such filter, so a probe-VERIFIED Escape could
         // reach the injected bot's surface. Withheld, and the
         // withholding is a REPORTED decision, never a silent drop.
-        let withheld_poison: Vec<String> = keys
-            .iter()
-            .filter(|k| source_scan::POISON_KEYS.contains(&k.as_str()))
-            .cloned()
-            .collect();
-        if !withheld_poison.is_empty() {
-            notes.push(format!(
-                "probe-verified poison keys withheld from the injected surface: {}",
-                withheld_poison.join(", ")
-            ));
+        let (poison_free, withheld_note) = withhold_probe_poison(&keys);
+        if let Some(note) = withheld_note {
+            notes.push(note);
         }
-        keys.retain(|k| !source_scan::POISON_KEYS.contains(&k.as_str()));
+        keys = poison_free;
 
         // SCAN ∪ PROBE UNION (tier-order fix): `chaos_keys()` is
         // bounded by the probe matrix's candidate prior, while the
@@ -868,5 +861,72 @@ pub fn run_and_expect_clean(binary: &str, scenario: &str) {
     match report.status {
         crate::enums::PlaytestStatus::Pass => {}
         _ => panic!("{}", report.findings_summary(scenario)),
+    }
+}
+
+/// Withhold poison keys ([`crate::discovery::source_scan::POISON_KEYS`])
+/// from a probe-verified injectable surface, returning the filtered
+/// list plus the refusal note naming what was withheld (refusal over
+/// silence: `None` means nothing was withheld — no decision, no
+/// note). Pure function: the inject path is otherwise unreachable
+/// from unit tests (it needs a real probe run over a game binary).
+pub fn withhold_probe_poison(keys: &[String]) -> (Vec<String>, Option<String>) {
+    let withheld: Vec<String> = keys
+        .iter()
+        .filter(|k| source_scan::POISON_KEYS.contains(&k.as_str()))
+        .cloned()
+        .collect();
+    let note = if withheld.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "probe-verified poison keys withheld from the injected surface: {}",
+            withheld.join(", ")
+        ))
+    };
+    let kept: Vec<String> = keys
+        .iter()
+        .filter(|k| !source_scan::POISON_KEYS.contains(&k.as_str()))
+        .cloned()
+        .collect();
+    (kept, note)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn probe_poison_is_withheld_and_reported_by_name() {
+        // A probe-VERIFIED Escape/Tab must never reach the injected
+        // blind bot's surface (frozen rule: poison never reaches the
+        // chaos bot), and the withholding is reported, naming the
+        // keys — never a silent drop.
+        let keys = vec![
+            "Digit1".to_string(),
+            "Escape".to_string(),
+            "KeyV".to_string(),
+            "Tab".to_string(),
+        ];
+        let (kept, note) = withhold_probe_poison(&keys);
+        assert_eq!(
+            kept,
+            vec!["Digit1".to_string(), "KeyV".to_string()],
+            "poison keys must be withheld from the injected surface"
+        );
+        let note = note.expect("withholding must be reported (refusal over silence)");
+        assert!(
+            note.contains("Escape") && note.contains("Tab"),
+            "the note must name the withheld keys: {note}"
+        );
+    }
+
+    #[test]
+    fn no_poison_no_note() {
+        // Nothing withheld => no decision => no note (a note here
+        // would LIE about a withholding that did not happen).
+        let (kept, note) = withhold_probe_poison(&["Digit1".to_string(), "KeyV".to_string()]);
+        assert_eq!(kept, vec!["Digit1".to_string(), "KeyV".to_string()]);
+        assert_eq!(note, None, "no withholding happened — stay silent");
     }
 }
