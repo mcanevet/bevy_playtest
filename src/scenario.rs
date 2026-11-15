@@ -289,25 +289,30 @@ pub struct Invariant {
     pub min_z: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_z: Option<f32>,
-    /// Target selector. Currently only `all` (zero-annotation): the
-    /// invariant applies to every entity with a Transform.
+    /// Target selector. `all` (zero-annotation) applies
+    /// `nodes_in_bounds` to every entity with a Transform;
+    /// `with_component` names a registered component type for
+    /// `component_check` (see `TargetSelector`).
     #[serde(default)]
     pub target_selector: Option<crate::enums::TargetSelector>,
-    /// custom thresholds.
+    /// Threshold compared against by `component_check` (numeric).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<serde_json::Value>,
-    /// custom rule value path (reserved; custom rules are not yet
-    /// evaluated).
+    /// Reflect path to the numeric leaf `component_check` compares
+    /// (e.g. `translation.z`, `hp`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// Comparison operator for `component_check`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check: Option<CheckOp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after_s: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before_s: Option<f32>,
-    /// Eventually mode: the rule must hold AT LEAST ONCE within this
-    /// deadline (seconds).
+    /// Eventually mode (`component_check` only): the predicate must
+    /// hold for all selected entities simultaneously at least once
+    /// within this deadline (seconds). Without it, the predicate must
+    /// hold on every frame where the selector matched anything.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eventually_s: Option<f32>,
 }
@@ -771,9 +776,9 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
         }
     }
     for rule in &scenario.invariants {
-        if rule.eventually_s.is_some() {
+        if rule.eventually_s.is_some() && rule.rule != InvariantRule::ComponentCheck {
             return Err(ScenarioError::NotImplemented(format!(
-                "invariant '{}': eventually mode is not supported",
+                "invariant '{}': eventually mode is only supported for component_check",
                 rule.name
             )));
         }
@@ -783,6 +788,123 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                  supported",
                 rule.name
             )));
+        }
+        // Per-rule field requirements: keep the reserved `value`/
+        // `path`/`check` surface honest — accepted for component_check
+        // (required there), rejected for nodes_in_bounds (they belong
+        // to an unimplemented rule and would silently pass otherwise).
+        match rule.rule {
+            InvariantRule::ComponentCheck => {
+                let Some(crate::enums::TargetSelector::WithComponent { name }) =
+                    rule.target_selector.as_ref()
+                else {
+                    return Err(ScenarioError::Rejected(format!(
+                        "invariant '{}': component_check requires \
+                         'target_selector: {{\"with_component\": {{\"name\": ...}}}}'",
+                        rule.name
+                    )));
+                };
+                if name.trim().is_empty() {
+                    return Err(ScenarioError::Rejected(format!(
+                        "invariant '{}': with_component name must be non-empty",
+                        rule.name
+                    )));
+                }
+                if rule.path.is_none() {
+                    return Err(ScenarioError::Rejected(format!(
+                        "invariant '{}': component_check requires 'path' \
+                         (a reflect path into the component, e.g. \"translation.z\")",
+                        rule.name
+                    )));
+                }
+                if rule.check.is_none() {
+                    return Err(ScenarioError::Rejected(format!(
+                        "invariant '{}': component_check requires 'check' \
+                         (one of lt/le/gt/ge/equals/ne)",
+                        rule.name
+                    )));
+                }
+                match rule.value.as_ref() {
+                    Some(serde_json::Value::Number(n)) => {
+                        if n.as_f64().is_none() {
+                            return Err(ScenarioError::Rejected(format!(
+                                "invariant '{}': 'value' must be a finite number",
+                                rule.name
+                            )));
+                        }
+                    }
+                    _ => {
+                        return Err(ScenarioError::Rejected(format!(
+                            "invariant '{}': component_check requires a numeric \
+                             'value' to compare against",
+                            rule.name
+                        )));
+                    }
+                }
+                // Bounds fields belong to nodes_in_bounds only:
+                // silently ignoring them here would recreate the
+                // accepted-and-ignored reserved-field hole.
+                if rule.min_x.is_some()
+                    || rule.max_x.is_some()
+                    || rule.min_y.is_some()
+                    || rule.max_y.is_some()
+                    || rule.min_z.is_some()
+                    || rule.max_z.is_some()
+                {
+                    return Err(ScenarioError::Rejected(format!(
+                        "invariant '{}': component_check does not use bounds \
+                         fields (min_x/max_x/min_y/max_y/min_z/max_z) — those \
+                         belong to nodes_in_bounds; use 'path'/'check'/'value'",
+                        rule.name
+                    )));
+                }
+                // The eventually deadline must be a judgeable temporal
+                // bound: positive, finite, and inside the run. A
+                // deadline past the run's end can never elapse, so the
+                // check would be unjudgeable, not failed; a
+                // non-positive deadline degenerates to "hold at the
+                // very first matched frame or never". Same doctrine
+                // as liveness.timeout_s and mouse_motion.frame vs
+                // total_ticks.
+                if let Some(eventually_s) = rule.eventually_s {
+                    if !eventually_s.is_finite() || eventually_s <= 0.0 {
+                        return Err(ScenarioError::Rejected(format!(
+                            "invariant '{}': eventually_s must be a finite \
+                             number > 0 (got {eventually_s})",
+                            rule.name
+                        )));
+                    }
+                    if eventually_s > scenario.duration_s {
+                        return Err(ScenarioError::Rejected(format!(
+                            "invariant '{}': eventually_s ({eventually_s}s) exceeds \
+                             the run duration ({duration}s) — the deadline can never \
+                             elapse within the run, so the check would be \
+                             unjudgeable; keep the deadline at or inside the run \
+                             window",
+                            rule.name,
+                            duration = scenario.duration_s
+                        )));
+                    }
+                }
+            }
+            InvariantRule::NodesInBounds => {
+                if rule.value.is_some() || rule.path.is_some() || rule.check.is_some() {
+                    return Err(ScenarioError::Rejected(format!(
+                        "invariant '{}': nodes_in_bounds does not use value/path/check",
+                        rule.name
+                    )));
+                }
+                if matches!(
+                    rule.target_selector,
+                    Some(crate::enums::TargetSelector::WithComponent { .. })
+                ) {
+                    return Err(ScenarioError::Rejected(format!(
+                        "invariant '{}': nodes_in_bounds does not support \
+                         with_component selectors",
+                        rule.name
+                    )));
+                }
+            }
         }
     }
     for rule in &scenario.invariants {

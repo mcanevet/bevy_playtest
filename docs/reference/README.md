@@ -41,8 +41,16 @@ Public API surface for integrators.
       "rule": "nodes_in_bounds",
       "min_x": number, "max_x": number,
       "min_y": number, "max_y": number,
-      "min_z": number, "max_z": number,
-      "target_selector": "all"   // optional; only "all" exists
+      "min_z": number, "max_z": number
+    },
+    {
+      "name": "string",
+      "rule": "component_check",     // authored-intent oracle
+      "target_selector": { "with_component": { "name": "Camera3d" } },
+      "path": "translation.z",      // reflect path to a numeric leaf
+      "check": "gt",                // lt | le | gt | ge | equals | ne
+      "value": number,               // threshold
+      "eventually_s": number        // optional: deadline (seconds)
     }
   ],
   "oracles": ["string"],          // rejected: oracle selection not implemented
@@ -90,8 +98,9 @@ Two distinct error classes, at different stages:
   `agent_target`, or gamepad/wheel surface knobs) fail deserialization
   immediately with a serde unknown-field error naming the offender.
 - **Known-but-unimplemented fields** parse, then reject at validation
-  with `NotImplemented`: `eventually_s`, `after_s`, `before_s`,
-  invariant `value`/`path`/`check` selectors, `oracles` selection,
+  with `NotImplemented`: `after_s`, `before_s`,
+  `eventually_s` (except on `component_check`, where it is supported),
+  `oracles` selection,
   `liveness.mode: "off"`. Unknown rule values
   (e.g. `custom`) and unknown bot types (e.g. `pursuit`, `replay`) fail
   deserialization naming the offender.
@@ -113,6 +122,36 @@ Two distinct error classes, at different stages:
   to ±1000 when unset. Additionally, a hard-coded global bounds check
   (±1000 on x/y/z) runs on all entities regardless of invariants or
   tagging — stray geometry will trip it even with zero invariants declared.
+- `component_check`: an authored-intent oracle. Selects every entity
+  carrying a named registered component
+  (`target_selector: {"with_component": {"name": "..."}}` — full
+  registered type path, or an unambiguous short path like
+  `Camera3d`; short names matching several registered types reject),
+  reads a numeric leaf via a reflect `path` (e.g. `"translation.z"`
+  — tried on the selector component first, then on the entity's
+  `Transform` so identity components can select while the check reads
+  position), and compares it against a numeric `value` with `check`
+  (`lt`/`le`/`gt`/`ge`/`equals`/`ne`). Without `eventually_s` the
+  predicate must hold on every frame where the selector matched
+  anything; with `eventually_s: N` it must hold for all selected
+  entities simultaneously at least once within N seconds of the
+  run start (holding only after N seconds elapsed misses the
+  deadline and fails; holding at exactly the deadline boundary
+  frame counts). `eventually_s` must be positive, finite, and ≤
+  `duration_s` — a deadline past the run's end can never elapse
+  and is rejected at load. "Simultaneously" is judged per frame
+  against the entities matched AT that frame: satisfaction
+  recorded before a new entity spawns is not retroactively
+  invalidated by the latecomer, even if it never satisfies.
+  Zero
+  matches over the whole run → `vacuous_invariant`; an unresolvable
+  name/path → `oracle_error` naming the invariant (config errors
+  suppress the vacuous/deadline audit entries for that invariant,
+  so the report tells one story). This is the rule
+  that catches bugs the generic oracles cannot see: a player whose
+  forward input never accumulates (position oscillates near spawn)
+  keeps moving and stays in bounds, so only the authored expectation
+  "holding W drives the camera forward" flags it.
 
 ## Oracles
 

@@ -28,11 +28,15 @@ impl std::fmt::Display for BotType {
 #[serde(rename_all = "snake_case")]
 pub enum InvariantRule {
     NodesInBounds,
+    ComponentCheck,
 }
 
 impl std::fmt::Display for InvariantRule {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("nodes_in_bounds")
+        match self {
+            Self::NodesInBounds => f.write_str("nodes_in_bounds"),
+            Self::ComponentCheck => f.write_str("component_check"),
+        }
     }
 }
 
@@ -126,4 +130,17 @@ pub enum TargetSelector {
     /// path: no bevy_playtest-specific code in the game needed).
     #[default]
     All,
+    /// Apply to every entity that has the component named by `name`,
+    /// resolved against the GAME's own `TypeRegistry` at run time
+    /// (engine components included — e.g. `Camera3d` selects the player
+    /// camera without any game-side annotation). The name may be a
+    /// registered type path (e.g. `bevy_camera::camera::Camera3d`) or
+    /// a short path (final segment, e.g. `Camera3d`) when it is
+    /// unambiguous; an ambiguous short name rejects at load because a
+    /// silent pick would check a different component than the author
+    /// intended.
+    WithComponent {
+        /// Registered component type name.
+        name: String,
+    },
 }

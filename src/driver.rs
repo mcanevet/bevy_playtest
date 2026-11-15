@@ -1147,6 +1147,13 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     app.insert_resource(crate::invariant_eval::ScenarioInvariants(
         scenario.invariants.clone(),
     ));
+    if scenario
+        .invariants
+        .iter()
+        .any(|i| i.rule == crate::enums::InvariantRule::ComponentCheck)
+    {
+        app.init_resource::<crate::invariant_eval::WatchedInvariants>();
+    }
     if scenario.verify_replay {
         app.insert_resource(crate::replay::ReplaySeries::default());
     }
@@ -1221,6 +1228,12 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             if record_digest {
                 crate::digest::record_digest_system(app.world_mut());
             }
+            // component_check evaluation: a driver-loop recorder (NOT
+            // a scheduled system — `&World` reflection access cannot
+            // coexist with ResMut<RunViolations> in one system, and
+            // only post-update observation is guaranteed to see the
+            // fully-settled frame). See invariant_eval module docs.
+            crate::invariant_eval::record_component_checks(app.world_mut(), i);
             #[cfg(feature = "lw-reader")]
             {
                 if !lw_declared_captured {
@@ -1350,6 +1363,43 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         if !scenario.invariants.is_empty() && status == PlaytestStatus::Pass {
             status = PlaytestStatus::Fail;
         }
+    }
+
+    // component_check post-run audit. Two judgments need the FULL run
+    // history, not any single frame:
+    // - a selector that matched zero entities across the whole run is
+    //   vacuous (with_component can select nothing even while other
+    //   entities exist, so the guard above does not cover it);
+    // - an `eventually_s` deadline that never fired is a miss known
+    //   only at run end (any single frame can still satisfy it).
+    // Like the vacuity guards, these may demote a Pass — the missing
+    // predicate was provable only after the deadline passed.
+    let watched = app
+        .world_mut()
+        .remove_resource::<crate::invariant_eval::WatchedInvariants>()
+        .unwrap_or_default();
+    for entry in crate::invariant_eval::audit_component_checks(
+        &scenario.invariants,
+        &watched,
+        tps,
+        state.frame,
+    ) {
+        // Dedupe against post-run guards already pushed (the run-level
+        // vacuity guard names every invariant when the whole run was
+        // unobservable; do not report the same (rule, target) twice).
+        if !snap
+            .iter()
+            .any(|v| v.rule == entry.rule && v.target == entry.target)
+        {
+            snap.push(entry);
+        }
+    }
+    if status == PlaytestStatus::Pass
+        && snap
+            .iter()
+            .any(|v| !is_informational(&v.rule, scenario.strict_warnings))
+    {
+        status = PlaytestStatus::Fail;
     }
 
     // Action log: one entry per emitted input press, so a report's claim
