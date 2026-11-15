@@ -244,8 +244,10 @@ IR and the scan's hit records are already shaped for each other).
 2. a discovery-INJECTED surface carries measured truth UNION scan
    candidates: the probe-verified keys lead (measured truth is
    never replaced), and the scan extras fill the probe prior's
-   gaps — turning inject on must never LOSE a key the default
-   battery had;
+   gaps — turning inject on must never LOSE a scan-derived key
+   (when the source scan applies; a disabled or empty-root parent
+   keeps the probe-only surface, which may drop keys the blind
+   default battery layered);
 3. the source scan widens the default — only for the built-in
    battery literal (an undeclared surface);
 4. the blind WASD+arrows backbone stands when nothing above

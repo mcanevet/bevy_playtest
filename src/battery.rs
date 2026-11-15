@@ -419,6 +419,13 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
     // provenance channel from `injected_keys`; stamped onto
     // `report.source_derived_keys` after the run).
     let mut injected_scan_extras: Option<Vec<String>> = None;
+    // Decision notes for the INJECTED surface (withheld probe poisons,
+    // scan filtering decisions): stamped onto
+    // `report.source_derived_notes` after the run — possibly WITHOUT
+    // `source_derived_keys`, when a scan applied but contributed no
+    // keys (refusal over silence still demands the decisions be
+    // reported).
+    let mut inject_notes: Option<Vec<String>> = None;
     if flow::inject_requested() && scenario_arg == BUILTIN_BATTERY {
         let outcome = flow::discover_from_env(
             std::path::Path::new(&config.binary),
@@ -426,25 +433,56 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
         )
         .map_err(|e| BatteryError::Discovery(e.to_string()))?;
         let mut keys = outcome.surface.chaos_keys();
+        // Decision notes for this injected surface — withheld
+        // probe-verified poison keys, scan filtering decisions.
+        // Refusal over silence: every filtering decision the parent
+        // made when aiming the bot is reported, never dropped.
+        let mut notes: Vec<String> = Vec::new();
+        // POISON FILTER, probe tier (Escape/Tab close menus and grab
+        // UI focus — a blind chaos bot pressing them aborts the very
+        // scene it is supposed to exercise). The scan tier filters
+        // poison inside `scan_extras`; before this guard the probe
+        // tier had NO such filter, so a probe-VERIFIED Escape could
+        // reach the injected bot's surface. Withheld, and the
+        // withholding is a REPORTED decision, never a silent drop.
+        let withheld_poison: Vec<String> = keys
+            .iter()
+            .filter(|k| source_scan::POISON_KEYS.contains(&k.as_str()))
+            .cloned()
+            .collect();
+        if !withheld_poison.is_empty() {
+            notes.push(format!(
+                "probe-verified poison keys withheld from the injected surface: {}",
+                withheld_poison.join(", ")
+            ));
+        }
+        keys.retain(|k| !source_scan::POISON_KEYS.contains(&k.as_str()));
+
         // SCAN ∪ PROBE UNION (tier-order fix): `chaos_keys()` is
         // bounded by the probe matrix's candidate prior, while the
         // source scan reads the game's whole emittable key universe.
-        // Injecting the probe surface alone could therefore LOSE keys
-        // the default battery had (a key textually present in the
-        // game's sources but outside the probe prior — thetawave's
-        // KeyV is the concrete case). Union the scan extras in: the
-        // probe prior stays the EVIDENCE tier (probe-observed
-        // effectiveness, Inferred siblings), the scan fills its gaps
-        // with candidates under the same poison/cap discipline as
-        // the default-battery layering (`scan_extras`). Same
-        // applicability as injection itself: only here, only for the
-        // undeclared builtin surface.
+        // Injecting the probe surface alone could therefore LOSE scan
+        // keys the default battery had (a key textually present in
+        // the game's sources but outside the probe prior —
+        // thetawave's KeyV is the concrete case). Union the scan
+        // extras in: the probe prior stays the EVIDENCE tier
+        // (probe-observed effectiveness, Inferred siblings), the
+        // scan fills its gaps with candidates under the same
+        // poison/cap discipline as the default-battery layering
+        // (`scan_extras`). Same applicability as injection itself:
+        // only here, only for the undeclared builtin surface.
+        let mut scan_applied = false;
         if !source_scan::scan_disabled() {
             if let Some(root) = source_scan::scan_root_from_env() {
                 let result = source_scan::scan_from_root(&root);
                 let extras = source_scan::scan_extras(&result);
+                scan_applied = true;
+                // Every filtering decision the scan made (poison,
+                // cap, unsupported, unreadable) rides along — the
+                // same decisions the default layering reports.
+                notes.extend(extras.notes);
                 let mut unioned: Vec<String> = Vec::new();
-                for key in extras {
+                for key in extras.keys {
                     if !keys.contains(&key) {
                         keys.push(key.clone());
                         unioned.push(key);
@@ -453,9 +491,22 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
                 if !unioned.is_empty() {
                     // Canonical order for the injected surface too.
                     keys.sort();
-                    injected_scan_extras = Some(unioned);
+                    injected_scan_extras = Some(unioned.clone());
+                    notes.push(format!(
+                        "unioned {} scan keys into the injected (probe-verified) surface: {}",
+                        unioned.len(),
+                        unioned.join(", ")
+                    ));
                 }
             }
+        }
+        if scan_applied && injected_scan_extras.is_none() {
+            // A scan ran but contributed nothing beyond the probe
+            // surface — still a decision worth reporting (the union
+            // considered the scan; it added nothing), never silence.
+            notes.push(
+                "source scan ran but added no keys beyond the probe-verified surface".to_string(),
+            );
         }
         // The injected scenario is the built-in battery with exactly
         // one field added: the chaos bot's key surface — the
@@ -479,6 +530,9 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
         scenario_arg = injected_path.to_string_lossy().into_owned();
         pre_discovered = Some(outcome.surface);
         injected_keys = Some(keys);
+        if !notes.is_empty() {
+            inject_notes = Some(notes);
+        }
     }
 
     // Source-derived surface layering (D1.5 slice 5, parent-side).
@@ -674,13 +728,11 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
         report.source_derived_keys = Some(layered.keys);
         report.source_derived_notes = Some(layered.notes);
     }
-    if let Some(extras) = injected_scan_extras {
+    if let Some(extras) = &injected_scan_extras {
         report.source_derived_keys = Some(extras.clone());
-        report.source_derived_notes = Some(vec![format!(
-            "unioned {} scan keys into the injected (probe-verified) surface: {}",
-            extras.len(),
-            extras.join(", ")
-        )]);
+    }
+    if let Some(notes) = inject_notes {
+        report.source_derived_notes = Some(notes);
     }
     Ok(report)
 }

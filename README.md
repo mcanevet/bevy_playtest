@@ -206,13 +206,19 @@ Discovery can also aim the battery itself: with
 first and — when the scenario declares no key surface of its own
 (the zero-config battery run) — drives the game with an injected
 scenario whose chaos bot samples the discovered effective keys
-unioned with the source-scan candidates (so enabling injection
-never loses a key the default battery had), recording the sampled
-surface as `injected_surface_keys` on the report. An
+unioned with the source-scan candidates, so enabling injection
+never loses a scan-derived key (when the source scan applies).
+The sampled surface is recorded as `injected_surface_keys` on the
+report; any scan-contributed keys are stamped separately on
+`source_derived_keys` with notes explaining every filtering
+decision (withheld poison keys, cap drops, a scan that ran but
+added nothing). An
 authored scenario file always wins (declaration beats inference),
-and an injected surface replaces the source scan's candidates
-with measured truth. Injection is the escalation path when the
-scan's candidates are wrong or insufficient: keys mentioned in
+and the injected surface keeps the scan in its UNION role — the
+probe-verified evidence leads; the scan fills the probe prior's
+gaps (a key mentioned in code but never probed still reaches the
+bot). Injection is the escalation path when the scan's candidates
+are wrong or insufficient: keys mentioned in
 code but inert in practice, or pointer-only surfaces a keyboard
 scan cannot see.
 
