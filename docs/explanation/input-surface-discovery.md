@@ -163,8 +163,9 @@ into. Semantics:
   a key textually present in the game's sources yet outside that
   prior (thetawave's `KeyV` is the concrete case) must never be
   LOST by turning inject on — before the tier-order fix it was.
-  Sorted and deduplicated — the list becomes a scenario file
-  verbatim.
+  Sorted and deduplicated — the list seeds the injected scenario
+  (the battery parent additionally withholds probe-verified poison
+  keys and unions in the scan extras, reporting every decision).
 - **Mouse buttons stay default.** Phase 1 discovers a bounded grid
   of click POSITIONS (`mouse_cells`, below) — not mouse BUTTONS or
   motion. The injected scenario still keeps the default buttons and
