@@ -205,8 +205,10 @@ Discovery can also aim the battery itself: with
 `BEVY_PLAYTEST_DISCOVER_INJECT=1` the parent discovers the surface
 first and — when the scenario declares no key surface of its own
 (the zero-config battery run) — drives the game with an injected
-scenario whose chaos bot samples exactly the discovered effective
-keys, recording them as `injected_surface_keys` on the report. An
+scenario whose chaos bot samples the discovered effective keys
+unioned with the source-scan candidates (so enabling injection
+never loses a key the default battery had), recording the sampled
+surface as `injected_surface_keys` on the report. An
 authored scenario file always wins (declaration beats inference),
 and an injected surface replaces the source scan's candidates
 with measured truth. Injection is the escalation path when the

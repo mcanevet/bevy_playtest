@@ -148,14 +148,21 @@ into. Semantics:
   default WASD+arrows set). An authored scenario file — with or
   without its own `raw_surface` — is never injected into;
   discovery then describes rather than replaces.
-- **Injectable keys** (`DiscoveredSurface::chaos_keys`): every key
-  with an observed effect, plus group-completed `Inferred`
-  siblings (likely-bound movement clusters; pressing them costs
-  nothing, omitting them starves the bot of exactly the coverage
-  the group phase exists to provide). NEVER `Unclassified` (the
-  control key — no differential verdict exists about it) and
-  never inert keys (pressing keys the game demonstrably ignores
-  recreates the declared-surface hole injection exists to close).
+- **Injectable keys** (`DiscoveredSurface::chaos_keys` UNION
+  source-scan extras): every key with an observed effect, plus
+  group-completed `Inferred` siblings (likely-bound movement
+  clusters; pressing them costs nothing, omitting them starves the
+  bot of exactly the coverage the group phase exists to provide).
+  NEVER `Unclassified` (the control key — no differential verdict
+  exists about it) and never inert keys (pressing keys the game
+  demonstrably ignores recreates the declared-surface hole
+  injection exists to close). On top of that measured tier, the
+  same source-scan extras the default battery layers
+  (`scan_extras`, same poison/cap discipline) fill the probe
+  prior's gaps: the matrix only probes its 29 candidate keys, but
+  a key textually present in the game's sources yet outside that
+  prior (thetawave's `KeyV` is the concrete case) must never be
+  LOST by turning inject on — before the tier-order fix it was.
   Sorted and deduplicated — the list becomes a scenario file
   verbatim.
 - **Mouse buttons stay default.** Phase 1 discovers a bounded grid
@@ -173,10 +180,14 @@ into. Semantics:
   pre-run surface — it never re-probes (the injected file path
   would otherwise cold-miss the `"battery"`-keyed cache entry).
 - **Honest reporting.** The report carries
-  `injected_surface_keys` (absent when no injection happened),
-  because the child honestly reports `scenario_source: "file"`
-  for the injected scenario — the field is what distinguishes
-  "an authored scenario" from "the battery, aimed".
+  `injected_surface_keys` (the FULL union surface the bot sampled;
+  absent when no injection happened), because the child honestly
+  reports `scenario_source: "file"` for the injected scenario —
+  the field is what distinguishes "an authored scenario" from "the
+  battery, aimed". When the scan contributed keys beyond the
+  probe-verified surface, they are stamped SEPARATELY on
+  `source_derived_keys` (exactly the scan's contribution, not the
+  whole surface) so the two provenance channels stay distinct.
 
 On the motivating fixture the effect is decisive: the bot plays
 the game (periodic Digit1/Digit2 level reloads keep
@@ -230,8 +241,11 @@ IR and the scan's hit records are already shaped for each other).
 
 1. an authored scenario file always wins (declaration beats
    inference);
-2. a discovery-INJECTED surface wins (measured truth replaces
-   candidates — the scan is skipped for injected runs);
+2. a discovery-INJECTED surface carries measured truth UNION scan
+   candidates: the probe-verified keys lead (measured truth is
+   never replaced), and the scan extras fill the probe prior's
+   gaps — turning inject on must never LOSE a key the default
+   battery had;
 3. the source scan widens the default — only for the built-in
    battery literal (an undeclared surface);
 4. the blind WASD+arrows backbone stands when nothing above

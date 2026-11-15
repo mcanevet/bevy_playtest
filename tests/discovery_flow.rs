@@ -1271,15 +1271,26 @@ fn source_scan_widening_goes_clean_on_the_loading_screen_demo() {
 }
 
 #[test]
-fn injection_beats_the_source_scan_when_both_apply() {
+fn injection_does_not_double_stamp_when_scan_adds_nothing_new() {
     let _slot = common::run_slot();
 
-    // Precedence, e2e: DISCOVER_INJECT implies discovery and the
-    // scan is skipped for injected runs (measured truth replaces
-    // the candidate layer). The report records the injected keys
-    // and NOT a source-derived widening.
+    // Provenance hygiene, e2e: DISCOVER_INJECT implies discovery,
+    // and the scan runs as the UNION partner of the probe surface
+    // (tier-order fix: the probe prior must not CROWD OUT
+    // scan-visible keys — see the sibling union test). Here the
+    // scan root mentions only the SAME key the probe verified
+    // (Digit1), so the union adds nothing: the report records the
+    // injected keys and NOT a source-derived widening — the scan
+    // must not double-stamp keys the probe already carried.
     let dir = temp_dir();
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    // Scan root replicating a game crate whose only binding is the
+    // one the probe matrix verified (the harness's own src/ would
+    // feed the scan every demo binary's keys).
+    let root = temp_dir();
+    std::fs::create_dir_all(&root).unwrap();
+    let demo_src =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bin/takeover_demo_input.rs");
+    std::fs::copy(&demo_src, root.join("main.rs")).unwrap();
     let _env = EnvGuard::set(&[
         (ENV_SOURCE_ROOT, root.to_str().unwrap()),
         (ENV_DISCOVER_INJECT, "1"),
@@ -1300,10 +1311,83 @@ fn injection_beats_the_source_scan_when_both_apply() {
     );
     assert_eq!(
         report.source_derived_keys, None,
-        "injection wins; the scan must not double-stamp the report"
+        "the scan added nothing the probe did not have; no double-stamping"
     );
 
     std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn injection_unions_scan_only_keys_beyond_the_probe_prior() {
+    let _slot = common::run_slot();
+
+    // THE tier-inversion fix, e2e: a key textually present in the
+    // game's sources but OUTSIDE the probe matrix's candidate
+    // prior (thetawave's KeyV is the concrete motivating case) used
+    // to be silently LOST when DISCOVER_INJECT was enabled — the
+    // injected (probe-bounded) surface replaced the scenario before
+    // the scan guard ran, so the LOWER-recall tier crowded out the
+    // HIGHER-recall one. Now the injected surface is the UNION:
+    // probe-verified keys plus scan extras (same poison/cap
+    // discipline as the default-battery layering). KeyV joins
+    // Digit1 in the bot's surface, with provenance split across
+    // the two report channels.
+    let dir = temp_dir();
+    // A "game crate" whose sources mention Digit1 (probe-verified)
+    // AND KeyV (invisible to the 2-key slim matrix).
+    let root = temp_dir();
+    std::fs::create_dir_all(&root).unwrap();
+    let demo_src =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bin/takeover_demo_input.rs");
+    std::fs::copy(&demo_src, root.join("main.rs")).unwrap();
+    std::fs::write(
+        root.join("more_bindings.rs"),
+        "// a menu toggle the probe matrix never probes\n\
+         if keys.just_pressed(KeyCode::KeyV) { menu_open ^= true; }\n",
+    )
+    .unwrap();
+    let _env = EnvGuard::set(&[
+        (ENV_SOURCE_ROOT, root.to_str().unwrap()),
+        (ENV_DISCOVER_INJECT, "1"),
+        (ENV_DISCOVER_KEYS, "Digit1,KeyQ"),
+        (ENV_DISCOVER_CACHE, dir.join("cache").to_str().unwrap()),
+    ]);
+
+    let report = run_with_config(&BatteryConfig {
+        binary: demo_binary().to_string(),
+        scenario: BUILTIN_BATTERY.to_string(),
+        timeout_secs: 300,
+    })
+    .expect("battery run with injection and scan union");
+
+    // The full union surface, canonical order: Digit1 (probe-
+    // verified) + KeyV (scan-only, beyond the probe prior).
+    assert_eq!(
+        report.injected_surface_keys,
+        Some(vec!["Digit1".to_string(), "KeyV".to_string()]),
+        "injection must UNION scan-visible keys in, never lose them"
+    );
+    // The scan-derived contribution is stamped SEPARATELY (exactly
+    // the keys the scan added beyond the probe surface — the
+    // channels stay distinct so provenance is never coalesced)...
+    assert_eq!(
+        report.source_derived_keys,
+        Some(vec!["KeyV".to_string()]),
+        "the scan's contribution must be recorded on its own channel"
+    );
+    // ...with a note saying so (refusal over silence).
+    assert!(
+        report
+            .source_derived_notes
+            .as_ref()
+            .is_some_and(|notes| notes.iter().any(|n| n.contains("unioned 1 scan key"))),
+        "notes must record the union decision: {:?}",
+        report.source_derived_notes
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]

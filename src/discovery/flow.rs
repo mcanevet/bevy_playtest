@@ -55,11 +55,13 @@
 //!   injection: the battery parent discovers FIRST (cache-first),
 //!   then — when the scenario declares no surface of its own (the
 //!   built-in battery literal) — drives the game child with an
-//!   injected scenario whose chaos bot samples exactly the
-//!   discovered effective keys, and records them as
-//!   `report.injected_surface_keys`. Implies discovery (the
-//!   annotation rides along). An authored scenario file always
-//!   wins: declaration beats inference.
+//!   injected scenario whose chaos bot samples the discovered
+//!   effective keys UNIONED with source-scan candidates (the probe
+//!   prior is bounded; the scan fills its gaps), and records the
+//!   union as `report.injected_surface_keys` (the scan-derived
+//!   portion separately as `report.source_derived_keys`). Implies
+//!   discovery (the annotation rides along). An authored scenario
+//!   file always wins: declaration beats inference.
 //! - `BEVY_PLAYTEST_DISCOVER_KEYS=Comma,List` — override the probe
 //!   candidates (slim targeted probes; must be canonical spellings,
 //!   invalid ones fail the run rather than probe garbage).
@@ -99,10 +101,12 @@ pub const ENV_DISCOVER_CACHE: &str = "BEVY_PLAYTEST_DISCOVER_CACHE";
 /// parent discovers the surface FIRST (cache-first), then — when
 /// the scenario declares no surface of its own (the built-in
 /// battery literal) — writes a scenario variant whose chaos bot
-/// samples exactly the discovered effective keys and drives the
-/// game child with it. Implies `BEVY_PLAYTEST_DISCOVER=1` (the
-/// annotation rides along free); an authored scenario file always
-/// wins (declaration beats inference).
+/// samples the discovered effective keys UNIONED with source-scan
+/// candidates (the probe prior is bounded; the scan fills its gaps)
+/// and drives the game child with it. Implies
+/// `BEVY_PLAYTEST_DISCOVER=1` (the annotation rides along free);
+/// an authored scenario file always wins (declaration beats
+/// inference).
 pub const ENV_DISCOVER_INJECT: &str = "BEVY_PLAYTEST_DISCOVER_INJECT";
 
 /// Active harness features, for the cache key: two builds of

@@ -117,8 +117,13 @@ makes it press the right ones. With
 the surface FIRST (same cache, same cost), then — when the
 scenario declares no surface of its own (the built-in battery
 literal) — drives the game child with an injected scenario whose
-chaos bot samples exactly the discovered effective keys. The
-report records what happened in `injected_surface_keys`.
+chaos bot samples the discovered effective keys UNIONED with the
+source-scan candidates (the probe matrix only probes its
+candidate prior; the scan fills any gap — a key your code
+mentions but the matrix never probed still reaches the bot). The
+report records the full sampled surface in
+`injected_surface_keys`, and any scan-contributed keys
+separately in `source_derived_keys`.
 
 ```console
 BEVY_PLAYTEST_DISCOVER_INJECT=1 cargo test --test playtest -- --nocapture
