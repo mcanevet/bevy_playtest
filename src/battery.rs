@@ -321,9 +321,14 @@ impl std::error::Error for BatteryError {}
 /// at pool=8), and when the scenario is the built-in battery literal
 /// (whose key surface is undeclared — the default WASD+arrows set
 /// the game may ignore), it writes a scenario variant whose chaos
-/// bot samples exactly the discovered effective keys and drives the
-/// child with it, recording `report.injected_surface_keys`. An
-/// authored scenario file is never injected into — declaration beats
+/// bot samples the discovered effective keys UNIONED with the
+/// source-scan candidates (the probe matrix is bounded by its
+/// candidate prior; the scan fills the prior's gaps — see
+/// [`crate::discovery::source_scan::scan_extras`]), driving the
+/// child with it and recording the full union as
+/// `report.injected_surface_keys` (the scan-derived portion is
+/// stamped separately in `report.source_derived_keys`). An authored
+/// scenario file is never injected into — declaration beats
 /// inference; discovery then describes rather than replaces.
 pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, BatteryError> {
     let dir = std::env::temp_dir().join(format!(
@@ -410,20 +415,56 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
     let mut scenario_arg = config.scenario.clone();
     let mut pre_discovered: Option<crate::discovery::surface::DiscoveredSurface> = None;
     let mut injected_keys: Option<Vec<String>> = None;
+    // Scan extras unioned into the INJECTED surface (distinct
+    // provenance channel from `injected_keys`; stamped onto
+    // `report.source_derived_keys` after the run).
+    let mut injected_scan_extras: Option<Vec<String>> = None;
     if flow::inject_requested() && scenario_arg == BUILTIN_BATTERY {
         let outcome = flow::discover_from_env(
             std::path::Path::new(&config.binary),
             Some(config.scenario.as_str()),
         )
         .map_err(|e| BatteryError::Discovery(e.to_string()))?;
-        let keys = outcome.surface.chaos_keys();
+        let mut keys = outcome.surface.chaos_keys();
+        // SCAN ∪ PROBE UNION (tier-order fix): `chaos_keys()` is
+        // bounded by the probe matrix's candidate prior, while the
+        // source scan reads the game's whole emittable key universe.
+        // Injecting the probe surface alone could therefore LOSE keys
+        // the default battery had (a key textually present in the
+        // game's sources but outside the probe prior — thetawave's
+        // KeyV is the concrete case). Union the scan extras in: the
+        // probe prior stays the EVIDENCE tier (probe-observed
+        // effectiveness, Inferred siblings), the scan fills its gaps
+        // with candidates under the same poison/cap discipline as
+        // the default-battery layering (`scan_extras`). Same
+        // applicability as injection itself: only here, only for the
+        // undeclared builtin surface.
+        if !source_scan::scan_disabled() {
+            if let Some(root) = source_scan::scan_root_from_env() {
+                let result = source_scan::scan_from_root(&root);
+                let extras = source_scan::scan_extras(&result);
+                let mut unioned: Vec<String> = Vec::new();
+                for key in extras {
+                    if !keys.contains(&key) {
+                        keys.push(key.clone());
+                        unioned.push(key);
+                    }
+                }
+                if !unioned.is_empty() {
+                    // Canonical order for the injected surface too.
+                    keys.sort();
+                    injected_scan_extras = Some(unioned);
+                }
+            }
+        }
         // The injected scenario is the built-in battery with exactly
-        // one field added: the chaos bot's key surface, so the bot
-        // samples only keys the game demonstrably consumes. Mouse
-        // buttons stay at their default (three primaries): the MVP
-        // probe matrix is keyboard-only, so there is no discovered
-        // mouse surface to inject — an explicitly empty mouse list
-        // would DISABLE mouse chaos, which discovery never licensed.
+        // one field added: the chaos bot's key surface — the
+        // probe-verified keys UNIONED with scan candidates, i.e.
+        // exactly `injected_keys` below. Mouse buttons stay at their
+        // default (three primaries): the MVP probe matrix is
+        // keyboard-only, so there is no discovered mouse surface to
+        // inject — an explicitly empty mouse list would DISABLE mouse
+        // chaos, which discovery never licensed.
         let mut scenario = crate::plugin::battery_scenario()
             .map_err(|e| BatteryError::Spawn(format!("injected battery scenario: {e}")))?;
         scenario.bot.raw_surface = Some(crate::scenario::RawSurface {
@@ -443,12 +484,15 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
     // Source-derived surface layering (D1.5 slice 5, parent-side).
     // Same precedence shape as injection above, one tier below:
     // an authored scenario file always wins (declaration beats
-    // inference), and so does an INJECTED surface — the source scan
-    // is the out-of-the-box UPGRADE of the blind default, not a
-    // competitor with measured truth. Applicability mirrors
-    // injection's: only the built-in battery literal (a scenario
-    // file may declare its own surface, and injected keys already
-    // encode verified evidence).
+    // inference). Applicability mirrors injection's: only the
+    // built-in battery literal (a scenario file may declare its
+    // own surface). When injection RAN, the scan's role is the
+    // UNION inside the injected surface (see the inject branch
+    // above) — it must never REPLACE the probe-verified keys, and
+    // equally the probe prior must never CROWD OUT scan-only keys
+    // (the pre-fix tier inversion: a textually-present key outside
+    // the probe prior, e.g. thetawave's KeyV, was silently LOST
+    // when inject was enabled).
     //
     // Cost: milliseconds (a text pass over the game's `src/`),
     // paid per battery run — no probing, no game execution beyond
@@ -619,12 +663,24 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
         report.discovered_surface = Some(surface);
         report.annotate_frozen_world_with_surface();
     }
-    // Source-scan honesty field: stamped whenever the parent layered
-    // scan-derived keys onto the run's surface (independent of
-    // discovery). Records the FULL layered list.
+    // Source-scan honesty fields: stamped whenever the parent put
+    // scan-derived keys into the run's surface (independent of
+    // discovery). For a DEFAULT battery that is the FULL layered
+    // list (backbone + extras); for an INJECTED run it is exactly
+    // the scan keys unioned into the probe-verified surface (the
+    // full bot surface lives in `injected_surface_keys` — the two
+    // channels stay distinct so provenance is never coalesced).
     if let Some(layered) = source_layered {
         report.source_derived_keys = Some(layered.keys);
         report.source_derived_notes = Some(layered.notes);
+    }
+    if let Some(extras) = injected_scan_extras {
+        report.source_derived_keys = Some(extras.clone());
+        report.source_derived_notes = Some(vec![format!(
+            "unioned {} scan keys into the injected (probe-verified) surface: {}",
+            extras.len(),
+            extras.join(", ")
+        )]);
     }
     Ok(report)
 }

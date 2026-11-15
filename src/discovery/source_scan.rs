@@ -11,8 +11,11 @@
 //! Meaning stays discovery's behavioral job; this layer attaches
 //! zero semantics to any key. That division is the design rule the
 //! adversarial reviews froze: source candidates → runtime
-//! verification is the funnel. Today this module produces
-//! candidates for the battery's default surface only; emitting
+//! verification is the funnel. The scan's candidates feed TWO
+//! consumers: the default battery's layered surface
+//! (`layered_chaos_keys`) and the DISCOVER_INJECT union
+//! (`scan_extras`, which closes the gap where the probe matrix's
+//! candidate prior cannot see a textually-present key). Emitting
 //! them as schema entries (`Evidence::SourceRef` for
 //! [`crate::discovery::provenance::ProvenanceGrade::SourceCited`])
 //! is the planned next stage of the funnel.
@@ -115,6 +118,39 @@ pub struct LayeredKeys {
     pub notes: Vec<String>,
 }
 
+/// The scan extras beyond the backbone, poison-filtered and capped
+/// at [`MAX_SCAN_KEYS`]: most-referenced first, then alphabetical —
+/// deterministic. Pure selection (no backbone prepended, no notes):
+/// the battery unions these into a DISCOVER_INJECT surface exactly
+/// where the probe prior cannot see them (the matrix only probes
+/// [`crate::discovery::probe_scenarios::PROBE_CANDIDATE_KEYS`], the
+/// scan reads the game's whole emittable key universe), so
+/// enabling inject must never LOSE keys the default battery had.
+pub fn scan_extras(result: &SourceScanResult) -> Vec<String> {
+    let mut freq: std::collections::BTreeMap<String, usize> = Default::default();
+    for key in result.unique_keys() {
+        if !POISON_KEYS.contains(&key.as_str()) {
+            let n = result.hits.iter().filter(|h| h.key == key).count();
+            freq.insert(key, n);
+        }
+    }
+    let mut extras: Vec<(String, usize)> = freq
+        .into_iter()
+        .filter(|(k, _)| !BACKBONE_KEYS.contains(&k.as_str()))
+        .collect();
+    if extras.len() > MAX_SCAN_KEYS {
+        // Most-referenced first, then alphabetical: deterministic
+        // SELECTION (who survives the cap).
+        extras.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        extras.truncate(MAX_SCAN_KEYS);
+    }
+    // Canonical EMIT order: alphabetical, so layered surfaces and
+    // injected unions stay comparable across runs and tiers.
+    let mut keys: Vec<String> = extras.into_iter().map(|(k, _)| k).collect();
+    keys.sort();
+    keys
+}
+
 /// Layer scan hits into a chaos surface:
 /// backbone ∪ (scan keys − poison), capped at
 /// [`MAX_SCAN_KEYS`] extras, canonical deterministic order.
@@ -142,17 +178,14 @@ pub fn layered_chaos_keys(result: &SourceScanResult) -> LayeredKeys {
         ));
     }
 
-    // Frequency per key (dedup across hits), dropping poison.
-    let mut freq: std::collections::BTreeMap<String, usize> = Default::default();
-    let mut poisoned: Vec<String> = Vec::new();
-    for key in result.unique_keys() {
-        if POISON_KEYS.contains(&key.as_str()) {
-            poisoned.push(key);
-        } else {
-            let n = result.hits.iter().filter(|h| h.key == key).count();
-            freq.insert(key, n);
-        }
-    }
+    // Poison keys are reported (refusal over silence) but filtered
+    // INSIDE `scan_extras` below — the battery's inject-union path
+    // consumes the same filtering, so the two sites cannot diverge.
+    let poisoned: Vec<String> = result
+        .unique_keys()
+        .into_iter()
+        .filter(|k| POISON_KEYS.contains(&k.as_str()))
+        .collect();
     if !poisoned.is_empty() {
         notes.push(format!(
             "poison-filtered (never given to the blind chaos bot): {}",
@@ -160,22 +193,25 @@ pub fn layered_chaos_keys(result: &SourceScanResult) -> LayeredKeys {
         ));
     }
 
-    // Scan extras beyond the backbone, capped.
-    let mut extras: Vec<(String, usize)> = freq
+    // Scan extras beyond the backbone, capped — the SAME selection
+    // the inject-union path consumes (`scan_extras`), so the two
+    // layering sites can never diverge.
+    let extras: Vec<String> = scan_extras(result);
+    // Did the cap drop anything? Qualifying keys are the non-poison,
+    // non-backbone unique hits; extras is the capped survivor list.
+    let qualifying = result
+        .unique_keys()
         .into_iter()
-        .filter(|(k, _)| !BACKBONE_KEYS.contains(&k.as_str()))
-        .collect();
-    if extras.len() > MAX_SCAN_KEYS {
-        // Most-referenced first, then alphabetical: deterministic.
-        extras.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        extras.truncate(MAX_SCAN_KEYS);
+        .filter(|k| !POISON_KEYS.contains(&k.as_str()) && !BACKBONE_KEYS.contains(&k.as_str()))
+        .count();
+    if qualifying > extras.len() {
         let dropped: Vec<String> = result
             .unique_keys()
             .into_iter()
             .filter(|k| {
                 !POISON_KEYS.contains(&k.as_str())
                     && !BACKBONE_KEYS.contains(&k.as_str())
-                    && !extras.iter().any(|(kept, _)| kept == k)
+                    && !extras.contains(k)
             })
             .collect();
         notes.push(format!(
@@ -184,17 +220,15 @@ pub fn layered_chaos_keys(result: &SourceScanResult) -> LayeredKeys {
         ));
     }
     let mut keys: Vec<String> = BACKBONE_KEYS.iter().map(|s| s.to_string()).collect();
-    let mut extra_names: Vec<String> = extras.into_iter().map(|(k, _)| k).collect();
-    extra_names.sort();
-    if extra_names.is_empty() {
+    if extras.is_empty() {
         notes.push("no scan keys beyond the WASD/arrows backbone; default unchanged".to_string());
     } else {
         notes.push(format!(
             "layered {} scan keys onto the backbone: {}",
-            extra_names.len(),
-            extra_names.join(", ")
+            extras.len(),
+            extras.join(", ")
         ));
-        keys.extend(extra_names);
+        keys.extend(extras);
     }
     LayeredKeys { keys, notes }
 }
@@ -860,6 +894,44 @@ mod tests {
             );
         }
         assert!(layered.notes.iter().any(|n| n.contains("capped at")));
+    }
+
+    #[test]
+    fn scan_extras_selects_like_the_layering_poison_backbone_and_cap() {
+        // `scan_extras` is the shared selection consumed BOTH by the
+        // default layering and by the inject-union: poison dropped,
+        // backbone excluded, cap most-referenced-first, emit order
+        // alphabetical. Pin the contract against the SAME inputs as
+        // `cap_keeps_most_referenced_keys_and_reports_the_drop`.
+        let mut r = SourceScanResult::default();
+        for key in ["KeyE", "KeyF", "Space"] {
+            for _ in 0..3 {
+                r.hits.push(SourceScanHit {
+                    key: key.into(),
+                    file: "t.rs".into(),
+                    line: 1,
+                    enclosing: None,
+                });
+            }
+        }
+        // Poison and backbone: present in the scan, absent from extras.
+        for key in ["Escape", "KeyW"] {
+            r.hits.push(SourceScanHit {
+                key: key.into(),
+                file: "t.rs".into(),
+                line: 1,
+                enclosing: None,
+            });
+        }
+        let extras = scan_extras(&r);
+        assert_eq!(
+            extras,
+            vec!["KeyE".to_string(), "KeyF".to_string(), "Space".to_string()]
+        );
+        // Empty scan: no extras (the inject union degenerates to the
+        // probe surface alone — the probe tier is never REPLACED,
+        // only widened).
+        assert!(scan_extras(&SourceScanResult::default()).is_empty());
     }
 
     #[test]
