@@ -143,10 +143,13 @@ pub struct PlaytestReport {
     /// Keys the battery parent injected into the run's chaos bot
     /// `raw_surface` (present only when discovery-driven injection
     /// happened: `BEVY_PLAYTEST_DISCOVER_INJECT=1` on a battery run
-    /// whose scenario declared no surface of its own). Honesty
-    /// field: the child ran an injected scenario file, and the
-    /// report must say so rather than let `scenario_source: "file"`
-    /// imply an authored one.
+    /// whose scenario declared no surface of its own). The
+    /// probe-verified keys UNIONED with source-scan extras, poison
+    /// keys withheld (a probe-VERIFIED Escape/Tab never reaches the
+    /// blind bot; the withholding is reported in
+    /// [`Self::source_derived_notes`]). Honesty field: the child ran
+    /// an injected scenario file, and the report must say so rather
+    /// than let `scenario_source: "file"` imply an authored one.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub injected_surface_keys: Option<Vec<String>>,
     /// Source-derived chaos keys the parent put into this run's
@@ -172,9 +175,12 @@ pub struct PlaytestReport {
     /// Provenance notes from the parent's source scan (why the
     /// layered surface looks like it does: poison filtering, cap
     /// drops, unreadable files, unsupported variants). Present
-    /// exactly when [`Self::source_derived_keys`] is: refusal over
-    /// silence — every filtering decision the scan made is
-    /// reported rather than dropped.
+    /// exactly when [`Self::source_derived_keys`] is for a DEFAULT
+    /// run; an INJECTED run may carry notes alone (withheld
+    /// probe-verified poison keys, a scan that ran but added
+    /// nothing) — refusal over silence: every filtering decision
+    /// the parent made when aiming the bot is reported rather than
+    /// dropped.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub source_derived_notes: Option<Vec<String>>,
     /// Leafwing declared bindings read from the game's `InputMap`s

@@ -1313,6 +1313,19 @@ fn injection_does_not_double_stamp_when_scan_adds_nothing_new() {
         report.source_derived_keys, None,
         "the scan added nothing the probe did not have; no double-stamping"
     );
+    // F4 (refusal over silence): the scan RAN and added nothing —
+    // that is a decision, and it is reported on the notes channel,
+    // even though `source_derived_keys` stays absent.
+    assert!(
+        report
+            .source_derived_notes
+            .as_ref()
+            .is_some_and(|notes| notes
+                .iter()
+                .any(|n| n.contains("source scan ran but added no keys"))),
+        "the scan's no-op decision must be reported: {:?}",
+        report.source_derived_notes
+    );
 
     std::fs::remove_dir_all(&dir).unwrap();
     std::fs::remove_dir_all(&root).unwrap();
@@ -1388,6 +1401,55 @@ fn injection_unions_scan_only_keys_beyond_the_probe_prior() {
 
     std::fs::remove_dir_all(&dir).unwrap();
     std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn injection_with_scan_disabled_degenerates_to_the_pure_probe_surface() {
+    let _slot = common::run_slot();
+
+    // Off-arm pin (adversarial-review F6): inject ×
+    // BEVY_PLAYTEST_SOURCE_SCAN_DISABLE=1 must degenerate cleanly to
+    // the PURE probe surface — no union (the scan is the union
+    // partner; with it disabled there is nothing to union), no
+    // source_derived stamps, and the injected surface remains
+    // exactly the probe-verified keys. The "never loses a
+    // scan-derived key" guarantee holds ONLY when a scan applies:
+    // here the user explicitly opted out, and the report must not
+    // pretend otherwise (no notes, no keys).
+    let dir = temp_dir();
+    // A scanable root is IN REACH — disabling must still win.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let _env = EnvGuard::set(&[
+        (ENV_SOURCE_ROOT, root.to_str().unwrap()),
+        (ENV_SOURCE_SCAN_DISABLE, "1"),
+        (ENV_DISCOVER_INJECT, "1"),
+        (ENV_DISCOVER_KEYS, "Digit1,KeyQ"),
+        (ENV_DISCOVER_CACHE, dir.join("cache").to_str().unwrap()),
+    ]);
+
+    let report = run_with_config(&BatteryConfig {
+        binary: demo_binary().to_string(),
+        scenario: BUILTIN_BATTERY.to_string(),
+        timeout_secs: 300,
+    })
+    .expect("battery run with injection and scan disabled");
+
+    // The pure probe surface — nothing unioned in.
+    assert_eq!(
+        report.injected_surface_keys,
+        Some(vec!["Digit1".to_string()]),
+        "scan disabled: injection degenerates to the probe surface alone"
+    );
+    assert_eq!(
+        report.source_derived_keys, None,
+        "no scan keys entered the surface — none may be claimed"
+    );
+    assert_eq!(
+        report.source_derived_notes, None,
+        "no scan ran: no decisions to report (a withhold would lie)"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]

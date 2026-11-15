@@ -595,8 +595,11 @@ impl DiscoveredSurface {
     /// exists about it) and never inert keys (pressing keys the game
     /// demonstrably ignores recreates the declared-surface hole
     /// injection exists to close). Sorted and deduplicated: this
-    /// list becomes `bot.raw_surface.keys` verbatim, and a canonical
-    /// stable order keeps reports and cache entries comparable.
+    /// list seeds the injected `bot.raw_surface.keys` — the battery
+    /// parent additionally withholds poison keys (Escape/Tab; a
+    /// probe-VERIFIED poison key never reaches the blind bot) and
+    /// reports the withholding, keeping reports and cache entries
+    /// comparable.
     pub fn chaos_keys(&self) -> Vec<String> {
         let mut keys: Vec<String> = self
             .keys
