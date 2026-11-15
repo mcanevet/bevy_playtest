@@ -52,6 +52,7 @@ impl Rule {
             Self::LogWarn => "Game code logged at warn level; informational by default, escalate with scenario strict_warnings.",
             Self::LogCaptureLost => "Log capture was OFF for this process (another tracing subscriber, typically DefaultPlugins' LogPlugin, installed first): log_error/log_warn findings are under-reported for every run in this process.",
             Self::NodesInBounds => "Entity positions stay inside declared play-space bounds.",
+            Self::ComponentCheck => "An authored-intent check: a numeric field on a reflected component must satisfy the declared comparison across the selected entities (always, or eventually within a deadline).",
             Self::FiniteTransforms => "Every entity's Transform holds finite values (no NaN/inf).",
             Self::VacuousRun => "Nothing was ever observable: no entities to check and no inputs emitted — the run proves nothing about the game.",
             Self::VacuousInvariant => "An invariant matched zero entities; the check proves nothing until there is something to check.",
@@ -78,6 +79,7 @@ declare_rules! {
     LogCaptureLost => "log_capture_lost",
     NodesInBounds => "nodes_in_bounds",
     FiniteTransforms => "finite_transforms",
+    ComponentCheck => "component_check",
 
     // Vacuity guard: a run where nothing was ever observable.
     VacuousRun => "vacuous_run",
