@@ -265,8 +265,11 @@ backbone is a FALLBACK tier, not an always-on floor:
   reads instead of spreading over inert WASD/arrows guesses;
 - when the scan is empty or poison-only, the backbone stands —
   exactly the surface that existed before the scan;
-- either arm is recorded in the notes (refusal over silence: the
-  report always says WHICH surface the bot sampled and why);
+- either arm is recorded in the layering notes; the battery's
+  report, though, stamps notes only for the scan-hit arm (a
+  set-equal-to-backbone run is indistinguishable from the default
+  and stays unstamped — the `None` honesty contract), so the
+  fallback arm's note is visible only to direct callers;
 - a short POISON list (`Escape`, `Tab`) is removed — the two keys
   a blind chaos bot can use to derail the run into a different
   context (pause menu, focus cycling), converting the remaining

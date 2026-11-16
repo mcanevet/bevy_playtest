@@ -1,9 +1,8 @@
 //! Source-derived chaos surface (D1.5 slice 5): a milliseconds-cost
 //! text pass over the GAME's Rust sources collecting every
-//! `KeyCode::X` variant token the code mentions, and layering those
-//! keys into the default chaos surface so the battery presses what
-//! the game actually reads — out of the box, before any probing and
-//! without authoring a scenario.
+//! `KeyCode::X` variant token the code mentions, and aiming the
+//! default chaos surface with what the game actually reads — out
+//! of the box, before any probing and without authoring a scenario.
 //!
 //! The scan is a CANDIDATE extractor, never a truth source: "the
 //! code mentions KeyE" earns a key a place in the chaos LIST (where
@@ -12,7 +11,7 @@
 //! zero semantics to any key. That division is the design rule the
 //! adversarial reviews froze: source candidates → runtime
 //! verification is the funnel. The scan's candidates feed TWO
-//! consumers: the default battery's layered surface
+//! consumers: the default battery's scan-derived surface
 //! (`layered_chaos_keys`) and the DISCOVER_INJECT union
 //! (`scan_extras`, which closes the gap where the probe matrix's
 //! candidate prior cannot see a textually-present key). Emitting
@@ -123,9 +122,8 @@ impl SourceScanResult {
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LayeredKeys {
     /// The full chaos key list the bot samples, canonical spelling:
-    /// alphabetical (both arms emit the same order). Scan-hit arm:
-    /// the scan's full unique-key set (backbone keys included). No
-    /// hits arm: the WASD/arrows backbone, unchanged.
+    /// the scan-hit arm emits ALPHABETICALLY; the fallback arm
+    /// keeps the backbone's declared order.
     pub keys: Vec<String>,
     /// Provenance and filtering notes for the report.
     pub notes: Vec<String>,
@@ -261,8 +259,12 @@ pub fn scan_extras(result: &SourceScanResult) -> ScanExtras {
 /// - Empty or poison-only scan: the backbone stands — exactly the
 ///   surface that existed before the scan (ignorance fallback).
 ///
-/// Either arm is recorded in the notes (refusal over silence: the
-/// report always says WHICH surface the bot sampled and why).
+/// Either arm is recorded in the notes; note, though, that the
+/// default-battery consumer only STAMPS notes for the scan-hit
+/// arm (a set-equal-to-backbone run is indistinguishable from the
+/// default and stays unstamped — the None honesty contract), so
+/// the fallback arm's note is visible only to direct callers of
+/// this function.
 pub fn layered_chaos_keys(result: &SourceScanResult) -> LayeredKeys {
     let mut notes = Vec::new();
     notes.push(format!(
