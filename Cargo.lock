@@ -1430,7 +1430,6 @@ dependencies = [
  "bevy_mesh",
  "bevy_picking",
  "bevy_reflect",
- "bevy_sprite",
  "bevy_tasks",
  "bevy_text",
  "bevy_time",
