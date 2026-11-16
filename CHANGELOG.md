@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/mcanevet/bevy_playtest/compare/v0.9.0...v0.10.0) - 2026-11-16
+
+### Added
+
+- add ui-surface feature enumerating the declared UI interactable surface
+- *(invariants)* component_check authored-intent oracle (#round 1-3 review-hardened)
+- *(discovery)* union source-scan extras into the injected surface
+- *(discovery)* source-derived chaos surface layering
+
+### Fixed
+
+- *(discovery)* make lw-reader-only test builds compile again
+- *(discovery)* close the two gaps from the follow-up review
+- *(discovery)* address adversarial review of the inject-union
+
+### Other
+
+- drop unused bevy_sprite dev-dependency
+- *(fixtures)* split loading_screen battery into zero-config and injected tests
+
 ## [0.9.0](https://github.com/mcanevet/bevy_playtest/compare/v0.8.0...v0.9.0) - 2026-11-14
 
 ### Added
