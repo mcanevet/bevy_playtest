@@ -249,28 +249,35 @@ box, before any probing and without authoring a scenario.
 `KeyE`" earns a key a place in the chaos LIST (where a wrong guess
 costs one inert keypress), and nothing more. Key→meaning mapping
 appears nowhere in the scan; semantics stay discovery's behavioral
-job. Today the scan layers candidates into the battery's default
-surface only; emitting them as schema entries with
+job. Today the scan aims the battery's default chaos surface
+only; emitting them as schema entries with
 `ProvenanceGrade::SourceCited` and `Evidence::SourceRef { file,
 line, enclosing }` evidence is the planned next step (the schema
 IR and the scan's hit records are already shaped for each other).
 
-**Layering contract** (`layered_chaos_keys`):
+**Layering contract** (`layered_chaos_keys`) — the WASD/arrows
+backbone is a FALLBACK tier, not an always-on floor:
 
-- the WASD/arrows backbone always stays (liveness economics:
-  movement keys reward repetition, so the layered default keeps
-  depth where it pays);
+- when the scan yields at least one usable key, its full
+  poison-filtered unique-key set (backbone keys included — cited
+  keys enter on their own evidence) REPLACES the blind default, so
+  the ~200 chaos presses concentrate on keys the game's own code
+  reads instead of spreading over inert WASD/arrows guesses;
+- when the scan is empty or poison-only, the backbone stands —
+  exactly the surface that existed before the scan;
+- either arm is recorded in the notes (refusal over silence: the
+  report always says WHICH surface the bot sampled and why);
 - a short POISON list (`Escape`, `Tab`) is removed — the two keys
   a blind chaos bot can use to derail the run into a different
   context (pause menu, focus cycling), converting the remaining
   coverage into menu coverage;
-- extras cap at 24: the battery's ~200 chaos presses (20 s at
-  10 Hz input rate) spread
-  thinner as the surface grows, so most-referenced keys win
-  (then alphabetical, deterministic), and the drop is recorded
-  as a note — refusal over silence: every filtering decision
-  (unsupported variants like `F1`/`Numpad*`, unreadable files,
-  poison drops) is reported, never guessed at.
+- the surface caps at 24 keys TOTAL: the battery's ~200 chaos
+  presses (20 s at 10 Hz input rate) spread thinner as the surface
+  grows, so most-referenced keys win (then alphabetical,
+  deterministic), and the drop is recorded as a note — refusal
+  over silence: every filtering decision (unsupported variants
+  like `F1`/`Numpad*`, unreadable files, poison drops) is
+  reported, never guessed at.
 
 **Precedence** (same shape as injection, one tier below):
 
@@ -281,12 +288,13 @@ IR and the scan's hit records are already shaped for each other).
    never replaced), and the scan extras fill the probe prior's
    gaps — turning inject on must never LOSE a scan-derived key
    (when the source scan applies; a disabled or empty-root parent
-   keeps the probe-only surface, which may drop keys the blind
-   default battery layered);
-3. the source scan widens the default — only for the built-in
-   battery literal (an undeclared surface);
+   keeps the probe-only surface, which may drop keys the
+   scan-derived default battery surface carried);
+3. the source scan REPLACES the blind default with its
+   scan-derived surface — only for the built-in battery literal
+   (an undeclared surface), and only when the scan has hits;
 4. the blind WASD+arrows backbone stands when nothing above
-   applies.
+   applies (no scan, scan failure, or a scan with no usable keys).
 
 **Root resolution, zero-config:** the battery parent IS the
 game's own test process, so its runtime `CARGO_MANIFEST_DIR` is
@@ -298,19 +306,20 @@ harness self-test battery would layer its own demo keys).
 `BEVY_PLAYTEST_SOURCE_SCAN_DISABLE=1` is the off switch —
 reproducing the old blind-default behavior exactly.
 
-**Honest reporting.** The widened run carries
-`source_derived_keys` on its report (the FULL layered surface,
-backbone + extras) plus `source_derived_notes` (the scan's
-provenance and filtering decisions — poison drops, cap drops,
-unreadable files) — stamped only when the scan actually widened
-beyond the backbone; `None` means no layering happened, not "the
-scan found nothing" (a scan yielding only backbone keys leaves
-the default unchanged and stays unrecorded, since the outcome
-equals the old default).
+**Honest reporting.** The scan-aimed run carries
+`source_derived_keys` on its report (the scan-derived surface that
+replaced the WASD/arrows default) plus `source_derived_notes` (the
+arm that fired plus the scan's provenance and filtering decisions —
+poison drops, cap drops, unreadable files) — stamped only when the
+scan produced a DIFFERENT surface from the default; `None` means no
+replacement happened, not "the scan found nothing" (no scan, a
+failed scan, or a scan with no usable keys all leave the default
+unchanged and stay unrecorded, since the outcome equals the old
+default).
 
 **Fail-open by construction.** A missing root, an unreadable
 file, a non-UTF-8 source — each degrades to fewer hits, never an
-error: the layered default falls back to the backbone, which is
+error: the scan with no hits falls back to the backbone, which is
 exactly what existed before the scan.
 
 **The headline claim, tested e2e** (`tests/discovery_flow.rs`):
@@ -323,10 +332,13 @@ zero probes.
 
 **What the scan cannot do:** it sees only what the game's code
 mentions — a key guarded away in practice (mentioned but
-context-inert) still gets layered and presses inertly (harmless:
-one wasted press), and a pointer-only surface (`game_menu`)
-gains nothing from a keyboard scan. Those remain discovery's and
-the mouse-region follow-up's jobs respectively.
+context-inert) still enters the replacement surface and presses
+inertly (harmless: one wasted press), and a pointer-only surface
+(`game_menu`) gains nothing from a keyboard scan. Those remain
+discovery's and the mouse-region follow-up's jobs respectively.
+The accepted residual risk: a scan that sees ≥1 key yet misses
+the game's real live keys narrows the surface wrongly — the arm
+notes make that case diagnosable.
 
 ## Static Scan: Annotation + Conservative Pruning Only
 

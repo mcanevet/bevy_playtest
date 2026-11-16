@@ -199,13 +199,16 @@ the whole window (undeclared regions stay probed).
 
 With no flags at all, the battery parent runs a milliseconds-cost
 source scan: it collects every `KeyCode::` variant the game's own
-sources mention and layers those keys onto the default
-WASD+arrows chaos surface (poison keys like `Escape`/`Tab`
-filtered, capped, all decisions reported). A game whose bindings
-sit outside WASD+arrows therefore plays correctly out of the
-box — the widened run records `source_derived_keys` on its
-report, and the frozen-bot false positive the injection flag
-existed to fix no longer happens by default.
+sources mention and — when it finds any — REPLACES the default
+WASD+arrows chaos surface with that scan-derived key set (poison
+keys like `Escape`/`Tab` filtered, capped, all decisions
+reported), concentrating the chaos presses on keys the game
+actually reads. A game whose bindings sit outside WASD+arrows
+therefore plays correctly out of the box — the scan-aimed run
+records `source_derived_keys` on its report, and the frozen-bot
+false positive the injection flag existed to fix no longer
+happens by default. An empty or failed scan keeps the
+WASD+arrows fallback.
 `BEVY_PLAYTEST_SOURCE_SCAN_DISABLE=1` restores the blind
 default, and `BEVY_PLAYTEST_SOURCE_ROOT` points the scan at a
 non-standard source root. See [input-surface

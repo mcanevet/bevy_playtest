@@ -225,11 +225,13 @@ fn default_mouse_buttons() -> Vec<String> {
 }
 
 /// The default chaos keyboard backbone: WASD + arrows. Movement keys
-/// reward repetition (position integration compounds), so the
-/// source-derived layered default keeps this backbone alongside
-/// game-specific scan hits. Single source of truth for the runtime
-/// default surface, the driver's inline default, and
-/// [`crate::discovery::source_scan::layered_chaos_keys`].
+/// reward repetition (position integration compounds), so this is
+/// the FALLBACK surface — what the bot samples when no better
+/// information exists: no source scan, a failed/empty scan, or a
+/// scan yielding no usable keys. Single source of truth for the
+/// runtime default surface, the driver's inline default, and
+/// [`crate::discovery::source_scan::layered_chaos_keys`] (whose
+/// scan-hit arm builds the surface INSTEAD of this one).
 pub const BACKBONE_KEYS: &[&str] = &[
     "KeyW",
     "KeyA",
