@@ -1127,6 +1127,17 @@ fn source_scan_finds_the_demos_bound_key() {
     assert!(!layered.keys.is_empty());
     assert!(!layered.notes.is_empty());
     assert!(layered.keys.len() <= MAX_SCAN_KEYS);
+    // The real harness src/ certainly cites ≥1 key, so the
+    // scan-hit arm must fire and say so (a silent regression to
+    // the old layering contract would otherwise slip through).
+    assert!(
+        layered
+            .notes
+            .iter()
+            .any(|n| n.contains("scan-derived surface replaced the WASD/arrows default")),
+        "the scan-hit arm note must be present: {:?}",
+        layered.notes
+    );
     // Deterministic emit order: alphabetical.
     let mut sorted = layered.keys.clone();
     sorted.sort();

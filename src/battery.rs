@@ -56,11 +56,14 @@ use crate::state::PlaytestReport;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
-/// [`BACKBONE_KEYS`] as an owned `Vec<String>` for equality checks
-/// against the layered surface (allocation is fine — battery
-/// parents run once per test).
-fn backbone_keys_vec() -> Vec<String> {
-    BACKBONE_KEYS.iter().map(|s| s.to_string()).collect()
+/// [`BACKBONE_KEYS`] as an owned `Vec<String>` in CANONICAL
+/// (sorted) order — the comparison form for set-equality checks
+/// against scan-derived surfaces, which emit alphabetically (the
+/// backbone itself keeps its declared order).
+fn backbone_keys_vec_sorted() -> Vec<String> {
+    let mut keys: Vec<String> = BACKBONE_KEYS.iter().map(|s| s.to_string()).collect();
+    keys.sort();
+    keys
 }
 
 /// Scenario selector for [`run`]: the built-in default battery
@@ -553,14 +556,24 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
         if let Some(root) = source_scan::scan_root_from_env() {
             let result = source_scan::scan_from_root(&root);
             let layered = source_scan::layered_chaos_keys(&result);
-            if layered.keys != backbone_keys_vec() {
+            // SET equality, not order: the scan-hit arm emits
+            // alphabetically while the fallback arm keeps backbone
+            // order, so a scan citing exactly the backbone 8 must
+            // count as "no change" (a set-equal surface makes the
+            // run indistinguishable from the default).
+            let is_backbone_set = {
+                let mut scan_sorted = layered.keys.clone();
+                scan_sorted.sort();
+                scan_sorted == backbone_keys_vec_sorted()
+            };
+            if !is_backbone_set {
                 // The scan REPLACED the blind default with its own
                 // poison-filtered surface: rewrite the scenario the
                 // child receives, same pattern as injection (the
-                // parent writes a variant file). Equality with the
-                // backbone means the scan found nothing usable (or
-                // exactly the fallback) — the run is then
-                // indistinguishable from the default and stays
+                // parent writes a variant file). A set-equal
+                // surface (empty scan or exactly the backbone)
+                // means the run is indistinguishable from the
+                // default and stays
                 // unstamped, preserving the None honesty contract.
                 let mut scenario = crate::plugin::battery_scenario().map_err(|e| {
                     BatteryError::Spawn(format!("source-layered battery scenario: {e}"))

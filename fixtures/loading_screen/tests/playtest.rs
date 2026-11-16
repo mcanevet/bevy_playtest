@@ -69,19 +69,18 @@ mod playtests {
             report.findings_summary(bevy_playtest::battery::BUILTIN_BATTERY)
         );
         // And pin the replacement itself, not just the outcome: the
-        // scan must have found the game's Digit1/Digit2 mentions and
-        // built the bot's surface from them (the scan-derived
-        // replacement includes whatever the scan cites).
+        // game cites exactly Digit1/Digit2, so the scan-derived
+        // surface IS that key set (exact equality — stray extras
+        // from a misbehaving scan fail here).
         let layered = report
             .source_derived_keys
             .as_ref()
             .expect("the source scan must stamp source_derived_keys");
-        for key in ["Digit1", "Digit2"] {
-            assert!(
-                layered.iter().any(|k| k == key),
-                "the scan must layer the game's bound key {key}; got {layered:?}"
-            );
-        }
+        assert_eq!(
+            layered,
+            &vec!["Digit1".to_string(), "Digit2".to_string()],
+            "the scan-derived surface must be exactly the game's bound keys"
+        );
     }
 
     #[test]
