@@ -48,6 +48,21 @@ bevy_window = { version = "0.20.1", default-features = false }
 # Under takeover the full `bevy` meta-crate is already in the graph, so
 # enabling this there costs no extra crates (same-version unification).
 bevy_ui = { version = "0.20.1", default-features = false, optional = true }
+# UI-surface enumeration (the `ui-surface` feature, src/discovery/
+# ui_surface.rs): the enumeration mirrors a real game's UI stack —
+# widget markers, picking, input focus, accessibility — so it needs
+# the same crates `bevy_ui`'s picking path pulls in. All optional:
+# consumers who skip the feature keep the narrow dependency set.
+# `bevy_camera` has default = [] and `bevy_a11y`/`bevy_input_focus`
+# need their defaults (bevy_reflect, async_executor) to register the
+# reflected AccessibilityNode/InputFocus the enumeration reads;
+# `bevy_picking` pulls bevy_asset/shape/window/mesh but the feature
+# is already under takeover's unified `bevy` graph there.
+bevy_ui_widgets = { version = "0.20.1", optional = true }
+bevy_picking = { version = "0.20.1", optional = true }
+bevy_camera = { version = "0.20.1", default-features = false, optional = true }
+bevy_input_focus = { version = "0.20.1", optional = true }
+bevy_a11y = { version = "0.20.1", optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["std", "registry", "fmt", "env-filter"] }
@@ -76,6 +91,16 @@ bevy_time = { version = "0.20.1", features = ["bevy_reflect"] }
 # dev-deps never unify into the published crate's normal graph, so
 # consumers keep masked names and degrade fail-open to over-counting.
 bevy_ecs = { version = "0.20.1", default-features = false, features = ["std", "debug"] }
+# Headless UI-layout bootstrap for the ui_surface tests: mirrors
+# bevy_ui's own layout-test app (plugins + manual asset/resource
+# init), which needs the text/sprite/asset/image/mesh stacks present
+# without a GPU. Dev/test-only: consumers' graphs never see them.
+bevy_text = "0.20.1"
+bevy_sprite = "0.20.1"
+bevy_asset = "0.20.1"
+bevy_image = "0.20.1"
+bevy_mesh = "0.20.1"
+bevy_utils = "0.20.1"
 
 [[bin]]
 name = "takeover_demo"
@@ -260,6 +285,27 @@ takeover-winit = ["takeover", "dep:bevy_winit", "dep:bevy", "ui-liveness"]
 # under takeover (bevy meta-crate already unifies bevy_ui), so default-on
 # there; in-process-only consumers opt in explicitly.
 ui-liveness = ["dep:bevy_ui"]
+
+# Enumerate the declared UI/interactable surface (Pickable markers,
+# bevy_ui_widgets markers, TabIndex, accessibility nodes, pointer
+# observers) and attach it to the playtest report as `ui_surface`;
+# the chaos mouse bot additionally targets enumerated widget centers
+# ~50% of clicks (see src/discovery/ui_surface.rs and src/driver.rs).
+# Chains `bevy_ui/bevy_picking`: best-label extraction reads
+# AccessibleLabel, which lives behind bevy_ui's own bevy_picking
+# feature. `bevy_ecs/serialize` + `bevy_math/serialize`: the result
+# rides the serde'd PlaytestReport and serializes raw Entity/Vec2.
+ui-surface = [
+    "dep:bevy_ui",
+    "dep:bevy_ui_widgets",
+    "dep:bevy_picking",
+    "dep:bevy_camera",
+    "dep:bevy_input_focus",
+    "dep:bevy_a11y",
+    "bevy_ui/bevy_picking",
+    "bevy_ecs/serialize",
+    "bevy_math/serialize",
+]
 
 # Leafwing InputManager declared-binding reader + intent-tap
 # (D1-d). Pure reflection: no leafwing dependency in this crate — the

@@ -26,7 +26,10 @@
 //! declared-tier reader — sits behind the separate `lw-reader`
 //! opt-in: it is a pure-reflection consumer of these layers (no
 //! Leafwing dependency), but its live-world walk only has anything
-//! to find when the game itself uses Leafwing.
+//! to find when the game itself uses Leafwing. `ui_surface` — the
+//! declared UI/interactable enumeration — sits behind `ui-surface`
+//! for the same reason: it links the bevy_ui/picking/widgets stack
+//! that the enumeration mirrors.
 
 pub mod cache;
 pub mod census;
@@ -46,3 +49,5 @@ pub mod source_scan;
 pub mod static_scan;
 pub mod suggestions;
 pub mod surface;
+#[cfg(feature = "ui-surface")]
+pub mod ui_surface;

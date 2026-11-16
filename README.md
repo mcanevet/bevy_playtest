@@ -187,6 +187,16 @@ section, declared-but-dead wiring alarms, everything honest stays a
 note. See [declare your actions with Leafwing Input
 Manager](docs/how-to/declare-actions-leafwing.md).
 
+Games with menus get a UI tier too: with the `ui-surface` feature
+the harness enumerates the declared UI/interactable surface
+(`Pickable` markers, `bevy_ui_widgets` components, `TabIndex`,
+accessibility nodes, pointer-event observers) once after the first
+frame, with geometry matching `bevy_ui`'s own picking backend. The
+result rides the playtest report as `ui_surface`, and the chaos
+mouse bot interleaves: half its clicks target enumerated widget
+centers (pointer-driven games get exercised), half keep sweeping
+the whole window (undeclared regions stay probed).
+
 With no flags at all, the battery parent runs a milliseconds-cost
 source scan: it collects every `KeyCode::` variant the game's own
 sources mention and layers those keys onto the default

@@ -207,6 +207,15 @@ pub struct PlaytestReport {
     /// never "empty census".
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub capability_census: Option<crate::discovery::census::CapabilityCensus>,
+    /// Declared UI/interactable surface enumerated once after the
+    /// first simulated frame (`ui-surface` feature; `None` when the
+    /// feature is off or the run ended before capture). Same
+    /// additive-honesty contract as
+    /// [`Self::capability_census`]: absence never means "no UI".
+    /// See [`crate::discovery::ui_surface`].
+    #[cfg(feature = "ui-surface")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub ui_surface: Option<crate::discovery::ui_surface::UiSurfaceResult>,
 }
 
 impl PlaytestReport {
@@ -241,6 +250,10 @@ impl PlaytestReport {
             // Crash stub: the run never reached the census attach
             // point, so no census exists.
             capability_census: None,
+            // Crash stub: the run never reached the capture-after-
+            // first-frame point, so no UI surface exists.
+            #[cfg(feature = "ui-surface")]
+            ui_surface: None,
         }
     }
 
