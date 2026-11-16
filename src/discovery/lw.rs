@@ -926,7 +926,10 @@ mod tests {
     /// mirror that gate: a disabled firing is NOT pipeline liveness.
     #[test]
     fn tap_does_not_count_firings_of_disabled_actions() {
-        use bevy::reflect::Reflect;
+        // bevy_reflect is a direct (non-optional) dep: importing via
+        // the `bevy` meta-crate breaks `--no-default-features
+        // --features lw-reader` builds, where `bevy` is not linked.
+        use bevy_reflect::Reflect;
 
         #[derive(Reflect)]
         enum FakeButtonState {
@@ -1008,7 +1011,7 @@ mod tests {
     /// component-wide disable would count raw ticks as firings.
     #[test]
     fn tap_counts_struct_level_disable_like_lw_action_disabled() {
-        use bevy::reflect::Reflect;
+        use bevy_reflect::Reflect;
 
         #[derive(Reflect)]
         enum FakeButtonState {
