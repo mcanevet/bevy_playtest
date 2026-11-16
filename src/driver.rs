@@ -1532,6 +1532,36 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         });
     }
 
+    // Log-bridge honesty: even when the capture subscriber won the
+    // tracing global default, the log→tracing bridge can have lost
+    // the `log` crate's write-once logger slot (another LogTracer or
+    // custom log backend installed first). Without the bridge, all
+    // `log`-crate events — bevy's B000x hierarchy validators, wgpu/
+    // naga, asset loaders — bypass the capture layer entirely, so
+    // log_error/log_warn under-report. Surface it like
+    // log_capture_lost: informational (environmental, not a game
+    // bug), machine-readable in the report's violations list.
+    if log_capture_available
+        && !sinks::bridge_won()
+        && std::env::var_os(sinks::ENV_ALLOW_MISSING_LOG_CAPTURE).is_none()
+    {
+        snap.push(crate::state::ViolationEntry {
+            rule: Rule::LogBridgeLost.name().to_string(),
+            target: "world".to_string(),
+            first_frame: 0,
+            last_frame: 0,
+            count: 1,
+            detail: "the log→tracing bridge could not be installed (another \
+                     `log` crate logger won the global slot): events emitted \
+                     through `log` (bevy B000x hierarchy validators, wgpu/naga, \
+                     any log-crate user) do not reach the log_error/log_warn \
+                     oracles"
+                .to_string(),
+            last_detail: "log bridge OFF".to_string(),
+            meta: None,
+        });
+    }
+
     Ok(PlaytestReport {
         schema_version: 1,
         status,

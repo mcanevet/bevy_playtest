@@ -160,7 +160,14 @@ Two distinct error classes, at different stages:
   window (default 2 s at 60 tps) → Fail (catches soft-locks).
 - **Panic capture** — crash → Crash (in-process)
 - **Log capture** — ERROR → Fail, WARN → informational (unless
-  `strict_warnings: true`)
+  `strict_warnings: true`). A log→tracing bridge is installed
+  alongside the capture subscriber, so events emitted through the
+  `log` crate — bevy's B000x hierarchy validators (B0001/B0004...),
+  wgpu/naga, asset loaders, any log-crate user — are captured too
+  (they are invisible without a bridge: bevy's validators speak
+  `log`, not `tracing`). If the bridge loses the write-once `log`
+  logger slot to a game-provided backend, the report gains an
+  informational `log_bridge_lost` violation.
 
 ## Report
 
@@ -186,7 +193,10 @@ Two distinct error classes, at different stages:
 - `scenario_source`: `"file"`, `"builtin_smoke"`, or `"builtin_battery"`
 - `log_capture_available` (absent when not applicable; `log_capture_available: false` also produces an
   informational `log_capture_lost` violation — see the
-  [rejected-scenario recipe](../how-to/how-to-handle-a-rejected-scenario.md))
+  [rejected-scenario recipe](../how-to/how-to-handle-a-rejected-scenario.md);
+  when the capture subscriber wins but the log→tracing bridge cannot
+  install, an informational `log_bridge_lost` violation is produced
+  instead)
 
 Report helpers on `PlaytestReport`:
 
