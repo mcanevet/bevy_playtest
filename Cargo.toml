@@ -93,10 +93,9 @@ bevy_time = { version = "0.20.1", features = ["bevy_reflect"] }
 bevy_ecs = { version = "0.20.1", default-features = false, features = ["std", "debug"] }
 # Headless UI-layout bootstrap for the ui_surface tests: mirrors
 # bevy_ui's own layout-test app (plugins + manual asset/resource
-# init), which needs the text/sprite/asset/image/mesh stacks present
+# init), which needs the text/asset/image/mesh stacks present
 # without a GPU. Dev/test-only: consumers' graphs never see them.
 bevy_text = "0.20.1"
-bevy_sprite = "0.20.1"
 bevy_asset = "0.20.1"
 bevy_image = "0.20.1"
 bevy_mesh = "0.20.1"
