@@ -1440,9 +1440,11 @@ dependencies = [
  "bevy_window",
  "bevy_winit",
  "leafwing-input-manager",
+ "log",
  "serde",
  "serde_json",
  "tracing",
+ "tracing-log",
  "tracing-subscriber",
 ]
 

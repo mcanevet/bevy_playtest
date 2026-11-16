@@ -29,6 +29,13 @@ bevy_transform = { version = "0.20.1", default-features = false, features = ["st
 bevy_tasks = { version = "0.20.1", default-features = false }
 bevy_time = { version = "0.20.1", default-features = false, features = ["std"] }
 tracing = "0.1.44"
+# log→tracing bridge: bevy's B000x hierarchy validators (and wgpu/
+# naga/asset loaders/any `log`-crate user) emit through `log`, NOT
+# `tracing`; the harness's capture subscriber must bridge them in or
+# log_warn/log_error silently miss that whole ecosystem. Already in
+# every consumer graph via bevy's bevy_log/bevy_app chain — a direct
+# dependency adds the LogTracer type, no new crates.
+tracing-log = "0.2"
 bevy_input = { version = "0.20.1", default-features = false, features = ["std", "keyboard", "mouse", "gamepad"] }
 # Vec2 for cursor positions. Already in every consumer graph via bevy_input;
 # a direct dependency only adds the type, no new crates.
@@ -71,6 +78,10 @@ bevy_winit = { version = "0.20.1", optional = true, default-features = false }
 bevy = { version = "0.20.1", optional = true }
 
 [dev-dependencies]
+# log-crate bridge tests: emit events through `log` (the same wire
+# protocol as bevy's B000x hierarchy validators) to prove the harness
+# captures them. Dev/test-only: consumers' graphs never see it.
+log = "0.4"
 # D1-d: the lw-reader tests read REAL Leafwing InputManager 0.22
 # registrations (in-process App fixtures). Dev/test-only: consumers'
 # graphs never see leafwing, even with `lw-reader` ON (the reader is

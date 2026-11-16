@@ -158,9 +158,38 @@ pub fn drain() -> Vec<Captured> {
     std::mem::take(&mut run.events)
 }
 
-/// Process-global, write-once record of whether the capture subscriber
-/// actually became the global default. See [`ensure_global_subscriber`].
-static SUBSCRIBER_WON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+/// Process-global record of whether the capture subscriber actually
+/// became the global default. Defaults to `false` ("not yet attempted
+/// reads as lost") so a future refactor that reads the flag before
+/// [`ensure_global_subscriber`] cannot mistake an unattempted install
+/// for a won one; every report-producing path currently initializes
+/// first (driver's run_scenario → ensure_global_subscriber).
+static SUBSCRIBER_WON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Process-global record of whether the harness's log→tracing bridge
+/// (`log` crate → global tracing subscriber) actually installed.
+/// Defaults to `false` for the same reason as [`SUBSCRIBER_WON`]:
+/// unattempted reads as lost, never as won.
+///
+/// CAVEAT (out-of-contract): `log::set_boxed_logger` is write-once —
+/// that race is covered — but `log::set_max_level` is freely mutable.
+/// Game code calling `log::set_max_level(LevelFilter::Off)` after
+/// [`ensure_global_subscriber`] silently blinds log-crate capture
+/// while `bridge_won()` still reports `true`. Tampering with global
+/// log state from inside the game is out of the harness's contract
+/// (bevy's own LogPlugin has identical exposure); if it ever needs
+/// detecting, re-assert the max level at run start.
+static LOG_BRIDGE_WON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the log→tracing bridge won the (write-once) global `log`
+/// logger slot. `false` means log-crate events (bevy's B000x
+/// hierarchy validators, wgpu/naga/asset loaders, any `log`-crate
+/// user) never reach the capture layer — the report surfaces this as
+/// an informational `log_bridge_lost` when the capture subscriber
+/// itself won (otherwise `log_capture_lost` already tells the story).
+pub fn bridge_won() -> bool {
+    LOG_BRIDGE_WON.load(std::sync::atomic::Ordering::Acquire)
+}
 
 /// Whether the harness's capture subscriber won the (write-once) global
 /// default installation. `false` means log-based findings
@@ -174,9 +203,11 @@ pub fn subscriber_won() -> bool {
 /// tracing subscriber (typically DefaultPlugins' LogPlugin) wins the
 /// write-once global default, log_error/log_warn findings are
 /// under-reported. Setting this silences the loud warning and the
-/// report's informational `log_capture_lost` entry. The install-time
-/// WARNING is decided once (the first subscriber install); report
-/// entries consult the env var per run.
+/// report's informational `log_capture_lost` entry — and, since the
+/// bridge fix, the analogous `log_bridge_lost` entry/warning when
+/// another `log` crate logger owns the slot. The install-time
+/// WARNINGs are decided once (the first subscriber/bridge install);
+/// report entries consult the env var per run.
 ///
 /// Lives here (not plugin.rs) because sinks is compiled under every
 /// feature combination.
@@ -196,6 +227,17 @@ fn loss_acknowledged() -> bool {
 /// when it wins the race against the game's LogPlugin (LogPlugin then
 /// logs a harmless "already set" error). Call this BEFORE the game's
 /// plugins are added for capture to engage.
+///
+/// Additionally installs a log→tracing bridge: bevy's B000x hierarchy
+/// validators, wgpu, naga, asset loaders, and any `log`-crate user emit
+/// through `log`, NOT `tracing`. In a stock game the only bridge is
+/// LogPlugin's `LogTracer::init()` — which PlaytestDefaultPlugins
+/// deliberately drops under a scenario run so this subscriber can win
+/// the write-once global default. Without our own bridge, every
+/// log-crate WARN/ERROR falls into a black hole in exactly the mode
+/// that advertises log capture (`log_capture_available: true` would
+/// be true but hollow). Mirrors bevy_log's own pattern (lib.rs:
+/// `let logger_already_set = LogTracer::init().is_err();`).
 pub fn ensure_global_subscriber() {
     static INSTALLED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     INSTALLED.get_or_init(|| {
@@ -223,6 +265,26 @@ pub fn ensure_global_subscriber() {
                  not appear in the playtest report for this process. Use \
                  PlaytestDefaultPlugins (drops LogPlugin under a scenario run) or set \
                  {}=1 to acknowledge.",
+                ENV_ALLOW_MISSING_LOG_CAPTURE
+            );
+        }
+
+        // log→tracing bridge. Install it even when the capture
+        // subscriber lost the global-default race: routed to whoever
+        // won, log-crate events at least reach *a* subscriber (e.g.
+        // the game's own LogPlugin stack, which historically bridged
+        // them anyway); the capture-layer outcome is what
+        // log_capture_available reports. Tolerant of an already-set
+        // logger (another LogTracer, a custom `log` backend) — the
+        // report then says log_bridge_lost rather than panicking.
+        let bridge_won = tracing_log::LogTracer::init().is_ok();
+        LOG_BRIDGE_WON.store(bridge_won, std::sync::atomic::Ordering::Release);
+        if !bridge_won && !loss_acknowledged() {
+            eprintln!(
+                "bevy_playtest: log bridge OFF — another `log` crate logger is already \
+                 installed. Warnings/errors emitted through `log` (bevy's B000x \
+                 hierarchy validators, wgpu/naga, any log-crate user) will not appear \
+                 in the playtest report for this process. Set {}=1 to acknowledge.",
                 ENV_ALLOW_MISSING_LOG_CAPTURE
             );
         }
