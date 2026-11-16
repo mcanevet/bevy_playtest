@@ -121,6 +121,10 @@ fn active_features() -> Vec<&'static str> {
         // The surface embeds the lw reconcile section when on, so
         // lw-on and lw-off harness builds must not share entries.
         ("lw-reader", cfg!(feature = "lw-reader")),
+        // The report carries the enumerated UI surface and the
+        // mouse bot targets widget centers when on, so ui-surface
+        // builds produce different reports/actions.
+        ("ui-surface", cfg!(feature = "ui-surface")),
     ];
     all.iter()
         .filter(|(_, on)| *on)

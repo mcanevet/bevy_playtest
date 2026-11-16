@@ -570,6 +570,26 @@ impl CursorInputResource {
     }
 }
 
+/// Enumerated UI click targets for the chaos mouse bot
+/// (`ui-surface` feature): window-space PHYSICAL-pixel centers of
+/// declared interactables, captured once after the first frame by
+/// the driver loop (never a scheduled system — same census /
+/// static-scan neutrality doctrine as the lw capture; see
+/// `driver.rs`'s recorder comments). The resource itself is
+/// unconditional so the bot's targeting math compiles identically
+/// in every build; feature-off builds simply leave `centers`
+/// empty, which keeps the legacy targeting path byte-for-byte.
+/// Harness bookkeeping is doubly invisible: the digest excludes
+/// `bevy_playtest::`-prefixed resources, and insertion happens
+/// after the capability-census and static-scan capture points.
+#[derive(Resource, Default)]
+pub(crate) struct UiClickTargets {
+    /// Interactable centers in physical window pixels,
+    /// deterministically ordered (entity index — `enumerate_ui`'s
+    /// order).
+    pub(crate) centers: Vec<Vec2>,
+}
+
 /// Chaos mouse bot: on input-rate ticks, picks a random surface button,
 /// moves the cursor to a random position, presses, and releases after
 /// the hold window — mirroring the chaos keyboard bot's scheduling so
@@ -587,12 +607,19 @@ impl CursorInputResource {
 /// targeted at the primary window entity — picking normalizes the
 /// event's window against `PrimaryWindow` and silently drops
 /// non-primary targets.
+// Eight SystemParams: the standard bot state quintet (state,
+// scenario, choices, hold, cursor) + the enumerated UI targets +
+// window lookup + message writers. Grouping further would need a
+// bespoke SystemParam bundle per system — not worth it for one
+// system.
+#[allow(clippy::too_many_arguments)]
 fn chaos_mouse_system(
     mut state: ResMut<RunState>,
     scenario: Res<ScenarioResource>,
     mut choices: ResMut<RunChoices>,
     mut hold_state: ResMut<MouseHoldState>,
     mut cursor: ResMut<CursorInputResource>,
+    ui_targets: Res<UiClickTargets>,
     primary_window: Query<(Entity, &bevy_window::Window), With<bevy_window::PrimaryWindow>>,
     mut writers: BotMouseWriters,
 ) {
@@ -600,16 +627,19 @@ fn chaos_mouse_system(
     let interval = (state.tps / rate as u64).max(1);
     let hold_frames = 2u64;
 
-    // One (window, size) snapshot per frame; None = no window (pure
-    // headless apps) — fall back to the theoretical extent and skip
-    // the wrapped WindowEvent forms (nothing consumes them without a
-    // window anyway).
+    // One (window, size, scale) snapshot per frame; None = no window
+    // (pure headless apps) — fall back to the theoretical extent and
+    // skip the wrapped WindowEvent forms (nothing consumes them
+    // without a window anyway).
     let window = primary_window.single().ok().map(|(entity, w)| {
         (
             entity,
             // Logical extent: scale bot positions INTO the real window
             // so clicks land on-screen (picking ignores off-window hits).
             Vec2::new(w.width(), w.height()),
+            // Physical→logical conversion for enumerated widget
+            // centers (physical px, see ui_surface.rs).
+            w.scale_factor(),
         )
     });
 
@@ -619,7 +649,7 @@ fn chaos_mouse_system(
     if let Some((button, release_at)) = hold_state.chaos_pending {
         if state.frame >= release_at {
             if hold_state.release(button) {
-                writers.click(window.map(|(e, _)| e), button, ButtonState::Released);
+                writers.click(window.map(|(e, _, _)| e), button, ButtonState::Released);
             }
             hold_state.chaos_pending = None;
             // Cursor stays where it was — hover state persists.
@@ -671,16 +701,40 @@ fn chaos_mouse_system(
     // window's logical size when it exists (so clicks land ON-SCREEN —
     // picking ignores off-window positions), else the theoretical
     // extent.
+    //
+    // UI-target interleave (`ui-surface`): the SAME single draw's
+    // lowest bit routes — odd targets an enumerated widget center
+    // (selected by the remaining 31 bits over the captured list),
+    // even keeps the legacy quantized-random position. Deterministic
+    // and replay-safe: `below_kind` stores the REDUCED draw, so the
+    // routing bit is part of the recorded value and replays
+    // identically. Empty target list (feature off, capture pending,
+    // or no declared UI) degenerates to the even path everywhere.
+    // ~50% of clicks still explore undeclared regions — counts are
+    // annotations, never licenses to prune probe surfaces.
     let extent = window
-        .map(|(_, size)| size)
+        .map(|(_, size, _)| size)
         .unwrap_or(Vec2::splat(HEADLESS_CLICK_EXTENT));
-    let pos = Vec2::new(x_norm * extent.x, y_norm * extent.y);
+    let pos = if pos_draw % 2 == 1 && !ui_targets.centers.is_empty() {
+        // Select the widget by the remaining bits, deterministically:
+        // the list is entity-index-ordered (see UiClickTargets).
+        let index = ((pos_draw >> 1) as usize) % ui_targets.centers.len();
+        let center_physical = ui_targets.centers[index];
+        // Centers are physical window px; the cursor is logical px.
+        // No window (headless fallback) means no scale factor: the
+        // centers were captured against HEADLESS_CLICK_EXTENT-less
+        // synthetic viewport geometry and need no conversion.
+        let scale = window.map(|(_, _, scale)| scale).unwrap_or(1.0);
+        center_physical / scale
+    } else {
+        Vec2::new(x_norm * extent.x, y_norm * extent.y)
+    };
     let last_pos = cursor.position();
     cursor.set(pos);
     // Both forms: raw MouseMotion needs no window (device event in
     // real winit); the wrapped CursorMoved targets a window.
-    writers.cursor_moved(window.map(|(e, _)| e), pos, last_pos);
-    writers.click(window.map(|(e, _)| e), button, ButtonState::Pressed);
+    writers.cursor_moved(window.map(|(e, _, _)| e), pos, last_pos);
+    writers.click(window.map(|(e, _, _)| e), button, ButtonState::Pressed);
     state.metrics.input_count += 1;
     hold_state.press(button);
     hold_state.chaos_pending = Some((button, state.frame + hold_frames));
@@ -1143,6 +1197,11 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     app.init_resource::<MouseHoldState>();
     app.insert_resource(KeyboardModifierState::default());
     app.insert_resource(CursorInputResource::default());
+    // Enumerated widget targets for the chaos mouse bot (`ui-surface`
+    // — see the census-neutrality comment above). Populated by the
+    // driver loop after the first update; empty until then, which
+    // routes every click through the legacy targeting path.
+    app.insert_resource(UiClickTargets::default());
 
     app.insert_resource(crate::invariant_eval::ScenarioInvariants(
         scenario.invariants.clone(),
@@ -1216,10 +1275,40 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     #[cfg(feature = "lw-reader")]
     let mut lw_tap_stats: Vec<crate::discovery::lw::LwTapStats> = Vec::new();
 
+    // Declared UI surface capture (`ui-surface`). Same recorder
+    // doctrine as the lw capture above: invoked from the driver loop,
+    // never a scheduled system — it must not appear in the game's
+    // schedule or the static scan's reader census. Captured ONCE,
+    // after the first settled frame (layout-dependent surfaces need
+    // one `app.update()` so ComputedNode/UiStack exist), and held
+    // for the whole run: statically-spawned UI declares its surface
+    // at authoring time, and re-snapshotting every frame would make
+    // the report's target list drift against the bot's fixed capture.
+    // The honest cost — surfaces spawned mid-run (menus, dialogs)
+    // are absent — is recorded as a snapshot-in-time note on the
+    // result (see ui_surface's module docs). The captured result
+    // rides the report; the widget centers are ALSO mirrored into
+    // UiClickTargets for the chaos mouse bot's 50/50 targeting
+    // interleave.
+    #[cfg(feature = "ui-surface")]
+    let mut ui_surface: Option<crate::discovery::ui_surface::UiSurfaceResult> = None;
+
     let loop_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         for i in 0..total_ticks {
             sinks::set_current_frame(i);
             app.update();
+            #[cfg(feature = "ui-surface")]
+            if ui_surface.is_none() {
+                let result = crate::discovery::ui_surface::enumerate_ui(app.world());
+                if let Some(mut res) = app.world_mut().get_resource_mut::<UiClickTargets>() {
+                    res.centers = result
+                        .interactables
+                        .iter()
+                        .filter_map(|entry| entry.center)
+                        .collect();
+                }
+                ui_surface = Some(result);
+            }
             // Guaranteed end-of-frame recording (see comment above): after
             // ALL schedules (incl. the game's own `Last` systems) ran.
             if record_fingerprint {
@@ -1480,6 +1569,8 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             s
         },
         capability_census: Some(capability_census),
+        #[cfg(feature = "ui-surface")]
+        ui_surface,
     })
 }
 

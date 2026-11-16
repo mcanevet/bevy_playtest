@@ -124,6 +124,40 @@ uses thread-local RNG). A passed reader run is evidence about the
 game as ported, at that Bevy and Leafwing version — not a
 standing guarantee about upstream thetawave.
 
+## The UI Surface Tier (`ui-surface` feature)
+
+Games with menus and HUDs declare most of their interactive
+surface declaratively: `Pickable` markers, `bevy_ui_widgets`
+components, `TabIndex`, accessibility nodes, pointer-event
+observers. The `ui-surface` feature (`src/discovery/ui_surface.rs`)
+enumerates that declaration with a pure `fn(&World)` walk — never
+a registered system — captured once by the driver after the first
+settled frame (layout-dependent surfaces need one update) and
+attached to the report as `ui_surface`.
+
+Same honesty doctrine as every other tier: the result carries
+`complete: false` with notes naming what it provably misses
+(global and component-scoped pointer observers, deprecated
+`Interaction`/`Button`, third-party action maps, and surfaces
+that come into existence after the snapshot), geometry mirrors
+`bevy_ui::picking_backend::ui_picking`'s pipeline (viewport-space
+correction, visibility/zero-size exclusions — though reported
+centers do not account for clipping or occlusion, see the module
+docs' geometry caveats), and absent entries
+prove nothing. Known forward hazard: Bevy 0.21's `Focusable`
+(bevy#25675) will let worlds hold focusable entities without an
+explicit `TabIndex`, under-reporting there.
+
+The enumeration feeds back into driving, not just reporting: the
+chaos mouse bot interleaves — 50% of clicks target enumerated
+widget centers (converted physical→logical via the window's scale
+factor), 50% keep the quantized-random window sweep, routed by the
+single position draw's lowest bit so replays stay byte-identical.
+The split is deliberate: targeted clicks exercise declared
+interactables so pointer-driven games look alive, but the random
+half keeps exploring undeclared regions — counts are never a
+license to prune probe surfaces.
+
 ## Discovery-Driven Scenario Injection
 
 The report-annotation flow above describes the run; it cannot save
