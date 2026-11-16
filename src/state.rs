@@ -155,21 +155,22 @@ pub struct PlaytestReport {
     /// Source-derived chaos keys the parent put into this run's
     /// surface via the source scan (`BEVY_PLAYTEST_SOURCE_ROOT`, or
     /// the game crate's runtime `CARGO_MANIFEST_DIR`). For a default
-    /// battery run that is the FULL layered surface (backbone +
-    /// game-referenced extras), present only when a scan applied AND
-    /// found keys beyond the WASD/arrows backbone — a scan yielding
-    /// only backbone keys leaves the default unchanged. For an
-    /// INJECTED run it is exactly the scan keys unioned into the
+    /// battery run this is the scan-derived surface that REPLACED
+    /// the WASD/arrows default: the scan's full poison-filtered
+    /// unique-key set, present only when a scan applied AND found
+    /// at least one usable key — a scan that is empty, failed, or
+    /// backbone-equal leaves the default unchanged and the field
+    /// `None` (the run is indistinguishable from the default). For
+    /// an INJECTED run it is exactly the scan keys unioned into the
     /// probe-verified surface (the full bot surface lives in
     /// [`Self::injected_surface_keys`]; the two channels stay
     /// distinct so provenance is never coalesced). `None` means "no
     /// scan keys entered the run's surface" rather than "scan found
     /// nothing". Honesty field mirroring
     /// [`Self::injected_surface_keys`]: lets a consumer distinguish
-    /// "the default surface" from "the default widened with what
-    /// the game's own sources mention" — the out-of-the-box
-    /// surface-widening tier (discovery stays the verification
-    /// layer on top).
+    /// "the default surface" from "the scan-aimed surface" — the
+    /// out-of-the-box surface-concentration tier (discovery stays
+    /// the verification layer on top).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub source_derived_keys: Option<Vec<String>>,
     /// Provenance notes from the parent's source scan (why the

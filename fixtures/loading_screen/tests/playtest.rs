@@ -13,8 +13,10 @@
 //! - `playtest_battery`: ZERO flags. The battery parent's source scan
 //!   (milliseconds; this test binary's runtime `CARGO_MANIFEST_DIR`
 //!   IS the fixture crate, so the scan walks this game's `src/`)
-//!   finds `KeyCode::Digit1`/`Digit2` and layers them onto the
-//!   default chaos surface — the run goes clean out of the box.
+//!   finds `KeyCode::Digit1`/`Digit2` and REPLACES the WASD/arrows
+//!   default with them — the ~200 chaos presses concentrate on the
+//!   keys this game actually reads, and the run goes clean out of
+//!   the box.
 //! - `playtest_battery_injected`: `BEVY_PLAYTEST_DISCOVER_INJECT=1`
 //!   (implies discovery). The parent probes the input surface first
 //!   (cache-first; the cache lives in `.bevy_playtest/cache/`,
@@ -66,9 +68,10 @@ mod playtests {
             "{}",
             report.findings_summary(bevy_playtest::battery::BUILTIN_BATTERY)
         );
-        // And pin the layering itself, not just the outcome: the
-        // scan must have found the game's Digit1/Digit2 mentions
-        // (backbone keys ride along in the full layered list).
+        // And pin the replacement itself, not just the outcome: the
+        // scan must have found the game's Digit1/Digit2 mentions and
+        // built the bot's surface from them (the scan-derived
+        // replacement includes whatever the scan cites).
         let layered = report
             .source_derived_keys
             .as_ref()

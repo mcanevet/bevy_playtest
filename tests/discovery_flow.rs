@@ -1118,19 +1118,24 @@ fn source_scan_finds_the_demos_bound_key() {
             .collect::<Vec<_>>()
     );
 
-    // And the layering contract on the real scan output: backbone
-    // intact, no poison keys, notes non-empty (refusal over
-    // silence), keys order canonical.
+    // And the layering contract on the real scan output: the
+    // scan-derived surface (arm note present, no poison keys,
+    // capped, notes non-empty — refusal over silence).
     let layered = layered_chaos_keys(&result);
-    assert_eq!(&layered.keys[..BACKBONE_KEYS.len()], BACKBONE_KEYS);
     assert!(!layered.keys.contains(&"Escape".to_string()));
     assert!(!layered.keys.contains(&"Tab".to_string()));
+    assert!(!layered.keys.is_empty());
     assert!(!layered.notes.is_empty());
-    assert!(layered.keys.len() <= BACKBONE_KEYS.len() + MAX_SCAN_KEYS);
+    assert!(layered.keys.len() <= MAX_SCAN_KEYS);
+    // Deterministic emit order: alphabetical.
+    let mut sorted = layered.keys.clone();
+    sorted.sort();
+    assert_eq!(layered.keys, sorted);
 
     // Directly parameterized layering sanity: a synthetic scan of
-    // ONLY Digit1 must produce backbone + Digit1 (the
-    // loading_screen fix, verbatim).
+    // ONLY Digit1 must produce a one-key replacement surface — the
+    // scan-hit arm REPLACES the backbone (the loading_screen fix,
+    // with the press budget fully concentrated).
     let synthetic = bevy_playtest::discovery::source_scan::SourceScanResult {
         hits: vec![bevy_playtest::discovery::source_scan::SourceScanHit {
             key: "Digit1".into(),
@@ -1141,9 +1146,12 @@ fn source_scan_finds_the_demos_bound_key() {
         ..Default::default()
     };
     let layered = layered_chaos_keys(&synthetic);
-    let mut expected: Vec<String> = BACKBONE_KEYS.iter().map(|s| s.to_string()).collect();
-    expected.push("Digit1".into());
-    assert_eq!(layered.keys, expected);
+    assert_eq!(layered.keys, vec!["Digit1".to_string()]);
+    // The arm must be recorded in the notes.
+    assert!(layered
+        .notes
+        .iter()
+        .any(|n| n.contains("scan-derived surface replaced the WASD/arrows default")));
 }
 
 #[test]
@@ -1178,7 +1186,7 @@ fn source_scan_of_a_fresh_game_dir_yields_no_extras() {
 
     // A game crate with no KeyCode mentions at all: the layering
     // must keep the backbone unchanged and NOT stamp the report
-    // field (no widening = no record: None means "unchanged").
+    // field (no replacement = no record: None means "unchanged").
     let dir = temp_dir();
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(dir.join("src/main.rs"), "fn main() {} // no inputs here").unwrap();
@@ -1201,23 +1209,25 @@ fn source_scan_of_a_fresh_game_dir_yields_no_extras() {
     .expect("battery run with a fresh source root");
     assert_eq!(
         report.source_derived_keys, None,
-        "no scan extras => the report must not pretend a widening happened"
+        "no scan extras => the report must not pretend a replacement happened"
     );
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
-fn source_scan_widening_goes_clean_on_the_loading_screen_demo() {
+fn source_scan_replacement_goes_clean_on_the_loading_screen_demo() {
     let _slot = common::run_slot();
 
     // THE out-of-the-box claim, e2e: the loading_screen-shaped demo
     // (world moves only on Digit1) runs the BUILT-IN battery with NO
     // discovery variables set. Undecorated, the WASD-only default
     // never presses Digit1 and the run pins frozen_world. With the
-    // source scan layered in, the bot presses Digit1, the world
-    // awakens, and the same battery goes CLEAN — zero config, zero
-    // scenarios, zero probes.
+    // source scan applied, the scan-derived surface REPLACES the
+    // blind default with exactly the key the game's own code reads,
+    // the bot presses Digit1 every chaos interval (toggle
+    // semantics), and the same battery goes CLEAN — zero config,
+    // zero scenarios, zero probes.
     //
     // The scan root replicates what a REAL game crate looks like
     // to the parent: only the game's own source (the harness tree
@@ -1236,24 +1246,23 @@ fn source_scan_widening_goes_clean_on_the_loading_screen_demo() {
     })
     .expect("battery run with source-scan layering");
 
-    // Honesty: the widened surface is recorded...
+    // Honesty: the scan-derived surface is recorded...
     assert_eq!(
         report.source_derived_keys,
-        Some({
-            let mut expected: Vec<String> = BACKBONE_KEYS.iter().map(|s| s.to_string()).collect();
-            expected.push("Digit1".into());
-            expected
-        }),
-        "the scan must layer the demo's bound key onto the backbone"
+        Some(vec!["Digit1".to_string()]),
+        "the scan must replace the default with the demo's bound key"
     );
     // ...with its provenance notes (refusal over silence: the
-    // stamping must carry the scan's decisions, not just the list)...
+    // stamping must carry the scan's decisions, not just the
+    // list)...
     assert!(
         report
             .source_derived_notes
             .as_ref()
-            .is_some_and(|notes| notes.iter().any(|n| n.contains("layered 1 scan key"))),
-        "notes must record the layering decision: {:?}",
+            .is_some_and(|notes| notes
+                .iter()
+                .any(|n| n.contains("scan-derived surface replaced the WASD/arrows default"))),
+        "notes must record the arm that fired: {:?}",
         report.source_derived_notes
     );
     // ...and the run went clean: no frozen_world (the bot pressed
@@ -1280,7 +1289,7 @@ fn injection_does_not_double_stamp_when_scan_adds_nothing_new() {
     // scan-visible keys — see the sibling union test). Here the
     // scan root mentions only the SAME key the probe verified
     // (Digit1), so the union adds nothing: the report records the
-    // injected keys and NOT a source-derived widening — the scan
+    // injected keys and NOT a source-derived addition — the scan
     // must not double-stamp keys the probe already carried.
     let dir = temp_dir();
     // Scan root replicating a game crate whose only binding is the

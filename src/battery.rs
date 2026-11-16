@@ -554,9 +554,14 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
             let result = source_scan::scan_from_root(&root);
             let layered = source_scan::layered_chaos_keys(&result);
             if layered.keys != backbone_keys_vec() {
-                // The scan widened the default: rewrite the
-                // scenario the child receives, same pattern as
-                // injection (the parent writes a variant file).
+                // The scan REPLACED the blind default with its own
+                // poison-filtered surface: rewrite the scenario the
+                // child receives, same pattern as injection (the
+                // parent writes a variant file). Equality with the
+                // backbone means the scan found nothing usable (or
+                // exactly the fallback) — the run is then
+                // indistinguishable from the default and stays
+                // unstamped, preserving the None honesty contract.
                 let mut scenario = crate::plugin::battery_scenario().map_err(|e| {
                     BatteryError::Spawn(format!("source-layered battery scenario: {e}"))
                 })?;
@@ -712,8 +717,11 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
     }
     // Source-scan honesty fields: stamped whenever the parent put
     // scan-derived keys into the run's surface (independent of
-    // discovery). For a DEFAULT battery that is the FULL layered
-    // list (backbone + extras); for an INJECTED run it is exactly
+    // discovery). For a DEFAULT battery that is the scan-derived
+    // surface that REPLACED the WASD/arrows default (Some ⇒ the
+    // scan-hit arm fired; the fallback arm leaves None — no
+    // scan, scan-empty, or backbone-equal scan, all of which run
+    // the unchanged default); for an INJECTED run it is exactly
     // the scan keys unioned into the probe-verified surface (the
     // full bot surface lives in `injected_surface_keys` — the two
     // channels stay distinct so provenance is never coalesced).

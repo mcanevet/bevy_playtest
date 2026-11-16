@@ -22,8 +22,15 @@
 //!
 //! Layering contract (see [`layered_chaos_keys`]):
 //!
-//! - the WASD/arrows [`BACKBONE_KEYS`] always stays (liveness
-//!   economics: movement keys reward repetition);
+//! - the WASD/arrows [`BACKBONE_KEYS`] is a FALLBACK tier, not an
+//!   always-on floor: when the scan yields any usable key, the
+//!   scan-derived surface (the scan's FULL unique-key set,
+//!   backbone keys included) REPLACES the blind default, so the
+//!   battery's ~200 chaos presses concentrate on keys the game's
+//!   own code reads instead of spreading over inert WASD/arrows;
+//!   when the scan is empty or poison-only, the backbone stands —
+//!   exactly the surface that existed before the scan (ignorance
+//!   fallback), and the notes say which arm fired;
 //! - a short POISON list (`Escape`, `Tab`) is removed — the two
 //!   keys a blind chaos bot can use to derail the run into a
 //!   different context (pause menu, focus cycling) and thereby
@@ -55,12 +62,16 @@ pub const ENV_SOURCE_SCAN_DISABLE: &str = "BEVY_PLAYTEST_SOURCE_SCAN_DISABLE";
 /// dedicated controlled experiment, not a shared chaos budget).
 pub const POISON_KEYS: &[&str] = &["Escape", "Tab"];
 
-/// Hard cap on scan-derived keys layered beyond the backbone. The
-/// battery's ~200 chaos presses (20 s at 10 Hz) spread thinner as
-/// the surface
-/// grows; beyond this many extras the per-key depth stops paying
-/// for the breadth. Most-referenced keys win (then alphabetical),
-/// and the drop is recorded as a note.
+/// Hard cap on the TOTAL scan-derived chaos surface (the keys the
+/// blind bot actually samples with its ~200 chaos presses —
+/// 20 s at 10 Hz; presses spread thinner as the surface grows).
+/// Beyond this many keys the per-key depth stops paying for the
+/// breadth. Most-referenced keys win (then alphabetical), and the
+/// drop is recorded as a note.
+///
+/// The inject-union path ([`scan_extras`]) shares this constant as
+/// its cap on EXTRAS beyond the injected surface — frozen P2
+/// semantics, unchanged here.
 pub const MAX_SCAN_KEYS: usize = 24;
 
 /// One `KeyCode::X` mention in the game's sources.
@@ -111,23 +122,28 @@ impl SourceScanResult {
 /// over silence: every filtering decision is reported).
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LayeredKeys {
-    /// The full layered key list, canonical spelling: backbone
-    /// order first, then scan-derived keys alphabetical.
+    /// The full chaos key list the bot samples, canonical spelling:
+    /// alphabetical (both arms emit the same order). Scan-hit arm:
+    /// the scan's full unique-key set (backbone keys included). No
+    /// hits arm: the WASD/arrows backbone, unchanged.
     pub keys: Vec<String>,
     /// Provenance and filtering notes for the report.
     pub notes: Vec<String>,
 }
 
-/// The scan's selection for surface consumers: the extras beyond
-/// the backbone plus every filtering decision behind them (refusal
-/// over silence). TWO consumers share this single selection — the
-/// default-battery layering (`layered_chaos_keys`) and the
-/// DISCOVER_INJECT union (battery) — so the two sites can never
-/// diverge. The union exists because the probe matrix's candidate
-/// prior cannot see a textually-present key: the scan fills the
-/// prior's gaps, so enabling inject never loses a SCAN-derived key
-/// (when the scan applies — disabled/empty-root parents keep the
-/// probe-only surface).
+/// The scan's selection for the INJECT-UNION consumer: the extras
+/// beyond the backbone plus every filtering decision behind them
+/// (refusal over silence). Frozen P2 semantics — the union exists
+/// because the probe matrix's candidate prior cannot see a
+/// textually-present key: the scan fills the prior's gaps, so
+/// enabling inject never loses a SCAN-derived key (when the scan
+/// applies — disabled/empty-root parents keep the probe-only
+/// surface). The default layering builds a DIFFERENT surface (the
+/// full scan-derived replacement) from the same substrate
+/// (the shared `usable_key_freq` substrate), so the two consumers
+/// share what the scan SAW but never what they
+/// SELECT — backbone keys ride in the union's counterpart surface,
+/// extras go into it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ScanExtras {
     /// Extras beyond the backbone, poison-filtered and capped at
@@ -143,9 +159,34 @@ pub struct ScanExtras {
     pub notes: Vec<String>,
 }
 
-/// Select the scan extras beyond the backbone, poison-filtered and
-/// capped, plus the drop-decision notes. See [`ScanExtras`].
-pub fn scan_extras(result: &SourceScanResult) -> ScanExtras {
+/// Poison-filtered unique keys with reference counts, in
+/// deterministic alphabetical order — the shared substrate for
+/// BOTH surface consumers, so the default layering and the
+/// inject-union can never disagree about what the scan saw.
+/// Poison keys are excluded here (their drop is a note, made by
+/// the callers).
+fn usable_key_freq(
+    result: &SourceScanResult,
+) -> (std::collections::BTreeMap<String, usize>, Vec<String>) {
+    let mut poisoned: Vec<String> = Vec::new();
+    let mut freq: std::collections::BTreeMap<String, usize> = Default::default();
+    for key in result.unique_keys() {
+        if POISON_KEYS.contains(&key.as_str()) {
+            poisoned.push(key);
+        } else {
+            let n = result.hits.iter().filter(|h| h.key == key).count();
+            freq.insert(key, n);
+        }
+    }
+    (freq, poisoned)
+}
+
+/// Decision notes shared by both surface consumers: unsupported
+/// variants, unreadable files, poison drops. Cap notes are NOT
+/// here — the two consumers cap DIFFERENT sets (extras beyond the
+/// injected/backbone surface vs the whole scan-derived surface),
+/// so each reports its own cap decision.
+fn shared_decision_notes(result: &SourceScanResult, poisoned: &[String]) -> Vec<String> {
     let mut notes = Vec::new();
     if !result.unsupported.is_empty() {
         let mut u = result.unsupported.clone();
@@ -162,24 +203,22 @@ pub fn scan_extras(result: &SourceScanResult) -> ScanExtras {
             result.unreadable.len()
         ));
     }
-
-    // Frequency per key (dedup across hits), splitting poison out.
-    let mut freq: std::collections::BTreeMap<String, usize> = Default::default();
-    let mut poisoned: Vec<String> = Vec::new();
-    for key in result.unique_keys() {
-        if POISON_KEYS.contains(&key.as_str()) {
-            poisoned.push(key);
-        } else {
-            let n = result.hits.iter().filter(|h| h.key == key).count();
-            freq.insert(key, n);
-        }
-    }
     if !poisoned.is_empty() {
         notes.push(format!(
             "poison-filtered (never given to the blind chaos bot): {}",
             poisoned.join(", ")
         ));
     }
+    notes
+}
+
+/// Select the scan extras beyond the backbone, poison-filtered and
+/// capped, plus the drop-decision notes. See [`ScanExtras`]. Frozen
+/// P2 inject-union semantics — the default layering's fallback-tier
+/// change does NOT alter what the union adds to an injected surface.
+pub fn scan_extras(result: &SourceScanResult) -> ScanExtras {
+    let (freq, poisoned) = usable_key_freq(result);
+    let mut notes = shared_decision_notes(result, &poisoned);
 
     let mut extras: Vec<(String, usize)> = freq
         .into_iter()
@@ -209,9 +248,21 @@ pub fn scan_extras(result: &SourceScanResult) -> ScanExtras {
     ScanExtras { keys, notes }
 }
 
-/// Layer scan hits into a chaos surface:
-/// backbone ∪ (scan keys − poison), capped at
-/// [`MAX_SCAN_KEYS`] extras, canonical deterministic order.
+/// Build the default battery's chaos surface from a source scan —
+/// the fallback-tier contract (see the module docs):
+///
+/// - Scan yielded at least one usable key: the scan's FULL
+///   poison-filtered unique-key set (backbone keys INCLUDED, so
+///   scan-visible live keys like alien_cake's arrows survive)
+///   REPLACES the blind WASD/arrows default, capped at
+///   [`MAX_SCAN_KEYS`] TOTAL. The battery's ~200 chaos presses then
+///   concentrate on keys the game's own code reads instead of
+///   spreading over inert defaults.
+/// - Empty or poison-only scan: the backbone stands — exactly the
+///   surface that existed before the scan (ignorance fallback).
+///
+/// Either arm is recorded in the notes (refusal over silence: the
+/// report always says WHICH surface the bot sampled and why).
 pub fn layered_chaos_keys(result: &SourceScanResult) -> LayeredKeys {
     let mut notes = Vec::new();
     notes.push(format!(
@@ -220,25 +271,50 @@ pub fn layered_chaos_keys(result: &SourceScanResult) -> LayeredKeys {
         result.hits.len(),
         result.unique_keys().len()
     ));
-    // Every filtering decision the scan made (unsupported variants,
-    // unreadable files, poison drops, cap drops) — the shared
-    // selection, so the inject-union path reports the same
-    // decisions the default layering does.
-    let extras = scan_extras(result);
-    notes.extend(extras.notes);
+    // Shared substrate with the inject-union path (see
+    // [`usable_key_freq`]/[`shared_decision_notes`]): unsupported,
+    // unreadable, and poison decisions read identically whichever
+    // consumer reports them.
+    let (freq, poisoned) = usable_key_freq(result);
+    notes.extend(shared_decision_notes(result, &poisoned));
 
-    let extras = extras.keys;
-    let mut keys: Vec<String> = BACKBONE_KEYS.iter().map(|s| s.to_string()).collect();
-    if extras.is_empty() {
-        notes.push("no scan keys beyond the WASD/arrows backbone; default unchanged".to_string());
-    } else {
-        notes.push(format!(
-            "layered {} scan keys onto the backbone: {}",
-            extras.len(),
-            extras.join(", ")
-        ));
-        keys.extend(extras);
+    if freq.is_empty() {
+        notes.push(
+            "no usable scan keys; WASD/arrows backbone fallback (surface unchanged)".to_string(),
+        );
+        let keys: Vec<String> = BACKBONE_KEYS.iter().map(|s| s.to_string()).collect();
+        return LayeredKeys { keys, notes };
     }
+
+    // Scan-hit arm: the scan's full poison-filtered surface,
+    // capped at MAX_SCAN_KEYS TOTAL.
+    let mut keys: Vec<(String, usize)> = freq.into_iter().collect();
+    if keys.len() > MAX_SCAN_KEYS {
+        // Most-referenced first, then alphabetical: deterministic
+        // SELECTION (who survives the cap)...
+        let dropped: Vec<String> = keys.iter().map(|(k, _)| k.clone()).collect();
+        keys.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        keys.truncate(MAX_SCAN_KEYS);
+        // ...and the drop is a reported decision, in the same
+        // alphabetical order the pre-cap list held.
+        let dropped: Vec<String> = dropped
+            .into_iter()
+            .filter(|k| !keys.iter().any(|(kept, _)| kept == k))
+            .collect();
+        notes.push(format!(
+            "capped at {MAX_SCAN_KEYS} total scan-derived keys (dropped, least-referenced: {})",
+            dropped.join(", ")
+        ));
+    }
+    // Canonical EMIT order: alphabetical, so scan-derived surfaces
+    // and injected unions stay comparable across runs and tiers.
+    let mut keys: Vec<String> = keys.into_iter().map(|(k, _)| k).collect();
+    keys.sort();
+    notes.push(format!(
+        "scan-derived surface replaced the WASD/arrows default: {} keys: {}",
+        keys.len(),
+        keys.join(", ")
+    ));
     LayeredKeys { keys, notes }
 }
 
@@ -815,9 +891,11 @@ mod tests {
     }
 
     #[test]
-    fn layered_keys_keep_backbone_drop_poison_cap_extras() {
-        // Poison keys never enter; backbone always present; extras
-        // beyond the cap drop most-referenced-first, and notes say so.
+    fn layered_keys_use_the_full_scan_surface_drop_poison() {
+        // Scan-hit arm: the scan's full poison-filtered key set
+        // REPLACES the default (backbone included only when the
+        // scan itself cites it). Poison keys never enter, and the
+        // arm + drop decisions are reported notes.
         let mut r = SourceScanResult::default();
         for key in ["KeyE", "KeyF", "KeyG", "Space"] {
             for _ in 0..3 {
@@ -829,7 +907,7 @@ mod tests {
                 });
             }
         }
-        // Escape mentioned plenty: still never layered.
+        // Escape mentioned plenty: still never given to the bot.
         for _ in 0..9 {
             r.hits.push(SourceScanHit {
                 key: "Escape".into(),
@@ -839,25 +917,97 @@ mod tests {
             });
         }
         let layered = layered_chaos_keys(&r);
-        assert_eq!(layered.keys.len(), BACKBONE_KEYS.len() + 4);
-        assert!(layered.keys.contains(&"Space".to_string()));
+        assert_eq!(
+            layered.keys,
+            vec![
+                "KeyE".to_string(),
+                "KeyF".to_string(),
+                "KeyG".to_string(),
+                "Space".to_string(),
+            ]
+        );
         assert!(!layered.keys.contains(&"Escape".to_string()));
         assert!(layered.notes.iter().any(|n| n.contains("poison-filtered")));
+        assert!(layered
+            .notes
+            .iter()
+            .any(|n| n.contains("scan-derived surface replaced the WASD/arrows default")));
+    }
+
+    #[test]
+    fn layered_keys_include_scan_visible_backbone_keys() {
+        // The replacement surface is the scan's FULL key set — a
+        // game citing its own arrows (alien_cake's case) keeps them:
+        // they enter as scan evidence, not as blind default.
+        let mut r = SourceScanResult::default();
+        for key in ["ArrowUp", "ArrowDown"] {
+            r.hits.push(SourceScanHit {
+                key: key.into(),
+                file: "t.rs".into(),
+                line: 1,
+                enclosing: None,
+            });
+        }
+        let layered = layered_chaos_keys(&r);
+        assert_eq!(
+            layered.keys,
+            vec!["ArrowDown".to_string(), "ArrowUp".to_string()]
+        );
+    }
+
+    #[test]
+    fn layered_keys_fall_back_to_backbone_on_empty_or_poison_only_scans() {
+        // Ignorance fallback: no usable keys (nothing scanned, or
+        // poison-only) keeps exactly the pre-scan default surface,
+        // and the note says which arm fired.
+        let layered = layered_chaos_keys(&SourceScanResult::default());
+        assert_eq!(
+            layered.keys,
+            BACKBONE_KEYS
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+        );
+        assert!(layered
+            .notes
+            .iter()
+            .any(|n| n.contains("backbone fallback")));
+
+        let mut poison_only = SourceScanResult::default();
+        for key in ["Escape", "Tab"] {
+            poison_only.hits.push(SourceScanHit {
+                key: key.into(),
+                file: "t.rs".into(),
+                line: 1,
+                enclosing: None,
+            });
+        }
+        let layered = layered_chaos_keys(&poison_only);
+        assert_eq!(
+            layered.keys,
+            BACKBONE_KEYS
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+        );
+        assert!(layered.notes.iter().any(|n| n.contains("poison-filtered")));
+        assert!(layered
+            .notes
+            .iter()
+            .any(|n| n.contains("backbone fallback")));
     }
 
     #[test]
     fn cap_keeps_most_referenced_keys_and_reports_the_drop() {
-        // Distinct, non-backbone keys: 30 > MAX_SCAN_KEYS triggers
-        // the cap; the first three are referenced most often and
-        // must survive it.
+        // Distinct keys: 30 > MAX_SCAN_KEYS triggers the cap on the
+        // TOTAL scan-derived surface; the most-referenced keys must
+        // survive it.
         let mut r = SourceScanResult::default();
         let mut keys: Vec<String> = Vec::new();
-        // All 26 letters, minus backbone WASD, plus digits 0-9, plus
-        // the named keys — all canonical, all non-backbone extras.
+        // All 26 letters (WASD included — scan-visible backbone
+        // keys compete on their own citations now), plus digits
+        // 0-9, plus the named keys — all canonical.
         for letter in (b'A'..=b'Z').map(|c| c as char) {
-            if "WASD".contains(letter) {
-                continue;
-            }
             keys.push(format!("Key{letter}"));
         }
         for d in 0..=9 {
@@ -893,7 +1043,7 @@ mod tests {
             }
         }
         let layered = layered_chaos_keys(&r);
-        assert_eq!(layered.keys.len(), BACKBONE_KEYS.len() + MAX_SCAN_KEYS);
+        assert_eq!(layered.keys.len(), MAX_SCAN_KEYS);
         // Most-referenced survivors made the cut.
         for letter in ['A', 'B', 'C'] {
             assert!(
@@ -902,16 +1052,21 @@ mod tests {
                 layered.keys
             );
         }
-        assert!(layered.notes.iter().any(|n| n.contains("capped at")));
+        assert!(layered
+            .notes
+            .iter()
+            .any(|n| n.contains("capped at") && n.contains("total scan-derived keys")));
     }
 
     #[test]
-    fn scan_extras_selects_like_the_layering_poison_backbone_and_cap() {
-        // `scan_extras` is the shared selection consumed BOTH by the
-        // default layering and by the inject-union: poison dropped,
-        // backbone excluded, cap most-referenced-first, emit order
-        // alphabetical. Pin the contract against the SAME inputs as
-        // `cap_keeps_most_referenced_keys_and_reports_the_drop`.
+    fn scan_extras_selects_poison_backbone_and_cap_for_the_inject_union() {
+        // `scan_extras` is the INJECT-UNION's selection (frozen P2
+        // semantics): poison dropped, backbone excluded (those ride
+        // in the probe-verified surface or the injected keys), cap
+        // most-referenced-first, emit order alphabetical. The
+        // default layering builds its own surface from the shared
+        // substrate (`usable_key_freq`) — pinning this separately
+        // guards against divergence between the two consumers.
         let mut r = SourceScanResult::default();
         for key in ["KeyE", "KeyF", "Space"] {
             for _ in 0..3 {
@@ -939,8 +1094,7 @@ mod tests {
         );
         // Refusal over silence: the poison drop is a reported
         // decision (the inject path threads these notes into
-        // `source_derived_notes`; the default layering into its
-        // own notes).
+        // `source_derived_notes`).
         assert!(
             extras
                 .notes

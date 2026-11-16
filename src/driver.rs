@@ -245,11 +245,12 @@ fn chaos_bot_system(
     if !state.frame.is_multiple_of(interval) {
         return;
     }
-    // The default surface is BACKBONE_KEYS — the single source of
-    // truth shared with the source-scan layering contract.
-    // A declared surface is authoritative: an explicitly empty `keys`
-    // list opts out of chaos keys (mouse-only chaos). Absent surface =
-    // the default set (default-on).
+    // The absent-surface default is BACKBONE_KEYS — the fallback
+    // the source-scan layering contract REPLACES when the scan has
+    // hits (the parent rewrites the scenario; the driver itself
+    // never decides between the arms). A declared surface is
+    // authoritative: an explicitly empty `keys` list opts out of
+    // chaos keys (mouse-only chaos).
     let keys: Vec<&str> = match &scenario.0.bot.raw_surface {
         Some(surface) => surface.keys.iter().map(String::as_str).collect(),
         None => crate::scenario::BACKBONE_KEYS.to_vec(),
