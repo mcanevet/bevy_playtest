@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [0.11.0](https://github.com/mcanevet/bevy_playtest/compare/v0.10.0...v0.11.0) - 2026-11-17
+
+### Added
+
+- *(discovery)* demote the WASD/arrows backbone to a fallback tier
+
+### Fixed
+
+- *(discovery)* address adversarial review of the fallback-tier change
+- *(log-capture)* bridge the log crate to tracing in takeover mode
+
+### Other
+
+- *(discovery)* pin the backbone-equal scan corner from round-2 review
+- ci Update Rust crate log to 0.4.35
+
 ## [0.10.0](https://github.com/mcanevet/bevy_playtest/compare/v0.9.0...v0.10.0) - 2026-11-16
 
 ### Added
