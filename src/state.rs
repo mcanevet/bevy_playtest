@@ -116,6 +116,16 @@ pub struct PlaytestReport {
     /// carries an informational `log_capture_lost` violation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_capture_available: Option<bool>,
+    /// Whether the log→tracing bridge (log crate → global tracing
+    /// subscriber) was active for the producing process. `Some(false)`
+    /// = another `log` crate logger owned the write-once slot, so
+    /// `log`-crate events (bevy's B000x hierarchy validators,
+    /// wgpu/naga, any log-crate user) are invisible to
+    /// log_error/log_warn even though `log_capture_available` may be
+    /// `true`. Distinguishes the compound-lost case from
+    /// subscriber-loss alone. Absent on stubs and pre-field reports.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub log_bridge_available: Option<bool>,
     /// Per-frame broadened state digests (opt-in via `record_digest: true`).
     /// Covers entity/archetype counts, Transform/UiTransform translations,
     /// and reflected game resources. Skipped when empty to keep reports
@@ -239,6 +249,7 @@ impl PlaytestReport {
             harness_mode: "in_process".to_string(),
             scenario_source: None,
             log_capture_available: None,
+            log_bridge_available: None,
             // Crashed-before-reporting stub: no game run ever
             // completed, so no profile is claimable.
             game_build_profile: None,

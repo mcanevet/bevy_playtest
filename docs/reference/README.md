@@ -202,6 +202,12 @@ Two distinct error classes, at different stages:
   when the capture subscriber wins but the log→tracing bridge cannot
   install, an informational `log_bridge_lost` violation is produced
   instead)
+- `log_bridge_available` (absent when not applicable; `false` means
+  another `log` crate logger owned the write-once slot, so
+  `log`-crate events — bevy's B000x hierarchy validators, wgpu/naga —
+  are invisible to `log_warn`/`log_error` even when
+  `log_capture_available` is `true`; surfaced as the informational
+  `log_bridge_lost` violation)
 
 Report helpers on `PlaytestReport`:
 

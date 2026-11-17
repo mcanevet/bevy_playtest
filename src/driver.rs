@@ -1675,6 +1675,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         harness_mode: "in_process".to_string(),
         scenario_source: None,
         log_capture_available: Some(log_capture_available),
+        log_bridge_available: Some(sinks::bridge_won()),
         // The report-writing code runs in the game's own binary
         // (in-process here, takeover child elsewhere), so the
         // reporting process's profile IS the game's profile.
