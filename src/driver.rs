@@ -1115,6 +1115,11 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     // Install global tracing subscriber (captures ERROR/WARN logs into the
     // run's violation buffer). The panic hook is installed separately below.
     sinks::ensure_global_subscriber();
+    // Undo any log::set_max_level(Off) applied after the bridge won the
+    // logger slot (game code, test frameworks): max_level is checked at
+    // emission sites, so re-assert BEFORE the first frame runs. The loop
+    // re-asserts per tick to bound mid-run blinding to one tick.
+    sinks::assert_log_bridge_level();
     install_panic_hook();
 
     // Acquire the exclusive run buffer FIRST: everything after this
@@ -1385,6 +1390,11 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
 
     let loop_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         for i in 0..total_ticks {
+            // Defense against a foreign log::set_max_level(Off): the
+            // bridge's logger is ours, so re-claim the level each tick.
+            // Cost is one atomic-compare-and-set equivalent; blindness
+            // from a mid-run Off is bounded to this loop's remainder.
+            sinks::assert_log_bridge_level();
             sinks::set_current_frame(i);
             app.update();
             #[cfg(feature = "ui-surface")]

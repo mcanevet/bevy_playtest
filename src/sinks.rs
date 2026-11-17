@@ -174,11 +174,14 @@ static SUBSCRIBER_WON: std::sync::atomic::AtomicBool = std::sync::atomic::Atomic
 /// CAVEAT (out-of-contract): `log::set_boxed_logger` is write-once —
 /// that race is covered — but `log::set_max_level` is freely mutable.
 /// Game code calling `log::set_max_level(LevelFilter::Off)` after
-/// [`ensure_global_subscriber`] silently blinds log-crate capture
-/// while `bridge_won()` still reports `true`. Tampering with global
-/// log state from inside the game is out of the harness's contract
-/// (bevy's own LogPlugin has identical exposure); if it ever needs
-/// detecting, re-assert the max level at run start.
+/// [`ensure_global_subscriber`] would silently blind log-crate
+/// capture while `bridge_won()` still reports `true`. Tampering with
+/// global log state from inside the game is out of the harness's
+/// contract (bevy's own LogPlugin has identical exposure); the
+/// harness defends anyway by re-asserting the max level at run start
+/// and at every tick (see [`assert_log_bridge_level`]) — a mid-run
+/// `Off` therefore blinds at most one tick's remainder, and the
+/// pre-run state is always restored before the first frame.
 static LOG_BRIDGE_WON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Whether the log→tracing bridge won the (write-once) global `log`
@@ -197,6 +200,29 @@ pub fn bridge_won() -> bool {
 /// process — the report surfaces this as `log_capture_lost`.
 pub fn subscriber_won() -> bool {
     SUBSCRIBER_WON.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// Re-assert the `log` crate's max level so a foreign
+/// `log::set_max_level(LevelFilter::Off)` (called by game code or a
+/// test framework after [`ensure_global_subscriber`]) cannot blind
+/// log-crate capture. Only acts when the harness bridge WON the
+/// write-once logger slot: raising the level for a logger the
+/// harness does not own would change the game's observed behavior
+/// (its own backend may deliberately filter), and in the bridge-lost
+/// case the report already says `log_bridge_lost`.
+///
+/// `log::max_level()` is checked at the emission site (inside
+/// `log::warn!`/`error!` macros), so this call protects everything
+/// after it; the driver re-asserts at run start AND at every tick,
+/// bounding a mid-run `Off` to at most the remainder of one tick.
+pub(crate) fn assert_log_bridge_level() {
+    if LOG_BRIDGE_WON.load(std::sync::atomic::Ordering::Acquire) {
+        // `tracing_log::log` is a re-export of THE `log` crate (same
+        // types, same globals): using it keeps the lib's public
+        // dependency footprint at tracing-log without adding `log`
+        // itself to consumers' graphs.
+        tracing_log::log::set_max_level(tracing_log::log::LevelFilter::max());
+    }
 }
 
 /// Escape hatch acknowledging log-capture loss: when the game's own
