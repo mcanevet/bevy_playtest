@@ -131,15 +131,19 @@ surface declaratively: `Pickable` markers, `bevy_ui_widgets`
 components, `TabIndex`, accessibility nodes, pointer-event
 observers. The `ui-surface` feature (`src/discovery/ui_surface.rs`)
 enumerates that declaration with a pure `fn(&World)` walk — never
-a registered system — captured once by the driver after the first
-settled frame (layout-dependent surfaces need one update) and
-attached to the report as `ui_surface`.
+a registered system — captured by the driver after the first
+settled frame (layout-dependent surfaces need one update) and then
+RE-CAPTURED periodically (a fixed tick interval, ~twice a second;
+`UiSurfaceTracker`). The report's `ui_surface` field carries the
+LATEST snapshot; each recapture's entity-set deltas are recorded
+as bounded notes (refusal over silence — a menu opening mid-run is
+reported, not silently absorbed).
 
 Same honesty doctrine as every other tier: the result carries
 `complete: false` with notes naming what it provably misses
 (global and component-scoped pointer observers, deprecated
 `Interaction`/`Button`, third-party action maps, and surfaces
-that come into existence after the snapshot), geometry mirrors
+alive for less than one recapture interval), geometry mirrors
 `bevy_ui::picking_backend::ui_picking`'s pipeline (viewport-space
 correction, visibility/zero-size exclusions — though reported
 centers do not account for clipping or occlusion, see the module
@@ -149,9 +153,11 @@ prove nothing. Known forward hazard: Bevy 0.21's `Focusable`
 explicit `TabIndex`, under-reporting there.
 
 The enumeration feeds back into driving, not just reporting: the
-chaos mouse bot interleaves — 50% of clicks target enumerated
-widget centers (converted physical→logical via the window's scale
-factor), 50% keep the quantized-random window sweep, routed by the
+chaos mouse bot interleaves — 50% of clicks target the CURRENT
+snapshot's widget centers (mirrored into `UiClickTargets` on every
+recapture, converted physical→logical via the window's scale
+factor, so a menu opened mid-run becomes clickable and a despawned
+widget is never aimed at), 50% keep the quantized-random window sweep, routed by the
 single position draw's lowest bit so replays stay byte-identical.
 The split is deliberate: targeted clicks exercise declared
 interactables so pointer-driven games look alive, but the random
