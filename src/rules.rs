@@ -52,6 +52,7 @@ impl Rule {
             Self::LogWarn => "Game code logged at warn level; informational by default, escalate with scenario strict_warnings.",
             Self::LogCaptureLost => "Log capture was OFF for this process (another tracing subscriber, typically DefaultPlugins' LogPlugin, installed first): log_error/log_warn findings are under-reported for every run in this process.",
             Self::LogBridgeLost => "The log→tracing bridge could not be installed (another `log` crate logger already set): events emitted through `log` — bevy's B000x hierarchy validators, wgpu/naga, any log-crate user — are invisible to log_error/log_warn for every run in this process.",
+            Self::LogLevelTampered => "The `log` crate's max level was lowered mid-run while the harness bridge owned the logger (a foreign `set_max_level`): log_error/log_warn findings are under-reported for the affected ticks. A one-time lowering is repaired within one tick by the harness's re-assert; a persistent one means game code re-blinds every tick.",
             Self::NodesInBounds => "Entity positions stay inside declared play-space bounds.",
             Self::ComponentCheck => "An authored-intent check: a numeric field on a reflected component must satisfy the declared comparison across the selected entities (always, or eventually within a deadline).",
             Self::FiniteTransforms => "Every entity's Transform holds finite values (no NaN/inf).",
@@ -69,7 +70,7 @@ impl Rule {
     pub fn is_informational(self) -> bool {
         matches!(
             self,
-            Self::LogWarn | Self::LogCaptureLost | Self::LogBridgeLost
+            Self::LogWarn | Self::LogCaptureLost | Self::LogBridgeLost | Self::LogLevelTampered
         )
     }
 }
@@ -82,6 +83,7 @@ declare_rules! {
     LogWarn => "log_warn",
     LogCaptureLost => "log_capture_lost",
     LogBridgeLost => "log_bridge_lost",
+    LogLevelTampered => "log_level_tampered",
     NodesInBounds => "nodes_in_bounds",
     FiniteTransforms => "finite_transforms",
     ComponentCheck => "component_check",

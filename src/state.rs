@@ -107,14 +107,14 @@ pub struct PlaytestReport {
     /// Provenance of the executed scenario: `"file"`, `"builtin_smoke"`, or
     /// `"builtin_battery"` (the zero-config battery literal). Absent for
     /// report stubs that never executed a sourced scenario.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub scenario_source: Option<String>,
     /// Whether log capture was active for the producing process.
     /// `Some(false)` = another tracing subscriber won the write-once
     /// global default (typically DefaultPlugins' LogPlugin), so
     /// log_error/log_warn findings are under-reported. The run also
     /// carries an informational `log_capture_lost` violation.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub log_capture_available: Option<bool>,
     /// Whether the log→tracing bridge (log crate → global tracing
     /// subscriber) was active for the producing process. `Some(false)`

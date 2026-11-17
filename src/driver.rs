@@ -1115,10 +1115,12 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     // Install global tracing subscriber (captures ERROR/WARN logs into the
     // run's violation buffer). The panic hook is installed separately below.
     sinks::ensure_global_subscriber();
-    // Undo any log::set_max_level(Off) applied after the bridge won the
-    // logger slot (game code, test frameworks): max_level is checked at
-    // emission sites, so re-assert BEFORE the first frame runs. The loop
-    // re-asserts per tick to bound mid-run blinding to one tick.
+    // While the bridge owns the `log` logger slot, the max level is
+    // harness-owned state for the run: re-assert it to undo any
+    // foreign log::set_max_level(Off) applied before the run (game
+    // code, test frameworks). max_level is checked at emission sites,
+    // so re-assert BEFORE setup (plugin finishing, census) and the
+    // first frame; the loop re-asserts per tick for mid-run cases.
     sinks::assert_log_bridge_level();
     install_panic_hook();
 
@@ -1391,12 +1393,32 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     let loop_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         for i in 0..total_ticks {
             // Defense against a foreign log::set_max_level(Off): the
-            // bridge's logger is ours, so re-claim the level each tick.
-            // Cost is one atomic-compare-and-set equivalent; blindness
-            // from a mid-run Off is bounded to this loop's remainder.
+            // bridge's logger is ours, so re-claim the level each
+            // tick. Cost is one atomic store. A ONE-TIME Off blinds
+            // at most the remainder of this tick; a persistent
+            // per-tick Off is flagged after app.update() below.
             sinks::assert_log_bridge_level();
             sinks::set_current_frame(i);
             app.update();
+            // Detection half of the defense: a level still lowered
+            // after app.update() means a game system re-blinds every
+            // tick — repaired next tick, but each tick's tail was
+            // silently lost. Refusal over silence: report it; the
+            // count converges to the number of tampered ticks.
+            if sinks::log_level_tampered() == Some(true) {
+                if let Some(mut v) = app.world_mut().get_resource_mut::<RunViolations>() {
+                    v.0.report(
+                        Rule::LogLevelTampered.name(),
+                        "world",
+                        "the `log` max level was lowered mid-run while the harness \
+                         bridge owned the logger (foreign set_max_level): \
+                         log_error/log_warn findings are under-reported for the \
+                         affected tick tails"
+                            .to_string(),
+                        i,
+                    );
+                }
+            }
             #[cfg(feature = "ui-surface")]
             {
                 let click_targets = app
