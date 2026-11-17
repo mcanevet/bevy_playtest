@@ -38,6 +38,7 @@ use bevy_playtest::discovery::flow::{
     discover, discover_from_env, DiscoveryConfig, DiscoveryError, ENV_DISCOVER, ENV_DISCOVER_CACHE,
     ENV_DISCOVER_INJECT, ENV_DISCOVER_KEYS,
 };
+use bevy_playtest::discovery::provenance::ProvenanceGrade;
 use bevy_playtest::discovery::surface::{KeyConfidence, SurfaceConfidence};
 
 fn demo_binary() -> &'static str {
@@ -1070,6 +1071,100 @@ fn mouse_motion_finds_no_effects_on_keyboard_only_game() {
     // Contrast: Digit1 is still effective on the keyboard layer —
     // the inert motion verdict means "no motion input bound", not
     // "dead game".
+    let digit1 = cold
+        .surface
+        .keys
+        .iter()
+        .find(|k| k.key == "Digit1")
+        .expect("Digit1 was probed");
+    assert!(digit1.effect.is_some());
+
+    std::fs::remove_dir_all(&config.cache_dir).unwrap();
+}
+
+/// Positive focus-walk fixture: `takeover_demo_focus` adds
+/// `TabNavigationPlugin` (the opt-in NOT in DefaultPlugins) and
+/// cycles focus across a `TabGroup` of `TabIndex`ed widgets with a
+/// digest-visible marker tracking the focused widget. The walker's
+/// probe (a single scripted `Tab` tap) must diverge from its
+/// control pair (a single control-key tap at the same frame — the
+/// substitution pair differs by exactly one bit, the pressed key)
+/// — discovery reports a `focus_walk` finding with an
+/// observed effect and Exact confidence.
+#[test]
+fn focus_walk_finds_effects_on_tab_navigation_game() {
+    let _slot = common::run_slot();
+    let focus = env!("CARGO_BIN_EXE_takeover_demo_focus");
+    let mut config = DiscoveryConfig::new(focus);
+    // Keyboard candidates: the control key alone — the walker is
+    // the subject; the grid is off to keep the run lean.
+    config.plan.candidate_keys = vec!["KeyQ".into()];
+    config.plan.mouse_grid_cols = 0;
+    config.plan.mouse_grid_rows = 0;
+    config.cache_dir = temp_dir();
+
+    let cold = discover(&config).expect("cold discovery of the focus game");
+    assert!(!cold.from_cache);
+
+    let finding = cold
+        .surface
+        .focus_walk
+        .as_ref()
+        .expect("the walker ran; the surface must carry a focus-walk finding");
+    assert!(
+        finding.effect.is_some(),
+        "the tab-navigation game must diverge from its no-Tab control"
+    );
+    assert_eq!(finding.confidence, KeyConfidence::Exact);
+    assert_eq!(finding.provenance, ProvenanceGrade::ProbeVerified);
+
+    // Deterministic game: all four gates passed, whole surface Exact.
+    assert_eq!(cold.surface.confidence, SurfaceConfidence::Exact);
+
+    // Warm run: identical surface from the cache (the fingerprint
+    // threads focus_walk_enable, so the entry must hit).
+    let warm = discover(&config).expect("warm discovery");
+    assert!(warm.from_cache);
+    assert_eq!(warm.surface, cold.surface, "cached surface is identical");
+
+    std::fs::remove_dir_all(&config.cache_dir).unwrap();
+}
+
+/// Negative focus-walk control: `takeover_demo_input` never adds
+/// `TabNavigationPlugin` (nothing listens to Tab) — the honest-inert
+/// verdict. The probe must read as a TRUSTED inert (Exact,
+/// effect: null): "a Tab press produced no observable change in this
+/// run", which is exactly what this game demonstrates. It does NOT
+/// license the claim "the game has no focus system" — that reading
+/// is forbidden by the finding's own docs.
+#[test]
+fn focus_walk_finds_no_effects_on_keyboard_only_game() {
+    let _slot = common::run_slot();
+    let mut config = DiscoveryConfig::new(demo_binary());
+    config.plan.candidate_keys = vec!["Digit1".into()];
+    config.plan.mouse_grid_cols = 0;
+    config.plan.mouse_grid_rows = 0;
+    config.cache_dir = temp_dir();
+
+    let cold = discover(&config).expect("cold discovery of the keyboard game");
+    assert!(!cold.from_cache);
+
+    let finding = cold
+        .surface
+        .focus_walk
+        .as_ref()
+        .expect("the walker ran; the surface must carry a focus-walk finding");
+    assert!(
+        finding.effect.is_none(),
+        "the keyboard-only game must not react to a Tab press"
+    );
+    // Trusted negative: deterministic game, symmetric coverage.
+    assert_eq!(finding.confidence, KeyConfidence::Exact);
+    assert_eq!(cold.surface.confidence, SurfaceConfidence::Exact);
+
+    // Contrast: Digit1 is still effective on the keyboard layer —
+    // the inert focus-walk verdict means "no observable Tab effect
+    // in this run", not "dead game".
     let digit1 = cold
         .surface
         .keys

@@ -791,6 +791,82 @@ verdict is fail-open coverage, not waste.
 
 **Cost.** +3 jobs per default plan (1 probe + 2 control copies).
 
+## Focus-Walk Probing (Phase 2: Keyboard-Focus Grammar)
+
+The motion probe asks "does MOVEMENT matter"; the focus walker
+asks "does FOCUS CYCLING matter at all": whether a single scripted
+`Tab` press changes observable state. It fills the
+`DiscoveredSurface::focus_walk` field with a real verdict, and —
+like every matrix — the answer is earned by a paired probe, never
+assumed from the static scan.
+
+**One bit, forward-only.** The probe and its control form a
+SUBSTITUTION pair (the keyboard matrix's pattern, not an additive
+stack): each run presses exactly one key at the readiness point's
+frame — the probe a `Tab`, the control the same inert control-key
+tap the keyboard probes use (the scenario schema has no zero-input
+bot). The pair differs by exactly one bit: the pressed key's
+identity. The control runs TWICE (its own determinism
+gate; a diverged pair degrades the surface to `Statistical` with
+a note naming the FOCUS-WALK gate), and the probe is diffed
+against the first copy. Coverage backstops apply verbatim: an
+inert verdict from an asymmetric or short-span pair lands as
+`Unclassified` in the loud note, never as a trusted negative. An
+orphaned walker probe with no control produces no finding and a
+loud note instead of silence.
+
+Forward-only by design, and staying that way for now: bevy's
+tab navigator (0.20.1) decides forward vs. backward by reading
+`ButtonInput<KeyCode>` for the Shift modifiers, and the takeover's
+button state lags its key events by one frame (documented lag in
+the driver) — a scripted Shift+Tab could race its own modifier.
+Plain Tab has no such hazard. Multi-step walking is likewise
+deliberately absent: the differ-by-one-bit doctrine puts each
+extra Tab in its own probe point, not one fat probe (a future
+knob, if the one-Tab verdict ever proves too coarse).
+
+**Why Tab is probed despite being a poison key.** `Tab` (with
+`Escape`) is on the `POISON_KEYS` list: a BLIND chaos bot
+pressing it can close the very scene it is supposed to exercise,
+so it is withheld from injected chaos bots automatically. The
+walker is a different principal — a DIRECTED, PAIRED, OBSERVED
+probe, the sanctioned way to learn what Tab does. And the finding
+never leaks back to the blind bot: the poison filters withhold it
+from `chaos_keys()` by construction, so probing deliberately here
+buys knowledge without handing the chaos bot a loaded key.
+
+**Honest scope of an inert verdict.** An inert `focus_walk`
+verdict means "a Tab press produced no observable state change in
+this run" — NEVER "the game has no focus system". Bevy 0.20.1
+ships `InputFocusPlugin` and `InputDispatchPlugin` in
+`DefaultPlugins`, but the Tab REACTION —
+`TabNavigationPlugin` — is NOT in DefaultPlugins: games add it
+themselves, and only then does a Tab press move focus (and only
+among entities carrying `TabIndex` under a `TabGroup`). A game
+can read inert here and still manage focus perfectly well through
+other channels: pointer clicks set focus with no Tab involved.
+`focus_walk: null` on a pre-walker artifact (or a
+`focus_walk_enable: false` plan) means the walker did not run —
+absence is ordinary, never an error (`#[serde(default)]`
+additive promotion, same pattern as `mouse_motion`).
+
+**The tab navigator's delivery mechanics.** The navigator's
+`handle_tab_navigation` observer reacts to
+`FocusedInput<KeyboardInput>` EVENTS — not `ButtonInput` polling —
+and the takeover's key emission is dual-form (raw
+`KeyboardInput` message plus wrapped window event), so a scripted
+Tab reaches the observer through the same channel a real key
+press does. A demo positive control (`takeover_demo_focus`:
+`TabNavigationPlugin` + a `TabGroup` of `TabIndex`ed widgets with
+a digest-visible marker tracking focus) and the honest-inert
+negative (`takeover_demo_input`: no navigator) pin both sides in
+tests; the fixtures — none of which add `TabNavigationPlugin` —
+will read inert, which is a correct finding, not a harness gap.
+
+**Cost.** +3 jobs per default plan (1 probe + 2 control copies) —
+the walker rides the same per-run subprocess budget as the motion
+matrix.
+
 ## Divergence Detection Algorithm
 
 Using per-frame broad state digests (from `feat/state-digest`, merged at
@@ -993,6 +1069,7 @@ invalidation the cache does not do). Entry shape:
                      "confidence": "Exact",
                      "provenance": "probe_verified"}],
     "mouse_motion": {"effect": null, "confidence": "Exact", "provenance": "probe_verified"},
+    "focus_walk": {"effect": null, "confidence": "Exact", "provenance": "probe_verified"},
     "wheel": null,
     "gamepad_buttons": [],
     "gamepad_axes": [],
@@ -1035,6 +1112,11 @@ pub struct DiscoveredSurface {
                                                  // provenance; #[serde(default)]
                                                  // — pre-motion artifacts had
                                                  // `null` here and still parse)
+    pub focus_walk: Option<FocusWalkFinding>, // focus-walker finding, if probed
+                                             // (same additive-promotion pattern
+                                             // as mouse_motion: #[serde(default)]
+                                             // — pre-walker artifacts parsed with
+                                             // `null` here and stay unchanged)
     pub wheel: Option<Effect>,          // wheel-probe effect, if probed
     pub gamepad_buttons: Vec<KeyFinding>, // same shape as `keys`
     pub gamepad_axes: Vec<(String, Option<Effect>)>, // axis → effect
@@ -1155,13 +1237,15 @@ the shipped 29-key candidate set):
   + 2 mouse control copies (the determinism gate, mouse channel).
 - **Motion matrix:** +3 runs — 1 motion probe + 2 motion control
   copies (the determinism gate, motion channel).
-- **Total:** 87 runs per fixture.
+- **Focus-walk matrix:** +3 runs — 1 walker probe (a scripted `Tab`)
+  + 2 focus-walk control copies (the determinism gate, walker channel).
+- **Total:** 90 runs per fixture.
 
 Wall-clock:
-- Serial: 87 × 5s = 435s (~7.2 min)
-- Pool of 8: ~435s / 8 ≈ 54s
-- Pool of 6: ~435s / 6 ≈ 72s
-- **Total (pool=8):** ~55s per fixture
+- Serial: 90 × 5s = 450s (~7.5 min)
+- Pool of 8: ~450s / 8 ≈ 56s
+- Pool of 6: ~450s / 6 ≈ 75s
+- **Total (pool=8):** ~56s per fixture
 
 At the spike's measured 1.9s/run (rather than the 5s planning figure),
 pool=8 lands near ~21s per fixture — comfortably under a minute.
@@ -1381,9 +1465,10 @@ fixture). They refine the design above.
   in startup/teardown outside simulated time).
 - Shipped matrix (29 keys × 2 probe points, tap only, + 4 per-point
   control runs + 22 mouse jobs (20 cells + 2 mouse control copies) +
-  3 motion jobs (1 probe + 2 control copies) =
-  87 runs): ~165 s sequential at the measured 1.9s/run,
-  ~22 s at pool=8. At the 5s planning figure: ~435s serial, ~54s at
+  3 motion jobs (1 probe + 2 control copies) +
+  3 focus-walk jobs (1 probe + 2 control copies) =
+  90 runs): ~171 s sequential at the measured 1.9s/run,
+  ~22 s at pool=8. At the 5s planning figure: ~450s serial, ~56s at
   pool=8.
 - Even the honest worst case (full 60-key prior set, both tap and hold
   variants, 2 probe points each) stays within a coffee-break budget at

@@ -127,6 +127,18 @@ pub enum ProbeJobKind {
     /// Scheduled TWICE — the pair is the motion matrix's own
     /// determinism gate; the first copy is the motion diff baseline.
     MotionControl { point: ProbePoint },
+    /// Focus-walk probe run: a single scripted `Tab` press at the
+    /// readiness point's frame — the SUBSTITUTION counterpart of
+    /// the focus-walk control's inert control-key tap (the pair
+    /// differs by exactly one bit: the pressed key). Diffed against
+    /// the focus-walk control pair. See
+    /// [`crate::discovery::probe_scenarios::ProbePlan::focus_walk_enable`]
+    /// for the poison-doctrine rationale.
+    FocusWalkProbe { point: ProbePoint },
+    /// Normalized focus-walk control run (control tap, no Tab).
+    /// Scheduled TWICE — the pair is the walker's own determinism
+    /// gate; the first copy is the diff baseline.
+    FocusWalkControl { point: ProbePoint },
 }
 
 /// Outcome of one executed job.
@@ -479,6 +491,40 @@ pub fn build_job_list(plan: &ProbePlan) -> Result<Vec<ProbeJob>, ProbeError> {
             });
         }
     }
+    // Focus-walk matrix, appended AFTER the motion matrix (same
+    // index-stability doctrine). Probe, then the control TWICE (its
+    // own determinism gate; first copy is the walk diff baseline).
+    // A disabled walker (`focus_walk_enable: false`) contributes
+    // nothing. Like motion, the walker is NEVER pruned on scan
+    // data: an inert result is handled by the flow's loud
+    // untrusted-inert ledger, not by skipping runs.
+    if plan.focus_walk_enable {
+        let readiness = plan
+            .points()
+            .map_err(|e| ProbeError::Plan(e.to_string()))?
+            .into_iter()
+            .next()
+            .expect("points() returns [readiness, mid]");
+        jobs.push(ProbeJob {
+            scenario: plan
+                .focus_walk_probe_scenario()
+                .map_err(|e| ProbeError::Plan(e.to_string()))?,
+            kind: ProbeJobKind::FocusWalkProbe { point: readiness },
+            expected_last_frame,
+            export_scan: false,
+        });
+        let control_scenario = plan
+            .focus_walk_control_scenario()
+            .map_err(|e| ProbeError::Plan(e.to_string()))?;
+        for _ in 0..2 {
+            jobs.push(ProbeJob {
+                scenario: control_scenario.clone(),
+                kind: ProbeJobKind::FocusWalkControl { point: readiness },
+                expected_last_frame,
+                export_scan: false,
+            });
+        }
+    }
     Ok(jobs)
 }
 
@@ -705,6 +751,11 @@ fn execute_job(
         // strictly-after coverage gate applies.
         ProbeJobKind::MotionProbe { point } => point.frame,
         ProbeJobKind::MotionControl { point } => point.frame,
+        // Focus-walk jobs tap Tab (or the control key) at the
+        // readiness frame; the same strictly-after coverage gate
+        // applies.
+        ProbeJobKind::FocusWalkProbe { point } => point.frame,
+        ProbeJobKind::FocusWalkControl { point } => point.frame,
     };
     let has_post_tap_coverage = report.state_digest.iter().any(|d| d.frame > point_frame);
     if !has_post_tap_coverage

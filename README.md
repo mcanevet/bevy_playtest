@@ -156,10 +156,13 @@ state-digest traces against control runs. The report then carries a
 `discovered_surface` (effective keys, probed-but-inert keys, per-key
 and whole-surface confidence, plus a bounded grid of mouse click
 positions — `mouse_cells` — reporting where a click moves the game,
-probed the same differential way against a click-only control), and
+probed the same differential way against a click-only control, and
+two whole-surface probes — mouse motion and a single scripted
+`Tab` focus walk — each answering its own "does this input class
+matter at all" question), and
 frozen-world findings gain a
 `_meta` block with the probe statistics ("probed 30 keys, 1
-effective"). The first run costs ~55s (the default matrix adds a
+effective"). The first run costs ~56s (the default matrix adds a
 20-cell mouse grid); the result is cached in
 `.bevy_playtest/cache/` and reused until the binary, harness, or
 scenario changes (the cache key covers the game binary hash, the

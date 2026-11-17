@@ -87,8 +87,8 @@ use super::probe_pool::{
 use super::probe_scenarios::{MouseCell, ProbePlan, ProbePoint};
 use super::provenance::ProvenanceGrade;
 use super::surface::{
-    DiscoveredSurface, KeyConfidence, KeyFinding, MouseCellFinding, MouseMotionFinding,
-    SurfaceConfidence,
+    DiscoveredSurface, FocusWalkFinding, KeyConfidence, KeyFinding, MouseCellFinding,
+    MouseMotionFinding, SurfaceConfidence,
 };
 
 /// Opt-in switch for battery-run discovery (value `"1"`).
@@ -821,6 +821,70 @@ pub fn aggregate(
         }
     }
 
+    // ---- Focus-walk matrix (single-Tab probe) ----
+    // Same doctrine a fourth time: the FIRST FocusWalkControl
+    // outcome is the diff baseline, the SECOND re-checks the
+    // determinism gate. The probe substitutes `Tab` for the
+    // control key (the pair differs by exactly one bit — the
+    // pressed key), so the first divergence IS
+    // the focus-walk effect. Deliberately a SEPARATE gate/note
+    // channel from motion: a diverged walker pair taints only the
+    // walker's inert verdict.
+    let mut focus_walk_finding: Option<(Option<super::diff::Effect>, bool)> = None;
+    let mut focus_walk_gate_diverged_at: Option<u64> = None;
+    let mut focus_walk_orphaned = false;
+    {
+        let mut walk_baseline: Option<(usize, u64)> = None; // (index, point frame)
+        for (idx, outcome) in outcomes.iter().enumerate() {
+            let ProbeJobKind::FocusWalkControl { point } = &outcome.kind else {
+                continue;
+            };
+            match walk_baseline {
+                None => walk_baseline = Some((idx, point.frame)),
+                Some((base_idx, _)) => {
+                    if let Err(divergence) = digest::compare(
+                        &outcomes[base_idx].report.state_digest,
+                        &outcome.report.state_digest,
+                    ) {
+                        if focus_walk_gate_diverged_at.is_none() {
+                            focus_walk_gate_diverged_at = Some(divergence.frame);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some((base_idx, point_frame)) = walk_baseline {
+            let baseline = &outcomes[base_idx].report;
+            for outcome in outcomes {
+                let ProbeJobKind::FocusWalkProbe { point } = &outcome.kind else {
+                    continue;
+                };
+                let _ = point; // the readiness point rode the job; the baseline frame governs the diff
+                let coverage_trusted = !coverage_mismatch(&outcome.report, baseline)
+                    && expected_span_covered(&outcome.report, baseline, expected_last_frame);
+                let effect = diff_trace(
+                    &outcome.report.state_digest,
+                    &baseline.state_digest,
+                    point_frame,
+                );
+                match focus_walk_finding {
+                    None => focus_walk_finding = Some((effect, coverage_trusted)),
+                    Some((slot, _)) if slot.is_none() && !coverage_trusted => {
+                        focus_walk_finding = Some((effect, false))
+                    }
+                    Some(_) => {}
+                }
+            }
+        } else {
+            // No walk baseline: a walker probe without its control
+            // pair supports no verdict. Loud note, not silence —
+            // deferred to the surface's notes below.
+            focus_walk_orphaned = outcomes
+                .iter()
+                .any(|o| matches!(o.kind, ProbeJobKind::FocusWalkProbe { .. }));
+        }
+    }
+
     let mut surface = DiscoveredSurface {
         keys: probes
             .into_iter()
@@ -867,6 +931,24 @@ pub fn aggregate(
                 provenance: ProvenanceGrade::ProbeVerified,
             }
         }),
+        focus_walk: focus_walk_finding.map(|(effect, coverage_trusted)| {
+            if effect.is_none() && !coverage_trusted {
+                // Same coverage-backstop honesty, walker edition: an
+                // inert focus-walk verdict from an asymmetric or
+                // short-span pair is UNTRUSTED, and named in the loud
+                // note.
+                untrusted_inert.push("focus_walk".to_string());
+            }
+            FocusWalkFinding {
+                effect,
+                confidence: if effect.is_none() && !coverage_trusted {
+                    KeyConfidence::Unclassified
+                } else {
+                    KeyConfidence::Exact
+                },
+                provenance: ProvenanceGrade::ProbeVerified,
+            }
+        }),
         mouse_cells: mouse_cells
             .into_iter()
             .map(|(cell, effect, coverage_trusted)| {
@@ -899,6 +981,7 @@ pub fn aggregate(
         confidence: if gate_diverged_at.is_none()
             && mouse_gate_diverged_at.is_none()
             && motion_gate_diverged_at.is_none()
+            && focus_walk_gate_diverged_at.is_none()
         {
             SurfaceConfidence::Exact
         } else {
@@ -934,6 +1017,26 @@ pub fn aggregate(
              control runs diverged — the motion finding is statistical, an \
              inert motion verdict is NOT a trusted negative"
         ));
+    }
+    // Focus-walk determinism gate: same honesty rule, its own
+    // channel — a diverged walker pair taints only the walker's
+    // inert verdict, and the note names the WALKER.
+    if let Some(frame) = focus_walk_gate_diverged_at {
+        surface.notes.push(format!(
+            "focus-walk determinism gate FAILED at frame {frame}: identical \
+             focus-walk control runs diverged — the focus-walk finding is \
+             statistical, an inert focus-walk verdict is NOT a trusted negative"
+        ));
+    }
+    // Focus-walk orphan: a probe without its control pair supports
+    // no verdict; omitted, loudly (mirrors the motion orphan note).
+    if focus_walk_orphaned {
+        surface.notes.push(
+            "unmatched focus-walk probe: probe run has no focus-walk control \
+             baseline — no verdict is possible and it was omitted from the \
+             surface"
+                .to_string(),
+        );
     }
     // Motion orphan: a probe without its control pair supports no
     // verdict; omitted, loudly (mirrors the mouse-cell orphan note).
@@ -2146,5 +2249,199 @@ mod tests {
             .expect("the unmatched-mouse note must be surfaced");
         assert!(note.contains("r0c0"), "note names the cells: {note}");
         assert!(note.contains("r1c3"), "note names the cells: {note}");
+    }
+
+    /// Focus-walk probe outcome for direct-caller aggregation tests
+    /// (the walker's own channels mirror the motion matrix's).
+    fn walk_probe_outcome(point: ProbePoint, trace: &[(u64, u64)]) -> ProbeOutcome {
+        ProbeOutcome {
+            kind: ProbeJobKind::FocusWalkProbe { point },
+            report: report_with_trace(trace),
+            scan: None,
+        }
+    }
+
+    /// Focus-walk control outcome (the doubled determinism pair).
+    fn walk_control_outcome(point: ProbePoint, trace: &[(u64, u64)]) -> ProbeOutcome {
+        ProbeOutcome {
+            kind: ProbeJobKind::FocusWalkControl { point },
+            report: report_with_trace(trace),
+            scan: None,
+        }
+    }
+
+    /// A well-formed walker matrix: probe + doubled control, all
+    /// full-span, all deterministic.
+    fn one_walk_matrix(effectful: bool) -> Vec<ProbeOutcome> {
+        let readiness = point("readiness", 60);
+        let control = flat(180);
+        let mut probe = flat(180);
+        if effectful {
+            probe[71].1 += 1; // one Tab press, visible from frame 71
+        }
+        vec![
+            walk_probe_outcome(readiness, &probe),
+            walk_control_outcome(readiness, &control),
+            walk_control_outcome(readiness, &control),
+        ]
+    }
+
+    #[test]
+    fn focus_walk_divergence_yields_exact_effectful_finding() {
+        // The walker's positive shape: the probe (a single Tab tap)
+        // diverges from its control pair (a single control-key tap
+        // at the same frame — the substitution pair) — the
+        // divergence IS the focus-walk effect, Exact by the
+        // paired-probe doctrine.
+        let surface = aggregate(DEFAULT_CONTROL_KEY, &one_walk_matrix(true), None, None);
+        let finding = surface
+            .focus_walk
+            .as_ref()
+            .expect("the walker ran; the surface must carry a finding");
+        assert!(finding.effect.is_some(), "divergent probe = effect");
+        assert_eq!(finding.confidence, KeyConfidence::Exact);
+        assert_eq!(finding.provenance, ProvenanceGrade::ProbeVerified);
+        // Deterministic matrix: the whole surface stays Exact.
+        assert_eq!(surface.confidence, SurfaceConfidence::Exact);
+    }
+
+    #[test]
+    fn focus_walk_inert_probe_on_trusted_pair_is_exact_negative() {
+        // Honest-inert, trusted flavor: the probe matched the
+        // control across a symmetric full-span pair — a trusted
+        // negative. The finding must say effect: null, Exact.
+        let surface = aggregate(DEFAULT_CONTROL_KEY, &one_walk_matrix(false), None, None);
+        let finding = surface
+            .focus_walk
+            .as_ref()
+            .expect("the walker ran; the surface must carry a finding");
+        assert!(
+            finding.effect.is_none(),
+            "an inert probe is effect: null, NEVER a silent omission"
+        );
+        assert_eq!(finding.confidence, KeyConfidence::Exact);
+        assert_eq!(surface.confidence, SurfaceConfidence::Exact);
+        // No untrusted-inert ledger entries: nothing was truncated.
+        assert!(
+            !surface.notes.iter().any(|n| n.contains("coverage caveat")),
+            "a full-span inert pair is trusted: {:?}",
+            surface.notes
+        );
+    }
+
+    #[test]
+    fn focus_walk_short_probe_trace_is_untrusted_inert() {
+        // Coverage-backstop honesty, walker edition: the probe trace
+        // stopped early, so its "inert" verdict observed fewer
+        // frames than the run should have recorded. The finding
+        // must degrade to Unclassified and the ledger must NAME the
+        // walker in the coverage caveat (real pipelines never emit
+        // this — the pool refuses incomplete reports — but direct
+        // callers must not silently inherit a trusted negative).
+        let readiness = point("readiness", 60);
+        let control = flat(180);
+        let outcomes = vec![
+            walk_probe_outcome(readiness, &control[..100]), // stops at frame 99
+            walk_control_outcome(readiness, &control),
+            walk_control_outcome(readiness, &control),
+        ];
+        let surface = aggregate(DEFAULT_CONTROL_KEY, &outcomes, None, None);
+        let finding = surface
+            .focus_walk
+            .as_ref()
+            .expect("the walker ran; the surface must carry a finding");
+        assert!(finding.effect.is_none());
+        assert_eq!(
+            finding.confidence,
+            KeyConfidence::Unclassified,
+            "an inert verdict from a truncated pair is UNTRUSTED"
+        );
+        let caveat = surface
+            .notes
+            .iter()
+            .find(|n| n.contains("coverage caveat"))
+            .expect("the coverage caveat must be surfaced");
+        assert!(
+            caveat.contains("focus_walk"),
+            "the caveat must name the walker, got: {caveat}"
+        );
+    }
+
+    #[test]
+    fn focus_walk_control_divergence_flags_statistical_with_walker_named_note() {
+        // The walker's own determinism gate: the doubled control
+        // pair diverging degrades the WHOLE surface to Statistical
+        // and the note names the WALKER channel — separate from
+        // the motion gate, so a flaky walker pair cannot hide
+        // inside a motion note and vice versa.
+        let readiness = point("readiness", 60);
+        let control = flat(180);
+        let mut control_b = flat(180);
+        control_b[90].1 += 5;
+        let mut probe = flat(180);
+        probe[71].1 += 1;
+        let outcomes = vec![
+            walk_probe_outcome(readiness, &probe),
+            walk_control_outcome(readiness, &control),
+            walk_control_outcome(readiness, &control_b), // gate FAILS
+        ];
+        let surface = aggregate(DEFAULT_CONTROL_KEY, &outcomes, None, None);
+        assert_eq!(surface.confidence, SurfaceConfidence::Statistical);
+        let note = surface
+            .notes
+            .iter()
+            .find(|n| n.contains("focus-walk determinism gate FAILED"))
+            .expect("the walker gate failure must be surfaced");
+        assert!(note.contains("frame 90"), "note carries the frame: {note}");
+        // The effect is still reported, just untrusted-grade.
+        let finding = surface.focus_walk.as_ref().expect("finding present");
+        assert!(finding.effect.is_some());
+    }
+
+    #[test]
+    fn unmatched_focus_walk_probe_is_omitted_loudly() {
+        // Direct-caller backstop, walker edition: a walker probe
+        // with NO control pair anywhere supports no verdict and must
+        // not enter the surface silently — the loud note mirrors the
+        // motion orphan rule.
+        let readiness = point("readiness", 60);
+        let outcomes = vec![
+            walk_probe_outcome(readiness, &flat(180)),
+            // Keyboard half stays well-formed.
+            control_outcome(readiness, &flat(180)),
+            control_outcome(readiness, &flat(180)),
+        ];
+        let surface = aggregate(DEFAULT_CONTROL_KEY, &outcomes, None, None);
+        assert!(
+            surface.focus_walk.is_none(),
+            "a baseline-less walk must not yield a finding: {:?}",
+            surface.focus_walk
+        );
+        assert!(
+            surface
+                .notes
+                .iter()
+                .any(|n| n.contains("unmatched focus-walk probe")),
+            "the orphan note must be surfaced: {:?}",
+            surface.notes
+        );
+    }
+
+    #[test]
+    fn no_focus_walk_jobs_leave_the_field_absent() {
+        // A well-formed matrix without walker jobs (the knob off,
+        // or pre-walker artifacts) reads focus_walk: null — additive
+        // promotion means absence is ordinary, never an error.
+        let surface = aggregate(DEFAULT_CONTROL_KEY, &one_point_matrix(), None, None);
+        assert!(surface.focus_walk.is_none());
+        // And the absence carries no notes — quiet, not flagged.
+        assert!(
+            !surface
+                .notes
+                .iter()
+                .any(|n| n.contains("focus-walk") || n.contains("focus_walk")),
+            "an absent walker must not produce notes: {:?}",
+            surface.notes
+        );
     }
 }
