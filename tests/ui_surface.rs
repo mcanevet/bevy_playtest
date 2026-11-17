@@ -415,4 +415,145 @@ mod bot_seam {
             .as_ref()
             .expect("widget entity recorded at spawn")
     }
+
+    #[derive(Resource, Default, Debug)]
+    struct MidRunPanel {
+        spawned_at: Option<u64>,
+        clicks: u32,
+        entity: Option<Entity>,
+    }
+
+    /// Spawns a small Pickable panel N frames into the run — the
+    /// exact surface class the old one-shot capture missed (menus,
+    /// dialogs). The periodic recapture must observe it, report the
+    /// delta, and make it clickable. Driven as an exclusive-world
+    /// system; the frame counter (driver::RunState) advances at the
+    /// END of each driver-loop tick, so the panel appears strictly
+    /// between the tick-30 and tick-60 recapture boundaries
+    /// (interval = tps/2 = 30 at 60 tps).
+    fn spawn_panel_mid_run(world: &mut World) {
+        if world
+            .get_resource::<MidRunPanel>()
+            .is_some_and(|p| p.spawned_at.is_some())
+        {
+            return;
+        }
+        let Some(frame) = world
+            .get_resource::<bevy_playtest::driver::RunState>()
+            .map(|s| s.frame)
+        else {
+            return;
+        };
+        if frame >= 45 {
+            let entity = world
+                .spawn((
+                    Node {
+                        width: Val::Px(200.),
+                        height: Val::Px(100.),
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(300.),
+                        top: Val::Px(300.),
+                        ..default()
+                    },
+                    bevy_picking::Pickable::default(),
+                    Visibility::Visible,
+                ))
+                .id();
+            let mut probe = world
+                .get_resource_mut::<MidRunPanel>()
+                .expect("MidRunPanel resource inserted");
+            probe.entity = Some(entity);
+            probe.spawned_at = Some(frame);
+        }
+    }
+
+    #[test]
+    fn mid_run_panel_joins_surface_and_becomes_clickable() {
+        let _slot = common::run_slot();
+        // Chaos mouse only, dense rate: the panel is up from ~0.75s
+        // onward, giving the recaptured click-targets ~2.25s (≈45
+        // inputs, ≈22 targeted at the CURRENT centers) to demonstrate
+        // they actually update.
+        let scenario: Scenario = serde_json::from_str(
+            r#"{"name":"ui-midrun","bot":{"type":"chaos","seed":42,"raw_surface":{"keys":[],"mouse_buttons":["Left"]},"input_rate_hz":20},"duration_s":3.0,"tps":60,"invariants":[]}"#,
+        )
+        .expect("scenario parses");
+
+        let mut app = App::new();
+        app.add_plugins(
+            bevy::DefaultPlugins
+                .build()
+                .disable::<bevy_winit::WinitPlugin>(),
+        );
+        app.insert_resource(MidRunPanel::default());
+        app.add_systems(Startup, |mut commands: Commands| {
+            commands.spawn(Camera2d);
+            commands.spawn(Transform::from_xyz(0.0, 0.0, 0.0));
+        });
+        // Keep the world alive so frozen_world cannot mask the probe
+        // assertions (we assert on the probe, not the verdict).
+        app.add_systems(Update, |mut q: Query<&mut Transform>| {
+            for mut t in q.iter_mut() {
+                t.translation.x += 0.05;
+            }
+        });
+        // The panel appears mid-run (an exclusive-world system so it
+        // can stamp the probe resource atomically).
+        app.add_systems(Update, spawn_panel_mid_run);
+        // Count clicks ON the panel specifically.
+        app.add_observer(
+            |trigger: On<bevy_picking::events::PointerClick>, mut probe: ResMut<MidRunPanel>| {
+                if Some(trigger.entity) == probe.entity {
+                    probe.clicks += 1;
+                }
+            },
+        );
+
+        let report = run_scenario(&mut app, &scenario).expect("run completes");
+
+        let panel = app.world().resource::<MidRunPanel>();
+        let spawned_at = panel.spawned_at.expect("panel must have spawned mid-run");
+        assert!(
+            spawned_at >= 45,
+            "the panel is the mid-run spawn, not an early one"
+        );
+        let panel_entity = panel.entity.expect("panel entity recorded");
+
+        // 1. The panel JOINS the reported surface (the latest
+        //    snapshot, not the tick-0 one).
+        let ui_surface = report.ui_surface.as_ref().expect("ui_surface captured");
+        assert!(
+            ui_surface
+                .interactables
+                .iter()
+                .any(|i| i.entity == panel_entity),
+            "mid-run panel must be enumerated by the periodic recapture: {:?}",
+            ui_surface.interactables
+        );
+
+        // 2. The delta is REPORTED (refusal over silence).
+        assert!(
+            ui_surface
+                .notes
+                .iter()
+                .any(|n| n.contains(&format!("added interactables {}", panel_entity.index()))),
+            "the panel's arrival must be recorded as a delta note: {:?}",
+            ui_surface.notes
+        );
+
+        // 3. The recaptured click-targets actually drive clicks to
+        //    the panel. The old one-shot capture could never aim at
+        //    it (the panel did not exist at tick 0), and the random
+        //    half alone (~2% hit rate on a 200x100 widget) cannot
+        //    reach floor 3 across the ~45 post-spawn inputs.
+        let clicks = panel.clicks;
+        assert!(
+            clicks >= 3,
+            "chaos mouse delivered {} clicks to the mid-run panel across {} \
+             total inputs — the recaptured UiClickTargets are not steering \
+             clicks to it",
+            clicks,
+            report.metrics.input_count
+        );
+    }
 }

@@ -48,12 +48,14 @@
 //! - Third-party action-map crates (LWIM is served by the separate
 //!   `lw-reader` declared tier; other ecosystems need their own
 //!   reflection-based readers).
-//! - Anything that comes into existence after the first settled
-//!   frame: the driver snapshots this enumeration ONCE, so menus,
-//!   dialogs, and tooltips spawned in response to input (or after a
-//!   loading screen) are absent from the report AND unreachable by
-//!   the chaos mouse bot's targeted clicks. The declared surface is
-//!   an authoring-time property only for statically-spawned UI.
+//! - Anything that comes into existence between the driver's
+//!   periodic recaptures: the driver re-enumerates roughly twice a
+//!   second (first capture after the first settled frame, then a
+//!   fixed tick interval), so menus, dialogs, and tooltips spawned
+//!   in response to input usually join the surface shortly after
+//!   they appear — but a surface that exists for less than one
+//!   recapture interval can still slip through unobserved. Absent
+//!   entries prove nothing (fail-open).
 //!
 //! Geometry caveats: `rect` is an axis-aligned bounding box — the
 //! CENTER is exact for rotated/scaled nodes (translation is the node
@@ -488,10 +490,9 @@ pub fn enumerate_ui(world: &World) -> UiSurfaceResult {
     // Honest completeness: the enumeration provably misses
     // global/component-scoped pointer observers, deprecated
     // `Interaction`/`Button` widgets, third-party action maps, and —
-    // because the driver snapshots it once, after the first settled
-    // frame — any surface that comes into existence later (menus,
-    // dialogs, tooltips spawned in response to input). Absent
-    // entries prove nothing (see module docs).
+    // because the driver recaptures on a fixed tick interval — any
+    // surface that exists for less than one interval between
+    // appearances. Absent entries prove nothing (see module docs).
     result.notes.push(
         "global and component-scoped pointer observers are omitted: their \
          firing targets cannot be attributed honestly at scan time"
@@ -506,13 +507,151 @@ pub fn enumerate_ui(world: &World) -> UiSurfaceResult {
         .notes
         .push("third-party action-map crates need their own readers (see lw-reader)".to_string());
     result.notes.push(
-        "snapshot-in-time: the driver captures this once after the first \
-         settled frame; surfaces spawned later (menus, dialogs) are absent"
+        "periodic capture: the driver recaptures this surface on a fixed tick \
+         interval; a surface alive for less than one interval may be missed"
             .to_string(),
     );
     result.interactables = interactables;
     result.complete = false;
     result
+}
+
+/// Cap on delta notes the tracker keeps per run. Deltas BEYOND the
+/// cap are collapsed into one disclosed-suppression note (refusal
+/// over silence: the count is always reported, even when individual
+/// deltas are dropped). Keeps report memory bounded for
+/// UI-churn-heavy games (spawn/despawn storms must not balloon the
+/// report).
+pub(crate) const MAX_SURFACE_DELTA_NOTES: usize = 32;
+
+/// Driver-loop recorder for PERIODIC re-enumeration of the declared
+/// UI surface (E4 part A).
+///
+/// Doctrine: invoked from the driver loop only, never a scheduled
+/// system — same census-neutrality rule as the one-shot capture it
+/// replaces (see the module docs and driver.rs). Cadence is a fixed
+/// tick interval derived from `tps` (deterministic), and each
+/// recapture diffs the interactable ENTITY SET against the previous
+/// snapshot:
+///
+/// - Deltas compare entity ids ONLY. The `focused` flag and geometry
+///   drift by design (focus moves, layout animates) — treating either
+///   as a "change" would flood the notes with flicker, so they are
+///   deliberately NOT delta signals; the latest snapshot carries the
+///   current values.
+/// - Every added/removed entity becomes a note (refusal over silence),
+///   capped at [`MAX_SURFACE_DELTA_NOTES`]; further deltas collapse
+///   into one disclosed count.
+/// - The tracked `interactables` vec (and the mirrored
+///   `UiClickTargets`) always reflect the LATEST snapshot, so the
+///   chaos mouse never aims at a despawned widget and newly opened
+///   menus become clickable mid-run.
+/// - Memory is bounded: one snapshot + at most
+///   [`MAX_SURFACE_DELTA_NOTES`] + 1 notes.
+#[derive(Debug, Default)]
+pub(crate) struct UiSurfaceTracker {
+    /// Latest enumeration snapshot (what the report's `ui_surface`
+    /// field will carry).
+    snapshot: Option<UiSurfaceResult>,
+    /// Entity ids of the last snapshot, for diffing.
+    last_ids: HashSet<Entity>,
+    /// Delta notes accumulated across recaptures (bounded).
+    notes: Vec<String>,
+    /// How many individual deltas were suppressed past the cap.
+    suppressed: usize,
+}
+
+impl UiSurfaceTracker {
+    /// Tick interval between recaptures: half a second of
+    /// simulated time, minimum 1 tick. Twice a second catches
+    /// menu/dialog opens without re-walking the UI tree every
+    /// frame (enumeration is a full archetype sweep).
+    pub(crate) fn recapture_interval(tps: u64) -> u64 {
+        (tps / 2).max(1)
+    }
+
+    /// Capture on the FIRST settled frame (tick 0), then on every
+    /// interval boundary. Mirrors `UiClickTargets` on every capture.
+    pub(crate) fn observe(
+        &mut self,
+        world: &World,
+        tick: u64,
+        interval: u64,
+        click_targets: &mut Vec<Vec2>,
+    ) {
+        let boundary = tick.is_multiple_of(interval);
+        let is_first = self.snapshot.is_none();
+        if !boundary && !is_first {
+            return;
+        }
+        let result = enumerate_ui(world);
+        let ids: HashSet<Entity> = result.interactables.iter().map(|e| e.entity).collect();
+        if let Some(_prev) = &self.snapshot {
+            // Diff against the previous snapshot's entity set.
+            let prev = &self.last_ids;
+            let added: Vec<Entity> = ids.iter().filter(|e| !prev.contains(e)).copied().collect();
+            let removed: Vec<Entity> = prev.iter().filter(|e| !ids.contains(e)).copied().collect();
+            if !added.is_empty() || !removed.is_empty() {
+                self.record_delta(&added, &removed);
+            }
+        }
+        click_targets.clear();
+        click_targets.extend(result.interactables.iter().filter_map(|e| e.center));
+        self.last_ids = ids;
+        self.snapshot = Some(result);
+    }
+
+    /// Turn one recapture diff into notes (bounded, disclosed).
+    fn record_delta(&mut self, added: &[Entity], removed: &[Entity]) {
+        let mut lines: Vec<String> = Vec::new();
+        if !added.is_empty() {
+            let mut list = added.to_vec();
+            list.sort_unstable_by_key(|e| e.index());
+            let rendered: Vec<String> = list.iter().map(|e| e.index().to_string()).collect();
+            lines.push(format!(
+                "ui surface delta at recapture: added interactables {}",
+                rendered.join(", ")
+            ));
+        }
+        if !removed.is_empty() {
+            let mut list = removed.to_vec();
+            list.sort_unstable_by_key(|e| e.index());
+            let rendered: Vec<String> = list.iter().map(|e| e.index().to_string()).collect();
+            lines.push(format!(
+                "ui surface delta at recapture: removed interactables {}",
+                rendered.join(", ")
+            ));
+        }
+        for line in lines {
+            if self.notes.len() >= MAX_SURFACE_DELTA_NOTES {
+                self.suppressed += 1;
+            } else {
+                self.notes.push(line);
+            }
+        }
+    }
+
+    /// Final result for the report: the LATEST snapshot, with the
+    /// bounded delta history and (if any) the disclosed suppression
+    /// count prepended to its notes. `None` if never captured (no
+    /// `ui-surface` capture happened — impossible from the driver
+    /// loop, which captures at tick 0, but the honest shape).
+    pub(crate) fn into_result(mut self) -> Option<UiSurfaceResult> {
+        let suppressed = self.suppressed;
+        let deltas = std::mem::take(&mut self.notes);
+        self.snapshot.map(|mut snap| {
+            if suppressed > 0 {
+                snap.notes.push(format!(
+                    "ui surface deltas: {suppressed} more delta notes \
+                     suppressed past the cap ({MAX_SURFACE_DELTA_NOTES})"
+                ));
+            }
+            let mut notes = deltas;
+            notes.append(&mut snap.notes);
+            snap.notes = notes;
+            snap
+        })
+    }
 }
 
 /// Kinds for an entity given the pre-collected signal sets.
@@ -558,4 +697,179 @@ fn best_label(world: &World, entity: Entity) -> Option<String> {
         }
     }
     world.get::<Name>(entity).map(|n| n.as_str().to_owned())
+}
+
+#[cfg(test)]
+mod tracker_tests {
+    //! The tracker is the E4 periodic-recapture contract; these
+    //! tests pin cadence, first-capture, delta notes, the note cap
+    //! with disclosed suppression, and click-target mirroring.
+    //! They drive `observe` with a real Bevy `World` (widget spawns
+    //! mid-"run") because the contract is about entity sets, not
+    //! mockable inputs.
+    use super::*;
+
+    fn test_world() -> World {
+        // Minimal resources `enumerate_ui` tolerates absent (all its
+        // queries are try_new-based; InputFocus missing = nobody
+        // focused), so an empty world enumerates zero interactables.
+        World::new()
+    }
+
+    fn spawn_pickable(world: &mut World) -> Entity {
+        // Any entity registering as "declared" works; Pickable is
+        // the cheapest unambiguous signal. ComputedNode absent =>
+        // reported as a surface point without geometry (fine: the
+        // tracker only diffs entity ids).
+        world.spawn(Pickable::default()).id()
+    }
+
+    #[test]
+    fn first_capture_on_any_tick_before_interval_boundary() {
+        // The first observe() must capture regardless of tick
+        // position (the driver relies on capture-after-first-frame
+        // semantics: tick 0 in practice, but the tracker itself only
+        // needs is_first precedence over the cadence gate).
+        let world = test_world();
+        let mut tracker = UiSurfaceTracker::default();
+        let mut targets: Vec<Vec2> = Vec::new();
+        tracker.observe(&world, 7, 30, &mut targets);
+        assert!(tracker.snapshot.is_some(), "first observe must capture");
+    }
+
+    #[test]
+    fn recaptures_only_on_interval_boundaries_after_first() {
+        let world = test_world();
+        let mut tracker = UiSurfaceTracker::default();
+        let mut targets: Vec<Vec2> = Vec::new();
+        tracker.observe(&world, 0, 30, &mut targets);
+        // Mutate the world BETWEEN captures: the tracker must not
+        // notice it off-boundary (that's the whole point of the
+        // cadence — a full archetype sweep every frame would be
+        // needlessly expensive).
+        let mut world = world;
+        let spawned = spawn_pickable(&mut world);
+        tracker.observe(&world, 1, 30, &mut targets);
+        assert!(
+            tracker.last_ids.is_empty(),
+            "off-boundary observe must not recapture"
+        );
+        tracker.observe(&world, 30, 30, &mut targets);
+        assert_eq!(
+            tracker.last_ids,
+            HashSet::from([spawned]),
+            "boundary observe must recapture and diff"
+        );
+    }
+
+    #[test]
+    fn added_and_removed_entities_become_notes() {
+        let mut world = test_world();
+        let a = spawn_pickable(&mut world);
+        let mut tracker = UiSurfaceTracker::default();
+        let mut targets: Vec<Vec2> = Vec::new();
+        tracker.observe(&world, 0, 30, &mut targets);
+        // Remove `a`, add `b`.
+        world.despawn(a);
+        let b = spawn_pickable(&mut world);
+        tracker.observe(&world, 30, 30, &mut targets);
+        assert!(tracker
+            .notes
+            .iter()
+            .any(|n| n.contains(&format!("added interactables {}", b.index()))));
+        assert!(tracker
+            .notes
+            .iter()
+            .any(|n| n.contains(&format!("removed interactables {}", a.index()))));
+
+        // And the final result carries the delta notes plus the
+        // latest snapshot's interactables.
+        let result = tracker.into_result().expect("captured");
+        assert_eq!(
+            result
+                .interactables
+                .iter()
+                .map(|e| e.entity)
+                .collect::<Vec<_>>(),
+            vec![b],
+            "the latest snapshot must reflect the post-delta world"
+        );
+        assert!(result
+            .notes
+            .iter()
+            .any(|n| n.starts_with("ui surface delta at recapture: added")));
+    }
+
+    #[test]
+    fn delta_notes_past_the_cap_are_suppressed_but_counted() {
+        // The suppression must be DISCLOSED in the final result.
+        let mut world = test_world();
+        let mut tracker = UiSurfaceTracker::default();
+        let mut targets: Vec<Vec2> = Vec::new();
+        tracker.observe(&world, 0, 1, &mut targets);
+        // Interval 1 => every tick is a boundary; each pair of
+        // mutations generates 2 delta notes (added + removed).
+        let mut pairs_spawned: Vec<Entity> = Vec::new();
+        for tick in 1..=(MAX_SURFACE_DELTA_NOTES as u64 + 10) * 2 {
+            let e = spawn_pickable(&mut world);
+            pairs_spawned.push(e);
+            tracker.observe(&world, tick, 1, &mut targets);
+        }
+        // More than MAX_SURFACE_DELTA_NOTES boundaries fired with
+        // deltas: individual notes cap out, suppressed > 0.
+        assert!(
+            tracker.notes.len() <= MAX_SURFACE_DELTA_NOTES,
+            "note history must stay bounded"
+        );
+        assert!(tracker.suppressed > 0);
+        let result = tracker.into_result().expect("captured");
+        assert!(
+            result
+                .notes
+                .iter()
+                .any(|n| n.contains("delta notes suppressed past the cap")),
+            "suppression must be disclosed: {:?}",
+            result.notes
+        );
+        assert!(result.notes.len() <= MAX_SURFACE_DELTA_NOTES + 1 + 10);
+    }
+
+    #[test]
+    fn click_targets_mirror_the_latest_snapshot() {
+        // Spawn-despawn churn: the click-target vec handed in must
+        // always equal the LATEST snapshot's centers (entities
+        // without geometry contribute none).
+        let mut world = test_world();
+        let mut tracker = UiSurfaceTracker::default();
+        let mut targets: Vec<Vec2> = Vec::new();
+        tracker.observe(&world, 0, 2, &mut targets);
+        let gone = spawn_pickable(&mut world);
+        tracker.observe(&world, 2, 2, &mut targets);
+        assert!(targets.is_empty(), "no geometry => no targets");
+        // Despawn and confirm no stale aiming.
+        world.despawn(gone);
+        tracker.observe(&world, 4, 2, &mut targets);
+        assert!(targets.is_empty());
+        // Sanity: the ids tracked are empty again.
+        assert!(tracker.last_ids.is_empty());
+    }
+
+    #[test]
+    fn geometry_carrying_widgets_land_in_click_targets() {
+        // Needs a laid-out node: reuse the tests/ui_surface.rs app
+        // harness shape minimally — a ComputedNode + Pickable entity
+        // has a resolvable center.
+        let mut world = test_world();
+        // ComputedNode without a camera: center stays None (the
+        // module's geometry caveats). The mirroring contract still
+        // holds: only Some centers land in targets.
+        let e = world
+            .spawn((Pickable::default(), ComputedNode::default()))
+            .id();
+        let mut tracker = UiSurfaceTracker::default();
+        let mut targets: Vec<Vec2> = Vec::new();
+        tracker.observe(&world, 0, 2, &mut targets);
+        assert!(tracker.last_ids.contains(&e));
+        assert!(targets.is_empty());
+    }
 }

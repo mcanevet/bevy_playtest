@@ -1279,36 +1279,44 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     // Declared UI surface capture (`ui-surface`). Same recorder
     // doctrine as the lw capture above: invoked from the driver loop,
     // never a scheduled system — it must not appear in the game's
-    // schedule or the static scan's reader census. Captured ONCE,
-    // after the first settled frame (layout-dependent surfaces need
-    // one `app.update()` so ComputedNode/UiStack exist), and held
-    // for the whole run: statically-spawned UI declares its surface
-    // at authoring time, and re-snapshotting every frame would make
-    // the report's target list drift against the bot's fixed capture.
-    // The honest cost — surfaces spawned mid-run (menus, dialogs)
-    // are absent — is recorded as a snapshot-in-time note on the
-    // result (see ui_surface's module docs). The captured result
-    // rides the report; the widget centers are ALSO mirrored into
-    // UiClickTargets for the chaos mouse bot's 50/50 targeting
-    // interleave.
+    // schedule or the static scan's reader census. FIRST capture on
+    // the first settled frame (layout-dependent surfaces need one
+    // `app.update()` so ComputedNode/UiStack exist), then RE-CAPTURED
+    // periodically (`UiSurfaceTracker::recapture_interval`, ~twice a
+    // second) so surfaces spawned mid-run (menus, dialogs, tooltips)
+    // join the surface and the chaos mouse's `UiClickTargets` — the
+    // snapshot-in-time blind spot this replaces. Each recapture's
+    // entity-set deltas are recorded as notes (refusal over silence,
+    // bounded — see UiSurfaceTracker).
     #[cfg(feature = "ui-surface")]
-    let mut ui_surface: Option<crate::discovery::ui_surface::UiSurfaceResult> = None;
+    let mut ui_surface_tracker = crate::discovery::ui_surface::UiSurfaceTracker::default();
+    #[cfg(feature = "ui-surface")]
+    let ui_recapture_interval =
+        crate::discovery::ui_surface::UiSurfaceTracker::recapture_interval(tps);
 
     let loop_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         for i in 0..total_ticks {
             sinks::set_current_frame(i);
             app.update();
             #[cfg(feature = "ui-surface")]
-            if ui_surface.is_none() {
-                let result = crate::discovery::ui_surface::enumerate_ui(app.world());
+            {
+                let click_targets = app
+                    .world_mut()
+                    .get_resource_mut::<UiClickTargets>()
+                    .map(|mut res| std::mem::take(&mut res.centers))
+                    .unwrap_or_default();
+                // Borrow juggling: `enumerate_ui` takes `&World`, so
+                // the click-targets vec is taken out of the resource,
+                // filled, and put back.
+                let filled = {
+                    let world = app.world();
+                    let mut targets_taken = click_targets;
+                    ui_surface_tracker.observe(world, i, ui_recapture_interval, &mut targets_taken);
+                    targets_taken
+                };
                 if let Some(mut res) = app.world_mut().get_resource_mut::<UiClickTargets>() {
-                    res.centers = result
-                        .interactables
-                        .iter()
-                        .filter_map(|entry| entry.center)
-                        .collect();
+                    res.centers = filled;
                 }
-                ui_surface = Some(result);
             }
             // Guaranteed end-of-frame recording (see comment above): after
             // ALL schedules (incl. the game's own `Last` systems) ran.
@@ -1601,7 +1609,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         },
         capability_census: Some(capability_census),
         #[cfg(feature = "ui-surface")]
-        ui_surface,
+        ui_surface: ui_surface_tracker.into_result(),
     })
 }
 

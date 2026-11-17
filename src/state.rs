@@ -208,8 +208,11 @@ pub struct PlaytestReport {
     /// never "empty census".
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub capability_census: Option<crate::discovery::census::CapabilityCensus>,
-    /// Declared UI/interactable surface enumerated once after the
-    /// first simulated frame (`ui-surface` feature; `None` when the
+    /// Declared UI/interactable surface: captured after the first
+    /// simulated frame and RE-CAPTURED periodically (fixed tick
+    /// interval, ~twice a second) so mid-run surfaces (menus,
+    /// dialogs) join it; the field carries the LATEST snapshot plus
+    /// bounded delta notes (`ui-surface` feature; `None` when the
     /// feature is off or the run ended before capture). Same
     /// additive-honesty contract as
     /// [`Self::capability_census`]: absence never means "no UI".
