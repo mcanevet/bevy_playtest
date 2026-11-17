@@ -267,7 +267,7 @@ mod ui_tests {
     // Honesty doctrine: enumeration is deliberately incomplete (global
     // and component-scoped pointer observers, deprecated
     // Interaction/Button, third-party action maps, and anything
-    // spawned after the capture-time snapshot), so the result must
+    // alive for less than one recapture interval), so the result must
     // SAY so — `complete: false` with the corresponding notes.
     #[test]
     fn result_admits_omissions() {
@@ -288,7 +288,7 @@ mod ui_tests {
 }
 
 // Bot-seam coverage: the enumerated widget centers must actually be
-// CLICKABLE through the full driver pipeline — capture-once →
+// CLICKABLE through the full driver pipeline — periodic capture →
 // UiClickTargets → chaos mouse interleave → wrapped WindowEvent →
 // picking's hit test → the widget's own entity. A center in the
 // report that picking refuses to target would make the entire
@@ -536,7 +536,7 @@ mod bot_seam {
             ui_surface
                 .notes
                 .iter()
-                .any(|n| n.contains(&format!("added interactables {}", panel_entity.index()))),
+                .any(|n| n.contains(&format!("added interactables {panel_entity}"))),
             "the panel's arrival must be recorded as a delta note: {:?}",
             ui_surface.notes
         );

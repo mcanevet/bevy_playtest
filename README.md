@@ -196,8 +196,9 @@ dialogs opened mid-run join the surface, with geometry matching
 `bevy_ui`'s own picking backend. The latest snapshot rides the
 playtest report as `ui_surface` (entity-set deltas along the way are
 reported as notes), and the chaos mouse bot interleaves: half its
-clicks target the CURRENT widget centers (pointer-driven games get
-exercised, never stale positions), half keep sweeping the whole
+clicks target the widget centers from the latest recapture
+(pointer-driven games get exercised; centers lag the world by at
+most one recapture interval, ~0.5s), half keep sweeping the whole
 window (undeclared regions stay probed).
 
 With no flags at all, the battery parent runs a milliseconds-cost

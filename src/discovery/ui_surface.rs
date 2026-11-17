@@ -2,10 +2,14 @@
 //!
 //! A pure `fn(&World)` walk — never a registered system — so it
 //! stays invisible to `static_scan`'s reader census and the state
-//! digest. The driver captures it once after the first frame (see
-//! `driver.rs`) and attaches it to the playtest report as
-//! `ui_surface`; the chaos mouse bot additionally uses enumerated
-//! widget centers as click targets on half its draws.
+//! digest. The driver captures it after the first settled frame and
+//! RE-CAPTURES it periodically (`UiSurfaceTracker`, a fixed tick
+//! interval ~twice a second — see `driver.rs`); the report carries
+//! the LATEST snapshot plus bounded delta notes as `ui_surface`,
+//! and the chaos mouse bot additionally uses the current snapshot's
+//! widget centers as click targets on half its draws — refreshed
+//! on every recapture, so it lags the world by at most one
+//! interval.
 //!
 //! Sources of declaration, all unions (an entity may be declared
 //! interactable by several independent signals):
@@ -511,6 +515,12 @@ pub fn enumerate_ui(world: &World) -> UiSurfaceResult {
          interval; a surface alive for less than one interval may be missed"
             .to_string(),
     );
+    result.notes.push(
+        "aim freshness: the chaos mouse targets centers from the latest \
+         recapture, so between recaptures it can briefly aim at a moved or \
+         despawned widget's old position"
+            .to_string(),
+    );
     result.interactables = interactables;
     result.complete = false;
     result
@@ -544,8 +554,11 @@ pub(crate) const MAX_SURFACE_DELTA_NOTES: usize = 32;
 ///   into one disclosed count.
 /// - The tracked `interactables` vec (and the mirrored
 ///   `UiClickTargets`) always reflect the LATEST snapshot, so the
-///   chaos mouse never aims at a despawned widget and newly opened
-///   menus become clickable mid-run.
+///   chaos mouse aims at most one recapture interval behind the
+///   world: newly opened menus join its targets on the next
+///   recapture, and a despawned widget's old position can be aimed
+///   at briefly in between. Freshness is eventual, not instant —
+///   and that lag is disclosed (see the enumeration notes).
 /// - Memory is bounded: one snapshot + at most
 ///   [`MAX_SURFACE_DELTA_NOTES`] + 1 notes.
 #[derive(Debug, Default)]
@@ -557,7 +570,9 @@ pub(crate) struct UiSurfaceTracker {
     last_ids: HashSet<Entity>,
     /// Delta notes accumulated across recaptures (bounded).
     notes: Vec<String>,
-    /// How many individual deltas were suppressed past the cap.
+    /// How many delta-note LINES were suppressed past the cap (a
+    /// line batches one recapture's whole added or removed set, so
+    /// the count is a lower bound on individual entity deltas).
     suppressed: usize,
 }
 
@@ -572,6 +587,9 @@ impl UiSurfaceTracker {
 
     /// Capture on the FIRST settled frame (tick 0), then on every
     /// interval boundary. Mirrors `UiClickTargets` on every capture.
+    ///
+    /// `interval` must be ≥ 1 (pass [`Self::recapture_interval`]'s
+    /// output — the boundary test divides by it).
     pub(crate) fn observe(
         &mut self,
         world: &World,
@@ -579,6 +597,7 @@ impl UiSurfaceTracker {
         interval: u64,
         click_targets: &mut Vec<Vec2>,
     ) {
+        debug_assert!(interval > 0, "interval must be >= 1");
         let boundary = tick.is_multiple_of(interval);
         let is_first = self.snapshot.is_none();
         if !boundary && !is_first {
@@ -592,7 +611,7 @@ impl UiSurfaceTracker {
             let added: Vec<Entity> = ids.iter().filter(|e| !prev.contains(e)).copied().collect();
             let removed: Vec<Entity> = prev.iter().filter(|e| !ids.contains(e)).copied().collect();
             if !added.is_empty() || !removed.is_empty() {
-                self.record_delta(&added, &removed);
+                self.record_delta(tick, &added, &removed);
             }
         }
         click_targets.clear();
@@ -602,23 +621,26 @@ impl UiSurfaceTracker {
     }
 
     /// Turn one recapture diff into notes (bounded, disclosed).
-    fn record_delta(&mut self, added: &[Entity], removed: &[Entity]) {
+    /// Entities render by their full generational id (`Entity`'s
+    /// `Display`, e.g. `42v3`): a bare index would conflate
+    /// different generations of the same slot.
+    fn record_delta(&mut self, tick: u64, added: &[Entity], removed: &[Entity]) {
         let mut lines: Vec<String> = Vec::new();
         if !added.is_empty() {
             let mut list = added.to_vec();
             list.sort_unstable_by_key(|e| e.index());
-            let rendered: Vec<String> = list.iter().map(|e| e.index().to_string()).collect();
+            let rendered: Vec<String> = list.iter().map(|e| e.to_string()).collect();
             lines.push(format!(
-                "ui surface delta at recapture: added interactables {}",
+                "ui surface delta at recapture (tick {tick}): added interactables {}",
                 rendered.join(", ")
             ));
         }
         if !removed.is_empty() {
             let mut list = removed.to_vec();
             list.sort_unstable_by_key(|e| e.index());
-            let rendered: Vec<String> = list.iter().map(|e| e.index().to_string()).collect();
+            let rendered: Vec<String> = list.iter().map(|e| e.to_string()).collect();
             lines.push(format!(
-                "ui surface delta at recapture: removed interactables {}",
+                "ui surface delta at recapture (tick {tick}): removed interactables {}",
                 rendered.join(", ")
             ));
         }
@@ -631,11 +653,14 @@ impl UiSurfaceTracker {
         }
     }
 
-    /// Final result for the report: the LATEST snapshot, with the
-    /// bounded delta history and (if any) the disclosed suppression
-    /// count prepended to its notes. `None` if never captured (no
-    /// `ui-surface` capture happened — impossible from the driver
-    /// loop, which captures at tick 0, but the honest shape).
+    /// Final result for the report: the LATEST snapshot with the
+    /// delta history first, then the snapshot's own enumeration
+    /// notes, and — if any deltas were suppressed — the disclosed
+    /// count LAST. Ordering is deterministic. `None` if never
+    /// captured: unreachable from a healthy driver loop (which
+    /// captures at tick 0) but real when the game panics inside
+    /// the very first `app.update()` — the honest shape either
+    /// way.
     pub(crate) fn into_result(mut self) -> Option<UiSurfaceResult> {
         let suppressed = self.suppressed;
         let deltas = std::mem::take(&mut self.notes);
@@ -776,11 +801,11 @@ mod tracker_tests {
         assert!(tracker
             .notes
             .iter()
-            .any(|n| n.contains(&format!("added interactables {}", b.index()))));
+            .any(|n| n.contains(&format!("added interactables {b}"))));
         assert!(tracker
             .notes
             .iter()
-            .any(|n| n.contains(&format!("removed interactables {}", a.index()))));
+            .any(|n| n.contains(&format!("removed interactables {a}"))));
 
         // And the final result carries the delta notes plus the
         // latest snapshot's interactables.
@@ -797,7 +822,7 @@ mod tracker_tests {
         assert!(result
             .notes
             .iter()
-            .any(|n| n.starts_with("ui surface delta at recapture: added")));
+            .any(|n| n.starts_with("ui surface delta at recapture (tick 30): added")));
     }
 
     #[test]
@@ -835,41 +860,144 @@ mod tracker_tests {
     }
 
     #[test]
-    fn click_targets_mirror_the_latest_snapshot() {
-        // Spawn-despawn churn: the click-target vec handed in must
-        // always equal the LATEST snapshot's centers (entities
-        // without geometry contribute none).
-        let mut world = test_world();
-        let mut tracker = UiSurfaceTracker::default();
-        let mut targets: Vec<Vec2> = Vec::new();
-        tracker.observe(&world, 0, 2, &mut targets);
-        let gone = spawn_pickable(&mut world);
-        tracker.observe(&world, 2, 2, &mut targets);
-        assert!(targets.is_empty(), "no geometry => no targets");
-        // Despawn and confirm no stale aiming.
-        world.despawn(gone);
-        tracker.observe(&world, 4, 2, &mut targets);
-        assert!(targets.is_empty());
-        // Sanity: the ids tracked are empty again.
-        assert!(tracker.last_ids.is_empty());
-    }
+    fn click_targets_carry_geometry_from_the_latest_snapshot() {
+        // Findings 3+4 from review: the Some(center) → click-targets
+        // path had ZERO unit coverage (bare-World tests can never
+        // resolve geometry — ComputedUiTargetCamera is only written
+        // by UiPlugin's prepare systems). Bootstrap the same
+        // headless layout app as tests/ui_surface.rs (dev-deps make
+        // the text/asset/image/mesh stacks legal in lib tests), so
+        // the mirroring contract is pinned with a real center —
+        // and the despawn path visibly EMPTIES the target vec
+        // (mutation: "keep stale centers" must fail here).
+        use bevy_app::prelude::*;
+        use bevy_camera::{Camera, Camera2d, ComputedCameraValues, RenderTargetInfo, Viewport};
+        use bevy_input::prelude::*;
+        use bevy_math::UVec2;
+        use bevy_transform::prelude::*;
+        use bevy_ui::{prelude::UiScale, UiPlugin};
+        use bevy_ui_widgets as widgets;
+        use bevy_window::WindowPlugin;
 
-    #[test]
-    fn geometry_carrying_widgets_land_in_click_targets() {
-        // Needs a laid-out node: reuse the tests/ui_surface.rs app
-        // harness shape minimally — a ComputedNode + Pickable entity
-        // has a resolvable center.
-        let mut world = test_world();
-        // ComputedNode without a camera: center stays None (the
-        // module's geometry caveats). The mirroring contract still
-        // holds: only Some centers land in targets.
-        let e = world
-            .spawn((Pickable::default(), ComputedNode::default()))
+        let mut app = App::new();
+        app.add_plugins((
+            TaskPoolPlugin::default(),
+            bevy_asset::AssetPlugin::default(),
+            WindowPlugin::default(),
+            TransformPlugin,
+            bevy_text::TextPlugin,
+            UiPlugin,
+            bevy_camera::visibility::VisibilityPlugin,
+            bevy_input_focus::InputFocusPlugin,
+            bevy_picking::InteractionPlugin,
+            bevy_picking::PickingPlugin,
+            widgets::UiWidgetsPlugins,
+        ));
+        bevy_asset::AssetApp::init_asset::<bevy_image::Image>(&mut app);
+        bevy_asset::AssetApp::init_asset::<bevy_image::TextureAtlasLayout>(&mut app);
+        bevy_asset::AssetApp::init_asset::<bevy_mesh::Mesh>(&mut app);
+        bevy_asset::AssetApp::init_asset::<bevy_mesh::skinning::SkinnedMeshInverseBindposes>(
+            &mut app,
+        );
+        app.init_resource::<bevy_time::Time<bevy_time::Real>>();
+        app.init_resource::<UiScale>();
+        app.init_resource::<ButtonInput<MouseButton>>();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.init_resource::<Touches>();
+        app.init_resource::<bevy_input_focus::InputFocus>();
+        app.init_resource::<bevy_input_focus::InputFocusVisible>();
+
+        let width = 1280u32;
+        let height = 720u32;
+        app.world_mut().spawn((
+            Camera2d,
+            Camera {
+                computed: ComputedCameraValues {
+                    target_info: Some(RenderTargetInfo {
+                        physical_size: UVec2::new(width, height),
+                        scale_factor: 1.,
+                    }),
+                    ..Default::default()
+                },
+                viewport: Some(Viewport {
+                    physical_size: UVec2::new(width, height),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        ));
+
+        // A Pickable node at (300, 300), 200x100: its window-space
+        // center must resolve to (400, 350) (y-down, offset (0,0)).
+        let node = app
+            .world_mut()
+            .spawn((
+                bevy_ui::Node {
+                    width: bevy_ui::Val::Px(200.),
+                    height: bevy_ui::Val::Px(100.),
+                    position_type: bevy_ui::PositionType::Absolute,
+                    left: bevy_ui::Val::Px(300.),
+                    top: bevy_ui::Val::Px(300.),
+                    ..bevy_utils::default()
+                },
+                Pickable::default(),
+            ))
             .id();
+        // Let layout settle (ComputedNode/UiGlobalTransform/
+        // ComputedUiTargetCamera are written by UiPlugin's systems).
+        for _ in 0..2 {
+            app.update();
+        }
+
         let mut tracker = UiSurfaceTracker::default();
         let mut targets: Vec<Vec2> = Vec::new();
-        tracker.observe(&world, 0, 2, &mut targets);
-        assert!(tracker.last_ids.contains(&e));
-        assert!(targets.is_empty());
+        {
+            let world = app.world();
+            tracker.observe(world, 0, 2, &mut targets);
+        }
+        assert_eq!(
+            targets.len(),
+            1,
+            "the laid-out node's center must land in the click targets"
+        );
+        let center = targets[0];
+        assert!(
+            (center.x - 400.).abs() < 0.5 && (center.y - 350.).abs() < 0.5,
+            "expected center (400, 350), got {center:?}"
+        );
+
+        // Off-boundary observe must leave targets untouched.
+        {
+            let world = app.world();
+            tracker.observe(world, 1, 2, &mut targets);
+        }
+        assert_eq!(
+            targets.len(),
+            1,
+            "off-boundary observe must not touch targets"
+        );
+
+        // Despawn between boundaries: the NEXT boundary recapture
+        // must visibly empty the vec — stale centers must not
+        // survive (the load-bearing mirroring regression).
+        app.world_mut().despawn(node);
+        {
+            let world = app.world();
+            tracker.observe(world, 2, 2, &mut targets);
+        }
+        assert!(
+            targets.is_empty(),
+            "despawned widget's center must leave the click targets: {targets:?}"
+        );
+        assert!(tracker.last_ids.is_empty());
+        // And the removal was REPORTED (refusal over silence).
+        assert!(
+            tracker
+                .notes
+                .iter()
+                .any(|n| n.contains(&format!("removed interactables {node}"))),
+            "the despawn must be a delta note: {:?}",
+            tracker.notes
+        );
     }
 }
