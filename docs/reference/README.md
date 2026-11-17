@@ -173,6 +173,18 @@ Two distinct error classes, at different stages:
   `log`, not `tracing`). If the bridge loses the write-once `log`
   logger slot to a game-provided backend, the report gains an
   informational `log_bridge_lost` violation.
+- **Log level defense** — while the harness bridge owns the `log`
+  logger slot, the `log` max level is harness-owned state for the
+  duration of a run: the driver re-asserts it at run start and at
+  every tick, overriding any lower level the game set (deliberate
+  verbosity curation included — a game that silenced a chatty
+  dependency's `log::warn!`s will see them surface as
+  informational `log_warn` findings). A one-time foreign
+  `log::set_max_level(Off)` thus blinds at most the remainder of the
+  tick it lands in; an `Off` re-applied every tick cannot be
+  repaired (each tick's tail stays lost) and is detected instead,
+  reported as an informational `log_level_tampered` violation whose
+  count is the number of tampered ticks.
 
 ## Report
 
@@ -206,8 +218,18 @@ Two distinct error classes, at different stages:
   another `log` crate logger owned the write-once slot, so
   `log`-crate events — bevy's B000x hierarchy validators, wgpu/naga —
   are invisible to `log_warn`/`log_error` even when
-  `log_capture_available` is `true`; surfaced as the informational
-  `log_bridge_lost` violation)
+  `log_capture_available` is `true`; paired with the informational
+  `log_bridge_lost` violation, which is emitted when the capture
+  subscriber won and not silenced by the
+  `BEVY_PLAYTEST_ALLOW_MISSING_LOG_CAPTURE` escape hatch)
+
+The `log_capture_available`/`log_bridge_lost` and
+`log_capture_lost` violation entries are the HUMAN-facing layer:
+silenced by the `BEVY_PLAYTEST_ALLOW_MISSING_LOG_CAPTURE` escape
+hatch (and the bridge entry requires the capture subscriber to have
+won, since `log_capture_lost` otherwise already tells the story).
+The fields themselves are never silenced — the report always
+carries the machine-readable truth.
 
 Report helpers on `PlaytestReport`:
 
