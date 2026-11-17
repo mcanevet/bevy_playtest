@@ -559,8 +559,10 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
             // SET equality, not order: the scan-hit arm emits
             // alphabetically while the fallback arm keeps backbone
             // order, so a scan citing exactly the backbone 8 must
-            // count as "no change" (a set-equal surface makes the
-            // run indistinguishable from the default).
+            // count as "no change". NOTE order is LOAD-BEARING in
+            // the driver (the bot indexes keys positionally), so
+            // "no change" here really means: the surface stays
+            // the DECLARED backbone — no rewrite, no stamp.
             let is_backbone_set = {
                 let mut scan_sorted = layered.keys.clone();
                 scan_sorted.sort();
@@ -572,8 +574,8 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
                 // child receives, same pattern as injection (the
                 // parent writes a variant file). A set-equal
                 // surface (empty scan or exactly the backbone)
-                // means the run is indistinguishable from the
-                // default and stays
+                // leaves the declared default surface untouched
+                // and stays
                 // unstamped, preserving the None honesty contract.
                 let mut scenario = crate::plugin::battery_scenario().map_err(|e| {
                     BatteryError::Spawn(format!("source-layered battery scenario: {e}"))

@@ -1227,6 +1227,63 @@ fn source_scan_of_a_fresh_game_dir_yields_no_extras() {
 }
 
 #[test]
+fn source_scan_of_exactly_backbone_keys_leaves_report_unstamped() {
+    let _slot = common::run_slot();
+
+    // The set-equality gate's positive corner, e2e: a game citing
+    // EXACTLY the backbone 8 triggers the scan-hit arm (the
+    // layered surface is those 8 keys, alphabetized — a different
+    // ORDER from the declared backbone), yet the battery must
+    // treat it as no change: no scenario rewrite, no stamp.
+    // source_derived_keys stays None — key order is load-bearing
+    // in the driver, so refusing the rewrite IS the "nothing
+    // changed" guarantee.
+    let dir = temp_dir();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    // Citations must live in CODE, not comments: the scanner's
+    // noise stripper blanks comments before token extraction.
+    // (The file never compiles — the scan is purely textual.)
+    let cites = BACKBONE_KEYS
+        .iter()
+        .map(|k| format!("let _ = KeyCode::{k};"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(
+        dir.join("src/main.rs"),
+        format!("fn main() {{\n{cites}\n}}\n"),
+    )
+    .unwrap();
+    let result = scan_from_root(&dir);
+    let layered = layered_chaos_keys(&result);
+    assert!(layered
+        .notes
+        .iter()
+        .any(|n| n.contains("scan-derived surface replaced the WASD/arrows default")));
+    let mut scan_sorted = layered.keys.clone();
+    scan_sorted.sort();
+    let mut backbone_sorted: Vec<String> = BACKBONE_KEYS.iter().map(|s| s.to_string()).collect();
+    backbone_sorted.sort();
+    assert_eq!(scan_sorted, backbone_sorted);
+
+    // And the battery honors the gate: set-equal surface => no
+    // stamp, no rewrite, `None` honesty preserved.
+    let _env = EnvGuard::set(&[(ENV_SOURCE_ROOT, dir.to_str().unwrap())]);
+    let report = run_with_config(&BatteryConfig {
+        binary: demo_binary().to_string(),
+        scenario: BUILTIN_BATTERY.to_string(),
+        timeout_secs: 300,
+    })
+    .expect("battery run with a backbone-only source root");
+    assert_eq!(
+        report.source_derived_keys, None,
+        "a scan citing exactly the backbone 8 is set-equal to the default: \
+         no rewrite, no stamp"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn source_scan_replacement_goes_clean_on_the_loading_screen_demo() {
     let _slot = common::run_slot();
 

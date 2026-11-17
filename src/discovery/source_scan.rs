@@ -261,9 +261,11 @@ pub fn scan_extras(result: &SourceScanResult) -> ScanExtras {
 ///
 /// Either arm is recorded in the notes; note, though, that the
 /// default-battery consumer only STAMPS notes for the scan-hit
-/// arm (a set-equal-to-backbone run is indistinguishable from the
-/// default and stays unstamped — the None honesty contract), so
-/// the fallback arm's note is visible only to direct callers of
+/// arm (a set-equal-to-backbone run keeps the declared default
+/// surface, so no rewrite and no stamp — the None honesty
+/// contract; key order is load-bearing in the driver, so
+/// refusing to rewrite IS the "no change" guarantee), so the
+/// fallback arm's note is visible only to direct callers of
 /// this function.
 pub fn layered_chaos_keys(result: &SourceScanResult) -> LayeredKeys {
     let mut notes = Vec::new();
@@ -997,6 +999,42 @@ mod tests {
             .notes
             .iter()
             .any(|n| n.contains("backbone fallback")));
+    }
+
+    #[test]
+    fn layered_keys_backbone_eight_scan_hits_scan_arm_but_set_equal() {
+        // The corner the battery gate exists for: a scan citing
+        // exactly the backbone 8. The scan-HIT arm fires (>=1
+        // usable key), so the emit is ALPHABETICAL — NOT the
+        // backbone's declared order. Consumers comparing in order
+        // would falsely treat this as a changed surface; the
+        // contract is SET equality. Pin both facts: the arm note
+        // is present, and the key SET equals BACKBONE_KEYS.
+        let mut r = SourceScanResult::default();
+        for key in BACKBONE_KEYS {
+            r.hits.push(SourceScanHit {
+                key: (*key).into(),
+                file: "t.rs".into(),
+                line: 1,
+                enclosing: None,
+            });
+        }
+        let layered = layered_chaos_keys(&r);
+        // Scan-hit arm, not fallback.
+        assert!(layered
+            .notes
+            .iter()
+            .any(|n| n.contains("scan-derived surface replaced the WASD/arrows default")));
+        // Alphabetical emit — provably different ORDER from the
+        // declared backbone (load-bearing in the driver), yet the
+        // same SET.
+        let mut sorted = layered.keys.clone();
+        sorted.sort();
+        assert_eq!(layered.keys, sorted);
+        let mut backbone_sorted: Vec<String> =
+            BACKBONE_KEYS.iter().map(|s| s.to_string()).collect();
+        backbone_sorted.sort();
+        assert_eq!(sorted, backbone_sorted);
     }
 
     #[test]

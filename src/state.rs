@@ -159,8 +159,8 @@ pub struct PlaytestReport {
     /// the WASD/arrows default: the scan's full poison-filtered
     /// unique-key set, present only when a scan applied AND found
     /// at least one usable key — a scan that is empty, failed, or
-    /// backbone-equal leaves the default unchanged and the field
-    /// `None` (the run is indistinguishable from the default). For
+    /// backbone-equal leaves the declared default surface untouched
+    /// and the field `None`. For
     /// an INJECTED run it is exactly the scan keys unioned into the
     /// probe-verified surface (the full bot surface lives in
     /// [`Self::injected_surface_keys`]; the two channels stay
