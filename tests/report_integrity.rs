@@ -195,6 +195,11 @@ fn report_declares_log_capture_when_won() {
         Some(true),
         "capture-won runs must declare log_capture_available=true"
     );
+    assert_eq!(
+        report.log_bridge_available,
+        Some(true),
+        "capture-won runs (no competing `log` logger) must declare log_bridge_available=true"
+    );
     assert!(
         !report
             .violations

@@ -61,6 +61,11 @@ fn lost_log_bridge_race_reports_log_bridge_lost() {
 
     let report = bevy_playtest::run_scenario(&mut app, &scenario()).unwrap();
     assert_eq!(report.log_capture_available, Some(true));
+    assert_eq!(
+        report.log_bridge_available,
+        Some(false),
+        "bridge-lost run must declare log_bridge_available=false (compound-loss honesty field)"
+    );
     assert!(
         !report
             .violations
