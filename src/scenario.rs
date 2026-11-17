@@ -178,6 +178,14 @@ pub struct LivenessConfig {
     pub mode: LivenessMode,
     #[serde(default = "default_liveness_timeout")]
     pub timeout_s: f32,
+    /// Progress-liveness oracle configuration (default: auto mode,
+    /// 8.0s window, 0.25s samples). See [`ProgressConfig`].
+    #[serde(default, skip_serializing_if = "progress_is_default")]
+    pub progress: ProgressConfig,
+}
+
+fn progress_is_default(p: &ProgressConfig) -> bool {
+    *p == ProgressConfig::default()
 }
 
 fn default_liveness_timeout_impl() -> f32 {
@@ -189,6 +197,7 @@ impl Default for LivenessConfig {
         Self {
             mode: LivenessMode::default(),
             timeout_s: default_liveness_timeout_impl(),
+            progress: ProgressConfig::default(),
         }
     }
 }
@@ -202,6 +211,115 @@ pub enum LivenessMode {
     RealTime,
     /// Disable the liveness oracle (loud: recorded in report warnings).
     Off,
+}
+
+// ---------------------------------------------------------------------------
+// Progress-liveness configuration
+// ---------------------------------------------------------------------------
+
+fn default_progress_window() -> f32 {
+    8.0
+}
+
+fn default_progress_sample() -> f32 {
+    0.25
+}
+
+/// What the progress oracle treats as the observable game-state surface.
+///
+/// - `auto`: counts-only breadth (entity count, archetype count,
+///   reflected component-type counts) ∪ marker values ∪
+///   `include_paths`-scoped resource values. The counts-only core
+///   covers structural progress (spawns, archetype changes,
+///   component add/remove) without reflection requirements; the
+///   value-bearing parts are additive.
+/// - `markers`: only the named markers (see [`ProgressConfig`]).
+///   Narrowest and cheapest; requires the game to name its signals.
+/// - `off`: the progress oracle does not run at all.
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgressMode {
+    #[default]
+    Auto,
+    Markers,
+    Off,
+}
+
+/// Progress-liveness configuration: distinguishes a churning-but-dead
+/// world (frames keep ticking, no game state evolves) from one that is
+/// actually progressing.
+///
+/// Sampling: the recorder samples the progress surface every
+/// `sample_s` seconds of simulated time and evaluates one window every
+/// `window_s` seconds (per-window recompute; no cross-window state).
+/// Both periods are quantized to whole frames and the window to a
+/// whole number of sample intervals (see `ProgressRecorder::new`);
+/// authored configs off that grid are rejected by validation.
+///
+/// Suppression of heartbeat/ticker values: any marker (or, in `auto`,
+/// include_paths resource) whose value changes in ≥90% of a window's
+/// samples is treated as a ticker for that window and does not count
+/// as progress evidence.
+///
+/// Violation: `stalled_progress` fires for a window where the run was
+/// churning (frozen-world saw zero changes) at every sampled frame AND
+/// no non-ticker surface change occurred.
+///
+/// An empty surface (nothing verifiable at all) yields the
+/// informational `progress_surface_empty` instead.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ProgressConfig {
+    /// Surface selection mode (default `auto`).
+    #[serde(default)]
+    pub mode: ProgressMode,
+    /// Named reflected RESOURCES whose values are hashed into the
+    /// surface (full type path or short name, resolved like invariant
+    /// targets). These are the game's declared progress markers —
+    /// score, lap counters, phase enums, objective states.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub markers: Vec<String>,
+    /// Extra resource type paths whose VALUES are hashed into the
+    /// surface in `auto` mode. Entries ending in `::` act as path
+    /// PREFIXES matching every reflected resource under that module
+    /// path (e.g. `"mygame::"` watches `mygame::sim::Score` and
+    /// `mygame::clock::Clock` alike); other entries resolve as exact
+    /// full type paths or unambiguous short names, failing loudly on
+    /// typos or ambiguity. Without this, `auto` covers counts only
+    /// for resources — resource values require explicit scoping to
+    /// avoid hashing volatile engine-adjacent state.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include_paths: Vec<String>,
+    /// Resource type paths (full-path prefix match) to exclude from
+    /// the surface — e.g. known tickers or third-party cache types
+    /// that would fake progress. Subtracts everywhere, in every mode.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
+    /// Window length in seconds: one progress verdict per window.
+    #[serde(default = "default_progress_window")]
+    pub window_s: f32,
+    /// Sampling period in seconds within a window.
+    #[serde(default = "default_progress_sample")]
+    pub sample_s: f32,
+    /// Escalate `progress_surface_empty` from informational to gating.
+    /// Set when the scenario's purpose REQUIRES verifiable progress
+    /// (regression gateways); leave off for exploratory playtests.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub require_surface: bool,
+}
+
+impl Default for ProgressConfig {
+    fn default() -> Self {
+        Self {
+            mode: ProgressMode::default(),
+            markers: Vec::new(),
+            include_paths: Vec::new(),
+            exclude: Vec::new(),
+            window_s: default_progress_window(),
+            sample_s: default_progress_sample(),
+            require_surface: false,
+        }
+    }
 }
 
 /// Raw input surface declaration. Defines what raw inputs are available
@@ -567,6 +685,129 @@ impl std::error::Error for ScenarioError {}
 /// - unimplemented bot types
 /// - duplicate invariant names
 /// - inconsistent invariant bounds/time windows
+fn validate_progress_config(
+    progress: &ProgressConfig,
+    scenario: &Scenario,
+) -> Result<(), ScenarioError> {
+    if progress.mode == ProgressMode::Off {
+        return Ok(()); // Oracle disabled: nothing further to check.
+    }
+    if progress.mode == ProgressMode::Markers && progress.markers.is_empty() {
+        return Err(ScenarioError::Rejected(
+            "liveness.progress.mode 'markers' requires a non-empty markers \
+             list — without markers the oracle would watch nothing and \
+             silently pass everything"
+                .into(),
+        ));
+    }
+    if !progress.window_s.is_finite() || progress.window_s <= 0.0 {
+        return Err(ScenarioError::Rejected(format!(
+            "liveness.progress.window_s must be finite and > 0, got {}",
+            progress.window_s
+        )));
+    }
+    if !progress.sample_s.is_finite() || progress.sample_s <= 0.0 {
+        return Err(ScenarioError::Rejected(format!(
+            "liveness.progress.sample_s must be finite and > 0, got {}",
+            progress.sample_s
+        )));
+    }
+    // Blank entries are typos in intent — indistinguishable from a
+    // mistyped name, which fails loudly at resolution. Dropping them
+    // silently would hide a broken config behind partial coverage.
+    for entry in progress.markers.iter().chain(progress.exclude.iter()) {
+        if entry.trim().is_empty() {
+            return Err(ScenarioError::Rejected(
+                "liveness.progress.markers/exclude entries must not be \
+                 blank — a blank entry is indistinguishable from a \
+                 typo, and silently dropping it hides a broken config"
+                    .into(),
+            ));
+        }
+    }
+    // Timing-coupled validation applies only to AUTHORED timings.
+    // Like the whole-config exemption it replaces, this protects the
+    // DEFAULT config that rides along every scenario — including short
+    // smoke runs where progress is not the point — but keyed on the
+    // timing fields alone, so toggling a NON-timing field (e.g.
+    // `require_surface`) does not suddenly drag grid validation onto
+    // timings the author never wrote. Structural equality is the
+    // doctrine: a config whose window_s/sample_s equal the defaults
+    // behaves exactly like an untouched one.
+    if progress.window_s == default_progress_window()
+        && progress.sample_s == default_progress_sample()
+    {
+        return Ok(());
+    }
+    if progress.window_s >= scenario.duration_s {
+        return Err(ScenarioError::Rejected(format!(
+            "liveness.progress.window_s {} must be shorter than the \
+             scenario duration_s {} — otherwise fewer than one window \
+             ever completes and the oracle can never fire",
+            progress.window_s, scenario.duration_s
+        )));
+    }
+    let frame_s = 1.0 / scenario.tps as f32;
+    if progress.sample_s < frame_s {
+        return Err(ScenarioError::Rejected(format!(
+            "liveness.progress.sample_s {} is shorter than one frame at \
+             tps {} ({:.6}s) — sub-frame sampling collapses to repeated \
+             identical samples; raise sample_s to at least one frame",
+            progress.sample_s, scenario.tps, frame_s
+        )));
+    }
+    if progress.sample_s >= progress.window_s {
+        return Err(ScenarioError::Rejected(format!(
+            "liveness.progress.sample_s {} must be shorter than \
+             window_s {} — otherwise fewer than two samples fall in a \
+             window and the change-detection degenerates",
+            progress.sample_s, progress.window_s
+        )));
+    }
+    // Sampling-grid coherence (authored configs only; the default
+    // config early-returns above and is re-quantized coherently by the
+    // recorder instead). The oracle samples every
+    // round(sample_s·tps) frames and tiles windows of a WHOLE number
+    // of those intervals; periods off that grid leave windows no
+    // sample lands on the boundary of, and verdicts miscover the
+    // observed time. Reject at authoring time, with the derived frame
+    // numbers named, rather than silently re-rounding.
+    let sample_product = progress.sample_s * scenario.tps as f32;
+    let sample_frames = sample_product.round();
+    if (sample_product - sample_frames).abs() > 1e-3 {
+        return Err(ScenarioError::Rejected(format!(
+            "liveness.progress.sample_s {} must be exactly a whole \
+             number of frames at tps {}: sample_s·tps = {} — pick a \
+             sample_s that is a whole frame count ({} frames, i.e. \
+             sample_s {} at this tps)",
+            progress.sample_s,
+            scenario.tps,
+            sample_product,
+            sample_frames as u64,
+            sample_frames as u64 as f32 / scenario.tps as f32
+        )));
+    }
+    let sample_frames = sample_frames.max(1.0) as u64;
+    let window_product = progress.window_s * scenario.tps as f32;
+    let window_frames = (window_product / sample_frames as f32).round();
+    if (window_product / sample_frames as f32 - window_frames).abs() > 1e-3 {
+        return Err(ScenarioError::Rejected(format!(
+            "liveness.progress.window_s {} must be a whole number of \
+             sample intervals at tps {}: got sample_frames {}, authored \
+             window_s·tps = {} frames — the nearest coherent window is \
+             {} frames ({} intervals), not the authored value — pick a \
+             window_s equal to a whole multiple of sample_s",
+            progress.window_s,
+            scenario.tps,
+            sample_frames,
+            window_product,
+            window_frames as u64 * sample_frames,
+            window_frames as u64
+        )));
+    }
+    Ok(())
+}
+
 pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
     if scenario.tps < 1 {
         return Err(ScenarioError::Rejected("tps must be >= 1".into()));
@@ -630,6 +871,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                 .into(),
         ));
     }
+    validate_progress_config(&scenario.liveness.progress, scenario)?;
     // Typed-oracle selection is not implemented. `Some(vec![])` is as
     // much a selection as a populated list (and reads as "none" to a
     // human author) — any non-None value must reject loudly.
@@ -896,16 +1138,10 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                         rule.name
                     )));
                 }
-                if matches!(
-                    rule.target_selector,
-                    Some(crate::enums::TargetSelector::WithComponent { .. })
-                ) {
-                    return Err(ScenarioError::Rejected(format!(
-                        "invariant '{}': nodes_in_bounds does not support \
-                         with_component selectors",
-                        rule.name
-                    )));
-                }
+                // with_component selectors are supported (resolved
+                // dynamically against the game's registry by the
+                // driver-loop recorder; unknown or ambiguous type
+                // names fail loudly as oracle_error at run time).
             }
         }
     }

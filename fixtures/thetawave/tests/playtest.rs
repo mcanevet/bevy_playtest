@@ -41,7 +41,12 @@ const MENU_DRIVE_SCENARIO: &str = r#"{
     ]
   },
   "tps": 60,
-  "duration_s": 16.0
+  "duration_s": 16.0,
+  "liveness": {
+    "progress": {
+      "mode": "off"
+    }
+  }
 }"#;
 
 /// Write [`MENU_DRIVE_SCENARIO`] to a fresh temp file (RAII-removed on
@@ -94,9 +99,20 @@ fn run_menu_drive(tag: &str) -> bevy_playtest::state::PlaytestReport {
 #[cfg(feature = "playtest")]
 #[test]
 fn playtest_battery() {
-    bevy_playtest::battery::run_and_expect_clean(
+    // Golden verdict — the stalled-progress exhibit: a REAL game with
+    // registered state channels (Leafwing's reflected ActionState
+    // component counts) whose menu idle animation churns transforms
+    // while no verifiable state evolves. Exactly the churning-but-dead
+    // shape the progress-heartbeat oracle exists to catch. The stock
+    // demo also logs one camera dithering warning (informational).
+    // Both pinned; anything else is a regression.
+    bevy_playtest::battery::run_and_expect_findings(
         env!("CARGO_BIN_EXE_fixture_thetawave"),
         bevy_playtest::battery::BUILTIN_BATTERY,
+        &[
+            ("log_warn", "bevy_core_pipeline::tonemapping", "dithering"),
+            ("stalled_progress", "world", "churning-but-dead"),
+        ],
     );
 }
 

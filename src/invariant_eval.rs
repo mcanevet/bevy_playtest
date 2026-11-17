@@ -47,9 +47,13 @@ pub fn evaluate_invariants_system(
                 evaluate_bounds(inv, state.frame, &mut violations, &mut q_all.iter());
             }
             TargetSelector::WithComponent { .. } => {
-                // Validation rejects this combination at load; reaching
-                // here means a future code path regressed the schema.
-                unreachable!("nodes_in_bounds does not support WithComponent selectors");
+                // Handled by the driver-loop recorder
+                // [`record_bounds_with_component`]: resolving a
+                // component TYPE NAME dynamically requires `&World`
+                // registry access, which cannot coexist with
+                // `ResMut<RunViolations>` in one system (same doctrine
+                // as the component_check recorder).
+                continue;
             }
         }
     }
@@ -134,6 +138,180 @@ struct CcOutcome {
     /// Configuration/resolution failure (unknown component, bad
     /// path, non-numeric leaf...): reported instead of the check.
     config_error: Option<String>,
+}
+
+/// Driver-loop recorder for `nodes_in_bounds` invariants with a
+/// `with_component` selector: same doctrine as
+/// [`record_component_checks`] — the selector names a component TYPE
+/// that must be resolved dynamically against the game's registry,
+/// which needs `&World` and cannot coexist with
+/// `ResMut<RunViolations>` in a scheduled system.
+///
+/// Frames where the named component is absent or unresolved do not
+/// count; vacuity is judged by the post-run audit
+/// ([`audit_component_checks`]) with any-frame observability.
+pub fn record_bounds_with_component(world: &mut World, frame: u64) {
+    // Clone the relevant invariants out so no world borrow survives
+    // the phase split below (read phase: &World; write phase: &mut).
+    let invariants: Vec<Invariant> = world
+        .get_resource::<ScenarioInvariants>()
+        .map(|invariants| {
+            invariants
+                .0
+                .iter()
+                .filter(|i| {
+                    i.rule == InvariantRule::NodesInBounds
+                        && matches!(
+                            i.target_selector,
+                            Some(crate::enums::TargetSelector::WithComponent { .. })
+                        )
+                })
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if invariants.is_empty() {
+        return;
+    }
+    let Some(atr) = world.get_resource::<AppTypeRegistry>().cloned() else {
+        world.resource_scope(|world, _watched: Mut<WatchedInvariants>| {
+            let mut violations = world.resource_mut::<RunViolations>();
+            for inv in &invariants {
+                violations.0.report(
+                    crate::rules::Rule::OracleError.name(),
+                    &inv.name,
+                    "the game has no AppTypeRegistry: with_component bounds \
+                     checks are impossible (register types with App::register_type)"
+                        .to_string(),
+                    frame,
+                );
+            }
+        });
+        return;
+    };
+
+    // Read phase (all world access immutable; registry guard lives
+    // only as long as the outcome data below is owned).
+    let registry = atr.0.read();
+    // Per invariant: (config error, checkable-entity count, out-of-
+    // bounds witnesses). `checkable` — entities carrying the named
+    // component AND a Transform — drives vacuity judgment in the
+    // audit; it is tracked INDEPENDENTLY of witnesses so an invariant
+    // whose scope held the whole run is not misjudged as vacuous.
+    type BoundsFinding<'a> = (
+        &'a Invariant,
+        Option<String>,
+        usize,
+        Vec<(Entity, [f32; 3])>,
+    );
+    let mut findings: Vec<BoundsFinding> = Vec::with_capacity(invariants.len());
+    for inv in &invariants {
+        let Some(crate::enums::TargetSelector::WithComponent { name }) =
+            inv.target_selector.as_ref()
+        else {
+            continue;
+        };
+        let bounds = bounds_of(inv);
+        match resolve_registration(&registry, name) {
+            Ok(type_reg) => {
+                // Iterate matching entities: the type's ComponentId
+                // must exist in this world (only registered-component
+                // types get one), then every archetype row carrying it
+                // is a match (exact, like the digest's per-type counts).
+                let Some(component_id) = world.components().get_valid_id(type_reg.type_id()) else {
+                    findings.push((inv, None, 0, vec![])); // Not instantiated: vacuous.
+                    continue;
+                };
+                let mut checkable = 0usize;
+                let mut witnesses: Vec<(Entity, [f32; 3])> = Vec::new();
+                for archetype in world.archetypes().iter() {
+                    if !archetype.components().contains(&component_id) {
+                        continue;
+                    }
+                    for entry in archetype.entities() {
+                        let entity = entry.id();
+                        let Ok(entity_ref) = world.get_entity(entity) else {
+                            continue;
+                        };
+                        let Some(transform) = entity_ref.get::<Transform>() else {
+                            continue; // Carries the marker but no Transform: not checkable.
+                        };
+                        checkable += 1;
+                        let t = transform.translation;
+                        let [mn, mx] = bounds;
+                        let out = t.x < mn[0]
+                            || t.x > mx[0]
+                            || t.y < mn[1]
+                            || t.y > mx[1]
+                            || t.z < mn[2]
+                            || t.z > mx[2];
+                        if out {
+                            witnesses.push((entity, [t.x, t.y, t.z]));
+                        }
+                    }
+                }
+                findings.push((inv, None, checkable, witnesses));
+            }
+            Err(problem) => findings.push((inv, Some(problem), 0, vec![])),
+        }
+    }
+    drop(registry);
+
+    // Write phase: report out-of-bounds entities + track vacuity.
+    world.resource_scope(|world, mut watched: Mut<WatchedInvariants>| {
+        let mut violations = world.resource_mut::<RunViolations>();
+        for (inv, config_error, checkable, witnesses) in findings {
+            if let Some(why) = config_error {
+                watched.config_errored.insert(inv.name.clone());
+                violations.0.report(
+                    crate::rules::Rule::OracleError.name(),
+                    &inv.name,
+                    format!("invariant '{}': {why}", inv.name),
+                    frame,
+                );
+                continue;
+            }
+            // Selector observability: at least one CHECKABLE entity
+            // (named component + Transform) existed at some frame.
+            // Independent of witnesses — an invariant whose scope held
+            // the whole run is not vacuous, exactly like
+            // component_check's `matched`.
+            if checkable > 0 {
+                watched.matched.insert(inv.name.clone());
+            }
+            for (entity, [x, y, z]) in witnesses {
+                let [mn, mx] = bounds_of(inv);
+                violations.0.report(
+                    crate::rules::Rule::NodesInBounds.name(),
+                    &inv.name,
+                    format!(
+                        "entity {entity:?} out of bounds [{:.2},{:.2}]x[{:.2},{:.2}]x[{:.2},{:.2}] \
+                         via with_component '{}': ({x:.2},{y:.2},{z:.2})",
+                        mn[0], mx[0], mn[1], mx[1], mn[2], mx[2],
+                        selector_component_name(inv).unwrap_or("?")
+                    ),
+                    frame,
+                );
+            }
+        }
+    });
+}
+
+/// Min/max bounds per axis from the invariant (mirrors
+/// [`evaluate_bounds`]'s defaults).
+fn bounds_of(inv: &Invariant) -> [[f32; 3]; 2] {
+    [
+        [
+            inv.min_x.unwrap_or(-1000.0),
+            inv.min_y.unwrap_or(-1000.0),
+            inv.min_z.unwrap_or(-1000.0),
+        ],
+        [
+            inv.max_x.unwrap_or(1000.0),
+            inv.max_y.unwrap_or(1000.0),
+            inv.max_z.unwrap_or(1000.0),
+        ],
+    ]
 }
 
 /// Driver-loop recorder for `component_check` invariants. Called
@@ -493,10 +671,14 @@ pub fn audit_component_checks(
     last_frame: u64,
 ) -> Vec<crate::state::ViolationEntry> {
     let mut entries = Vec::new();
-    for inv in invariants
-        .iter()
-        .filter(|i| i.rule == InvariantRule::ComponentCheck)
-    {
+    for inv in invariants.iter().filter(|i| {
+        i.rule == InvariantRule::ComponentCheck
+            || (i.rule == InvariantRule::NodesInBounds
+                && matches!(
+                    i.target_selector,
+                    Some(crate::enums::TargetSelector::WithComponent { .. })
+                ))
+    }) {
         // A config/resolution error was already reported during the
         // run (oracle_error, gating). Emitting a vacuous or deadline
         // entry here would blame the game for an author-side or

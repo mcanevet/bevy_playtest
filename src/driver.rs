@@ -870,11 +870,61 @@ fn frame_timing_oracle_system(mut state: ResMut<RunState>, time: Res<Time>) {
     }
 }
 
+/// Sorted-bits transform value hash (canonical: equal transform SETS
+/// hash equal regardless of entity/spawn order — mirrors the state
+/// digest's translation fold). Hashes the FULL Transform — translation
+/// AND rotation AND scale bits — so a world rewriting the same
+/// translation with rotating/animating orientation or scale cannot
+/// counterfeit value-identity. Used by the phantom-write detector to
+/// notice that a world which rewrites identical transform values every
+/// frame is not changing at all.
+fn transform_value_hash<'a>(transforms: impl Iterator<Item = &'a Transform>) -> u64 {
+    let mut parts: Vec<[u64; 10]> = transforms
+        .map(|t| {
+            [
+                t.translation.x.to_bits() as u64,
+                t.translation.y.to_bits() as u64,
+                t.translation.z.to_bits() as u64,
+                t.rotation.x.to_bits() as u64,
+                t.rotation.y.to_bits() as u64,
+                t.rotation.z.to_bits() as u64,
+                t.rotation.w.to_bits() as u64,
+                t.scale.x.to_bits() as u64,
+                t.scale.y.to_bits() as u64,
+                t.scale.z.to_bits() as u64,
+            ]
+        })
+        .collect();
+    parts.sort_unstable();
+    let mut hasher = crate::digest::fnv_hasher();
+    hasher = crate::digest::hash_usize(hasher, parts.len());
+    for bits in parts {
+        for b in bits {
+            hasher = crate::digest::hash_u64(hasher, b);
+        }
+    }
+    hasher
+}
+
 /// Frozen-world oracle: detects when the world stops changing. Counts
 /// consecutive frames with no `Changed<Transform>` anywhere (plus, under
 /// the `ui-liveness` feature, no `Changed<UiTransform>`) and reports
 /// a `frozen_world` violation once the streak exceeds the grace window.
 /// Needs no marker: "anything changed" is the liveness evidence.
+///
+/// Phantom-write hardening: `Changed<Transform>` firing every frame
+/// does NOT prove change — a system can rewrite identical values (the
+/// classic churning-but-dead signature). Every
+/// [`RunState::PHANTOM_INTERVAL_FRAMES`] frames the oracle hashes the
+/// sorted transform VALUES; a bit-identical interval where every frame
+/// still flagged `Changed<Transform>` is a PHANTOM INTERVAL, and
+/// `phantom_grace_intervals` consecutive phantom intervals report
+/// `frozen_world` with a "phantom writes" detail. A softer secondary
+/// signal reports "mostly phantom writes" when ≥90% of frames flagged
+/// (not necessarily all) and the values stayed bit-identical; its
+/// counter resets only on a genuine value change. No streak gating:
+/// the phantom regime lives exactly where the frozen streak never
+/// builds, so this check is independent of `frozen_frames`.
 ///
 /// Runs after the liveness watchers so same-frame activity is counted.
 ///
@@ -893,6 +943,7 @@ fn frozen_world_oracle_system(
     digest: Option<Res<crate::digest::StateDigestRecorder>>,
     q: Query<(), Changed<Transform>>,
     q_all: Query<(), With<Transform>>,
+    q_values: Query<&Transform>,
 ) {
     if !q_all.is_empty() {
         state.saw_transform_entity = true;
@@ -993,6 +1044,80 @@ fn frozen_world_oracle_system(
             }
         }
     }
+
+    // ----- Phantom-write detection -----
+    // Sample every K frames; within a sample interval count frames
+    // where the change-detection flags fired. A PHANTOM interval is
+    // one whose value hash equals the previous sample's AND every
+    // frame in it flagged Changed<Transform>.
+    state.phantom_frames_since_sample += 1;
+    if transform_activity {
+        state.phantom_changed_frames += 1;
+    }
+    if state.phantom_frames_since_sample >= RunState::PHANTOM_INTERVAL_FRAMES {
+        let hash = transform_value_hash(q_values.iter());
+        let frames_in_interval = state.phantom_frames_since_sample;
+        let flagged = state.phantom_changed_frames;
+        let all_flagged = flagged == frames_in_interval;
+        let dominant_flagged = flagged * 10 >= 9 * frames_in_interval;
+        let hash_same = state.phantom_last_hash == Some(hash);
+        let interval_was_phantom = all_flagged && hash_same;
+        // Dominant-phantom interval: ≥90% flagged AND hash unchanged.
+        // The hash is the authoritative change signal; flag density is
+        // corroborating churn evidence. RESET only on a hash CHANGE
+        // (something genuinely moved); a density dip below 90% with an
+        // identical hash is still a dead interval.
+        let interval_was_dominant_phantom = dominant_flagged && hash_same;
+        if interval_was_phantom {
+            state.phantom_consecutive_intervals += 1;
+        } else {
+            state.phantom_consecutive_intervals = 0;
+        }
+        if interval_was_dominant_phantom {
+            state.phantom_dominant_consecutive_intervals += 1;
+        } else if !hash_same {
+            state.phantom_dominant_consecutive_intervals = 0;
+        }
+        // Report once per crossing: exactly at the threshold.
+        if state.phantom_consecutive_intervals == state.phantom_grace_intervals + 1 {
+            violations.0.report(
+                Rule::FrozenWorld.name(),
+                "world",
+                format!(
+                    "phantom writes: Changed<Transform> fired on every frame \
+                     for {} frames while transform values stayed bit-identical \
+                     across every sampled interval — the world is rewriting \
+                     itself, not changing",
+                    state.phantom_consecutive_intervals * RunState::PHANTOM_INTERVAL_FRAMES
+                ),
+                state.frame,
+            );
+        }
+        // Secondary crossing: dominant (not every-frame) phantom churn.
+        // Only meaningful while the strict counter has NOT fired (the
+        // strict report above is the stronger finding for the same
+        // underlying regime).
+        if state.phantom_dominant_consecutive_intervals == state.phantom_grace_intervals + 1
+            && state.phantom_consecutive_intervals <= state.phantom_grace_intervals
+        {
+            violations.0.report(
+                Rule::FrozenWorld.name(),
+                "world",
+                format!(
+                    "mostly phantom writes: Changed<Transform> fired on ≥90% \
+                     of frames for {} frames while transform values stayed \
+                     bit-identical across every sampled interval — the world \
+                     is almost entirely rewriting itself, not changing",
+                    state.phantom_dominant_consecutive_intervals
+                        * RunState::PHANTOM_INTERVAL_FRAMES
+                ),
+                state.frame,
+            );
+        }
+        state.phantom_last_hash = Some(hash);
+        state.phantom_frames_since_sample = 0;
+        state.phantom_changed_frames = 0;
+    }
 }
 
 /// UI liveness watcher (`ui-liveness` feature): Bevy 0.20 UI nodes carry
@@ -1025,7 +1150,37 @@ pub struct RunState {
     tps: u64,
     metrics: crate::state::Metrics,
     frame_timing: FrameTimingStats,
-    frozen_frames: u64,
+    /// Consecutive frames with no liveness evidence; read by the
+    /// progress recorder (churn = frozen_frames == 0) — the progress
+    /// oracle fires exactly where this streak never builds.
+    pub(crate) frozen_frames: u64,
+    // ----- Phantom-write detection (M3) -----
+    /// Last sampled transform value hash (sorted bitwise
+    /// translations). None until the first sample.
+    phantom_last_hash: Option<u64>,
+    /// Frames since the last interval sample (K = PHANTOM_INTERVAL_FRAMES).
+    phantom_frames_since_sample: u64,
+    /// Of the frames since the last sample: frames where
+    /// `Changed<Transform>` fired (churn evidence).
+    phantom_changed_frames: u64,
+    /// Consecutive bit-identical intervals with churn on every frame
+    /// (the phantom signature). Reset by any genuine change, any
+    /// sample mismatch, or a report (one per crossing).
+    phantom_consecutive_intervals: u64,
+    /// Consecutive DOMINANT-phantom intervals: ≥90% of frames
+    /// flagged `Changed<Transform>` AND the value hash unchanged.
+    /// Softer than the strict counter above (which demands ALL frames
+    /// flagged); it counts worlds where most churn is phantom and a
+    /// minority of frames see real writes that land back on the same
+    /// values. Reset only by an interval whose hash CHANGED (a
+    /// genuine change actually happened); mere flag-density dips do
+    /// not reset it. Reaching `phantom_grace_intervals + 1` while the
+    /// strict counter has not fired is a SECONDARY detection: same
+    /// rule, "mostly phantom writes" detail.
+    phantom_dominant_consecutive_intervals: u64,
+    /// Threshold in intervals: ceil(frozen_grace_frames / K), set
+    /// alongside frozen_grace_frames in run_scenario.
+    phantom_grace_intervals: u64,
     /// Grace period (frames) before frozen_world is reported.
     frozen_grace_frames: u64,
     /// True once ANY Transform-bearing entity existed during the run.
@@ -1043,6 +1198,13 @@ pub struct RunState {
     ui_activity_this_frame: bool,
 }
 
+impl RunState {
+    /// Phantom-detection interval sampling period: a transform VALUE
+    /// hash is taken every K frames. Changing it trades detection
+    /// latency for per-sample cost, nothing else.
+    pub(crate) const PHANTOM_INTERVAL_FRAMES: u64 = 30;
+}
+
 impl Default for RunState {
     fn default() -> Self {
         Self {
@@ -1055,6 +1217,12 @@ impl Default for RunState {
             // true freezes caught. Injected in run_scenario before the
             // loop runs.
             frozen_grace_frames: 180,
+            phantom_last_hash: None,
+            phantom_frames_since_sample: 0,
+            phantom_changed_frames: 0,
+            phantom_consecutive_intervals: 0,
+            phantom_dominant_consecutive_intervals: 0,
+            phantom_grace_intervals: 0,
             saw_transform_entity: false,
             saw_ui_entity: false,
             ui_activity_this_frame: false,
@@ -1152,10 +1320,15 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     // Frozen-world grace derives from the scenario's liveness timeout:
     // one source of truth, honoring liveness.timeout_s.
     let frozen_grace_frames = (scenario.liveness.timeout_s * scenario.tps as f32).max(1.0) as u64;
+    // Phantom-write grace: same one source of truth (liveness.timeout_s),
+    // expressed in interval units — a phantom regime must persist as
+    // long as a true freeze would before it is called out.
+    let phantom_grace_intervals = frozen_grace_frames.div_ceil(RunState::PHANTOM_INTERVAL_FRAMES);
     app.insert_resource(ScenarioResource(Arc::new(scenario.clone())));
     app.insert_resource(RunState {
         tps,
         frozen_grace_frames,
+        phantom_grace_intervals,
         ..Default::default()
     });
     app.insert_resource(RunViolations::default());
@@ -1307,6 +1480,13 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         .invariants
         .iter()
         .any(|i| i.rule == crate::enums::InvariantRule::ComponentCheck)
+        || scenario.invariants.iter().any(|i| {
+            i.rule == crate::enums::InvariantRule::NodesInBounds
+                && matches!(
+                    i.target_selector,
+                    Some(crate::enums::TargetSelector::WithComponent { .. })
+                )
+        })
     {
         app.init_resource::<crate::invariant_eval::WatchedInvariants>();
     }
@@ -1318,6 +1498,16 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         // (a few queries + a reflection walk per frame), zero cost when
         // the resource is absent.
         app.insert_resource(crate::digest::StateDigestRecorder::default());
+    }
+    // Progress-liveness recorder: driver-loop sampled (NEVER a
+    // scheduled system — see the progress module docs). Absent
+    // resource = mode 'off' = zero cost and total silence.
+    let progress_enabled = scenario.liveness.progress.mode != crate::scenario::ProgressMode::Off;
+    if progress_enabled {
+        app.insert_resource(crate::progress::ProgressRecorder::new(
+            scenario.liveness.progress.clone(),
+            tps,
+        ));
     }
 
     app.add_systems(
@@ -1453,6 +1643,12 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             // only post-update observation is guaranteed to see the
             // fully-settled frame). See invariant_eval module docs.
             crate::invariant_eval::record_component_checks(app.world_mut(), i);
+            // nodes_in_bounds + with_component: same recorder doctrine
+            // (dynamic type resolution needs &World).
+            crate::invariant_eval::record_bounds_with_component(app.world_mut(), i);
+            // Progress-surface sampling: same driver-loop recorder
+            // doctrine as the digest above.
+            crate::progress::record_progress_sample(app.world_mut(), i);
             #[cfg(feature = "lw-reader")]
             {
                 if !lw_declared_captured {
@@ -1621,6 +1817,42 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         status = PlaytestStatus::Fail;
     }
 
+    // Progress-liveness post-run audit: per-window verdicts need the
+    // FULL sample series, not any single frame (same doctrine as the
+    // component_check audit above). Escalation of
+    // progress_surface_empty under require_surface is honest: the
+    // rule is informational in the registry, and this is the one
+    // scenario field whose whole point is demanding verifiability.
+    let progress_audit = app
+        .world_mut()
+        .remove_resource::<crate::progress::ProgressRecorder>()
+        .map(crate::progress::audit_progress)
+        .map(|mut audit| {
+            for entry in audit.entries.drain(..) {
+                // Dedupe against guards already pushed (oracle_error
+                // entries can coincide with none today, but the
+                // pattern keeps the report single-voiced).
+                if !snap
+                    .iter()
+                    .any(|v| v.rule == entry.rule && v.target == entry.target)
+                {
+                    snap.push(entry);
+                }
+            }
+            audit
+        });
+    if status == PlaytestStatus::Pass
+        && snap.iter().any(|v| {
+            !is_progress_informational(
+                &v.rule,
+                scenario.strict_warnings,
+                scenario.liveness.progress.require_surface,
+            )
+        })
+    {
+        status = PlaytestStatus::Fail;
+    }
+
     // Action log: one entry per emitted input press, so a report's claim
     // of bot activity is auditable. Only key draws appear here — mouse
     // draws are not key presses.
@@ -1713,6 +1945,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         // reporting process's profile IS the game's profile.
         game_build_profile: Some(crate::discovery::surface::BuildProfile::current()),
         state_digest,
+        progress_samples: progress_audit.map(|a| a.samples).unwrap_or_default(),
         discovered_surface: None,
         injected_surface_keys: None,
         source_derived_keys: None,
@@ -1744,12 +1977,25 @@ fn is_synthetic_keyboard_bot(scenario: Option<Res<ScenarioResource>>) -> bool {
 }
 
 /// Whether a rule is informational (non-gating). When the scenario sets
-/// `strict_warnings`, log warnings escalate to gating failures.
+/// `strict_warnings`, log warnings AND progress_surface_empty escalate
+/// to gating failures (strict_warnings is the generic "everything you
+/// report, I mean it" knob).
 fn is_informational(rule: &str, strict_warnings: bool) -> bool {
-    if strict_warnings && rule == "log_warn" {
+    if strict_warnings && (rule == "log_warn" || rule == "progress_surface_empty") {
         return false;
     }
     // Delegate to the registry-derived classification so the two cannot
-    // drift (currently only log_warn is informational).
+    // drift (see Rule::is_informational for the member list).
     Rule::from_name(rule).is_some_and(rules::Rule::is_informational)
+}
+
+/// Whether a rule stays non-gating when BOTH escalation knobs are
+/// considered: `strict_warnings` (generic) and
+/// `liveness.progress.require_surface` (progress-specific — set when
+/// the scenario's purpose requires a verifiable progress surface).
+fn is_progress_informational(rule: &str, strict_warnings: bool, require_surface: bool) -> bool {
+    if require_surface && rule == "progress_surface_empty" {
+        return false;
+    }
+    is_informational(rule, strict_warnings)
 }

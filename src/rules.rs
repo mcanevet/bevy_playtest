@@ -59,6 +59,8 @@ impl Rule {
             Self::VacuousRun => "Nothing was ever observable: no entities to check and no inputs emitted — the run proves nothing about the game.",
             Self::VacuousInvariant => "An invariant matched zero entities; the check proves nothing until there is something to check.",
             Self::ReplayDivergence => "Same scenario + seed run twice must produce identical per-frame fingerprints; divergence means hidden nondeterminism (wall clock, unseeded RNG, unordered iteration).",
+            Self::StalledProgress => "A churning world is not a progressing one: the frame loop keeps ticking with no inputs buffered and no observable game-state surface change over a whole window — the world is spinning without doing anything.",
+            Self::ProgressSurfaceEmpty => "No game state was verifiable at all during progress monitoring (no reflected game types and no progress markers/resources in scope); progress cannot be assessed. Informational by default — escalate with strict_warnings or progress.require_surface.",
             Self::OracleError => "An oracle itself errored while evaluating (infrastructure failure, not a game bug).",
             Self::ScenarioError => "The scenario itself failed (rejected config) rather than the game misbehaving.",
         }
@@ -70,7 +72,11 @@ impl Rule {
     pub fn is_informational(self) -> bool {
         matches!(
             self,
-            Self::LogWarn | Self::LogCaptureLost | Self::LogBridgeLost | Self::LogLevelTampered
+            Self::LogWarn
+                | Self::LogCaptureLost
+                | Self::LogBridgeLost
+                | Self::LogLevelTampered
+                | Self::ProgressSurfaceEmpty
         )
     }
 }
@@ -96,6 +102,10 @@ declare_rules! {
 
     // Verification depth.
     ReplayDivergence => "replay_divergence",
+
+    // Progress-liveness oracle (progress.rs): a churning-but-dead world.
+    StalledProgress => "stalled_progress",
+    ProgressSurfaceEmpty => "progress_surface_empty",
 
     // Infrastructure errors
     OracleError => "oracle_error",
