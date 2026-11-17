@@ -672,6 +672,11 @@ impl DiscoveredSurface {
                 self.effective_key_count(),
                 self.confidence.as_str()
             )),
+            // `stepping` is oracle-side evidence, never part of the
+            // surface-derived annotation: the merge in
+            // `annotate_frozen_world_with_surface` preserves an
+            // oracle-set value and never writes one.
+            stepping: None,
         }
     }
 
@@ -741,6 +746,16 @@ pub struct ViolationMeta {
     pub pruned_devices: Option<Vec<String>>,
     /// One-line context for humans skimming JSON.
     pub note: Option<String>,
+    /// `frozen_world` only: whether the broadened state digest kept
+    /// changing through the silent streak (`Some(true)` — the sim was
+    /// demonstrably stepping but nothing visual changed; `Some(false)`
+    /// — the digest was flat too, corroborating a true freeze;
+    /// `None` — no digest was recorded, so stepping is UNKNOWN and
+    /// the detail keeps the legacy "soft-lock?" wording). Set by the
+    /// oracle at report time, preserved (never overwritten) by the
+    /// battery's discovery annotation.
+    #[serde(default)]
+    pub stepping: Option<bool>,
 }
 
 #[cfg(test)]
@@ -957,6 +972,7 @@ mod tests {
                 probed_keys_total: Some(54),
                 pruned_devices: Some(vec!["gamepad".to_string()]),
                 note: Some("probed 54 keys, 3 effective".to_string()),
+                stepping: Some(true),
             }),
         };
         let json = serde_json::to_string(&entry).unwrap();
@@ -1062,6 +1078,9 @@ mod tests {
                 probed_keys_total: Some(99),
                 pruned_devices: None,
                 note: Some("hand-written".to_string()),
+                // Oracle-set stepping evidence must SURVIVE the
+                // discovery annotation (merge, not overwrite)…
+                stepping: Some(true),
             }),
         }];
         report.discovered_surface = Some(sample_surface());
@@ -1074,6 +1093,12 @@ mod tests {
                 .unwrap()
                 .probed_keys_total,
             Some(99)
+        );
+        // …and oracle-set stepping evidence survives the merge too.
+        assert_eq!(
+            report.violations[0].meta.as_ref().unwrap().stepping,
+            Some(true),
+            "discovery annotation must not clobber oracle stepping evidence"
         );
     }
 

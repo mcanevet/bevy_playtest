@@ -877,9 +877,20 @@ fn frame_timing_oracle_system(mut state: ResMut<RunState>, time: Res<Time>) {
 /// Needs no marker: "anything changed" is the liveness evidence.
 ///
 /// Runs after the liveness watchers so same-frame activity is counted.
+///
+/// Detail refinement: a visually-silent streak is not necessarily a
+/// soft-lock. When the broadened state digest ([`crate::digest`]) was
+/// recorded AND kept changing through the streak (some reflected game
+/// resource mutated, or entities spawned/despawned), the sim was
+/// demonstrably stepping and the detail says so — a "soft-lock?" there
+/// sends the developer hunting a deadlock that does not exist
+/// (field-report case: a match clock ticking in a resource while the
+/// presenter never writes Transform/UI). Without digest evidence the
+/// honest answer is the legacy "soft-lock?" — the oracle cannot know.
 fn frozen_world_oracle_system(
     mut state: ResMut<RunState>,
     mut violations: ResMut<RunViolations>,
+    digest: Option<Res<crate::digest::StateDigestRecorder>>,
     q: Query<(), Changed<Transform>>,
     q_all: Query<(), With<Transform>>,
 ) {
@@ -901,12 +912,86 @@ fn frozen_world_oracle_system(
         } else {
             "no Transform change"
         };
-        violations.0.report(
-            Rule::FrozenWorld.name(),
-            "world",
-            format!("{watched} for {} frames — soft-lock?", state.frozen_frames),
-            state.frame,
-        );
+        // Stepping evidence (tri-state): did the broadened state
+        // digest keep changing across the JUST-ENDED streak? Frame
+        // alignment: the digest recorder (a driver-loop recorder,
+        // invoked after `app.update()` each tick) has, at report tick
+        // `frame`, recorded digests for frames 0..=frame-1. Each pair
+        // `(d[k-1], d[k])` differs iff digest-visible state changed
+        // during tick k. Which ticks are "silent" is decided by THIS
+        // oracle's `Changed<Transform>` view: if the game's mutating
+        // system runs BEFORE the oracle in Update, the final active
+        // tick's change is visible that same tick and the window
+        // (`start = len - frozen_frames`, the streak being
+        // `frozen_frames` ticks long) starts at the digest whose
+        // pair attributes to the FIRST silent tick — genuine stepping
+        // evidence. If the game's system runs AFTER the oracle, the
+        // final mutation is only visible NEXT tick, the streak starts
+        // one tick later, and the change itself sits in the boundary
+        // pair that the window EXCLUDES — under-claimed (safe: refusal
+        // over silence), never fabricated. In both alignments the
+        // window contains no pair that attributes to a tick the
+        // oracle counted active; starting one digest FURTHER back is
+        // what would fabricate "stepping" from pre-streak activity.
+        // Refusals (fail-open honesty): a `stop_after` cutoff that
+        // stopped recording before this tick, a too-short window
+        // (< 2 comparable digests), and a frame counter that cannot
+        // be represented on this target (32-bit `usize`) all yield
+        // NO evidence rather than a guess.
+        let stepping = digest.as_deref().and_then(|rec| {
+            let frame = usize::try_from(state.frame).ok()?;
+            let frozen = usize::try_from(state.frozen_frames).ok()?;
+            let start = rec.digests.len().saturating_sub(frozen);
+            (rec.digests.len() >= frame && rec.digests.len() - start >= 2).then(|| {
+                rec.digests[start..]
+                    .windows(2)
+                    .any(|pair| pair[0].hash != pair[1].hash)
+            })
+        });
+        // Tri-state detail: PROVEN stepping (the digest kept changing
+        // through the visually-silent streak) gets the refined wording —
+        // a field-reported match-clock tick proved the sim ran while
+        // "soft-lock?" sent its developer hunting a deadlock that did
+        // not exist. A FLAT digest is weaker evidence than it looks:
+        // the digest covers Transforms, spawns, and REFLECTED
+        // RESOURCES (plus UiTransforms under the `ui-liveness`
+        // feature), but not e.g. sprite-color or material
+        // mutations — so it corroborates nothing and the detail keeps
+        // the legacy "soft-lock?" wording, with `stepping: false` in
+        // `_meta` for machines. No recorded digest ⇒ unknown ⇒ legacy
+        // wording, no meta (the battery's discovery annotation can
+        // still attach, it only fills `meta == None`).
+        let detail = match stepping {
+            Some(true) => format!(
+                "{watched} for {} frames — stepping but visually silent: \
+                 the state digest kept changing while nothing moved, so the \
+                 sim is running; presenter layers must write Transform/UI \
+                 every frame to be observable",
+                state.frozen_frames
+            ),
+            _ => format!("{watched} for {} frames — soft-lock?", state.frozen_frames),
+        };
+        violations
+            .0
+            .report(Rule::FrozenWorld.name(), "world", detail, state.frame);
+        // Attach `_meta.stepping` alongside the verbatim detail when
+        // (and only when) digest evidence exists; anchored at the
+        // FIRST crossing so the entry stays its own reproduction
+        // anchor (later crossings only bump count/last_frame).
+        if stepping.is_some() {
+            if let Some(entry) = violations
+                .0
+                .entries
+                .get_mut(&(Rule::FrozenWorld.name().to_string(), "world".to_string()))
+            {
+                if entry.meta.is_none() {
+                    entry.meta = Some(crate::discovery::surface::ViolationMeta {
+                        stepping,
+                        ..Default::default()
+                    });
+                }
+            }
+        }
     }
 }
 

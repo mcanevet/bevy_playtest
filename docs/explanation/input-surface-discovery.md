@@ -1201,8 +1201,9 @@ When discovery runs and finds "frozen_world" violations:
 {
   "rule": "frozen_world",
   "target": "world",
-  "detail": "no Transform change for 180 frames — soft-lock?",
+  "detail": "no Transform or UI change for 180 frames — stepping but visually silent: the state digest kept changing while nothing moved, so the sim is running; presenter layers must write Transform/UI every frame to be observable",
   "_meta": {
+    "stepping": true,
     "probed_keys_effective": 3,    // Keys that caused divergence
     "probed_keys_total": 28,       // Total probed (Exact-confidence keys
                                    // only; control key excluded)

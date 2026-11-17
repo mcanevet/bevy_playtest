@@ -98,7 +98,9 @@ these oracles watch:
   tighten per-axis)
 - **Frozen world** — no entity movement (or UI change, under
   `ui-liveness`) across the liveness grace window → Fail (catches
-  soft-locks)
+  soft-locks; with `record_digest: true` a silent-but-stepping world
+  is named "visually silent" instead — see
+  [Why liveness is time-boxed](docs/explanation/why-liveness-is-time-boxed.md))
 - **Panic capture** — crash → Crash
 - **Log capture** — ERROR → Fail, WARN → informational
 - **Vacuity guard** — if no entity with a `Transform` (or, under
