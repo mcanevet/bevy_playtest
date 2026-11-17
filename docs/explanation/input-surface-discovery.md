@@ -156,13 +156,16 @@ The enumeration feeds back into driving, not just reporting: the
 chaos mouse bot interleaves — 50% of clicks target the CURRENT
 snapshot's widget centers (mirrored into `UiClickTargets` on every
 recapture, converted physical→logical via the window's scale
-factor, so a menu opened mid-run becomes clickable and a despawned
-widget is never aimed at), 50% keep the quantized-random window sweep, routed by the
-single position draw's lowest bit so replays stay byte-identical.
-The split is deliberate: targeted clicks exercise declared
-interactables so pointer-driven games look alive, but the random
-half keeps exploring undeclared regions — counts are never a
-license to prune probe surfaces.
+factor — freshness is eventual, not instant: between recaptures,
+up to one interval (~0.5s), the bot lags the world, aiming at the
+previous snapshot's centers, so a newly opened menu only joins its
+targets on the next recapture and a despawned widget's old
+position is briefly aimable), 50% keep the quantized-random window
+sweep, routed by the single position draw's lowest bit so replays
+stay byte-identical. The split is deliberate: targeted clicks
+exercise declared interactables so pointer-driven games look
+alive, but the random half keeps exploring undeclared regions —
+counts are never a license to prune probe surfaces.
 
 ## Discovery-Driven Scenario Injection
 

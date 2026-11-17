@@ -573,10 +573,14 @@ impl CursorInputResource {
 
 /// Enumerated UI click targets for the chaos mouse bot
 /// (`ui-surface` feature): window-space PHYSICAL-pixel centers of
-/// declared interactables, captured once after the first frame by
-/// the driver loop (never a scheduled system — same census /
-/// static-scan neutrality doctrine as the lw capture; see
-/// `driver.rs`'s recorder comments). The resource itself is
+/// declared interactables, captured after the first frame and
+/// RE-MIRRORED on every periodic recapture by the driver loop
+/// (never a scheduled system — same census / static-scan neutrality
+/// doctrine as the lw capture; see `driver.rs`'s recorder
+/// comments). Between recaptures (up to one interval, ~0.5s) the
+/// centers lag the world: the bot can briefly aim at a moved or
+/// despawned widget's old position and cannot yet aim at a newly
+/// opened one. The resource itself is
 /// unconditional so the bot's targeting math compiles identically
 /// in every build; feature-off builds simply leave `centers`
 /// empty, which keeps the legacy targeting path byte-for-byte.
