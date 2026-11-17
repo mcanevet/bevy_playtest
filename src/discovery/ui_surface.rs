@@ -599,6 +599,13 @@ impl UiSurfaceTracker {
     ) {
         debug_assert!(interval > 0, "interval must be >= 1");
         let boundary = tick.is_multiple_of(interval);
+        // `is_first` is deliberately explicit even though tick 0 is a
+        // multiple of every interval (so production runs always enter
+        // the capture block there anyway): it states the first-capture
+        // contract independently of the interval math, and unit tests
+        // observe from arbitrary ticks — without the guard, a test
+        // observing from tick 1 with interval 2 would silently skip
+        // its first capture. Not a bug-fix for a live path; intent.
         let is_first = self.snapshot.is_none();
         if !boundary && !is_first {
             return;
