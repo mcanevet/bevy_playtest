@@ -97,6 +97,17 @@ where clicks bind. The grid can be disabled with a `0 × 0` plan
 (library callers) or read straight out of any draft artifact's
 `surface` block.
 
+Two more matrices ride the default plan: a mouse-MOTION probe (a
+zero-net cursor oscillation answering "does MOVEMENT matter") and
+a focus-walk probe (one scripted `Tab` at the readiness point
+answering "does FOCUS CYCLING matter"), each with its own doubled
+control pair. Both surface as `mouse_motion` / `focus_walk` entries
+— `null` effect with `Exact` confidence is a trusted negative
+("no observable change"); an inert `focus_walk` means "Tab produced
+no observable change in this run", never "the game has no focus
+system" (Bevy's `TabNavigationPlugin` is opt-in; see the explanation
+doc's Focus-Walk Probing section).
+
 One assumption to know about: cell clicks land at normalized
 positions scaled by a fixed assumed window size (1280 × 720 logical
 pixels — Bevy's default). If your game overrides its window
@@ -205,8 +216,9 @@ for finding in &outcome.surface.keys {
 - **Keyboard keys + mouse positions, tap only.** The candidate set is
   ~26 prior-likely keys plus a bounded grid of click positions
   (default 5 × 4, probed as single left-clicks at cell centers and
-  reported in `mouse_cells` with normalized coordinates);
-  mouse buttons/motion, gamepad and wheel are future probe classes.
+  reported in `mouse_cells` with normalized coordinates), plus the
+  mouse-motion and focus-walk matrices above; mouse buttons,
+  gamepad and wheel are future probe classes.
   The keyboard class is never pruned (fail-open).
 - **Two probe points.** Readiness and mid-duration. A key consumed
   only in a state neither point samples reads as inert — group

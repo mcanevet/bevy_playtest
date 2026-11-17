@@ -86,6 +86,13 @@ pub const MOUSE_MOTION_DY: f32 = 5.0;
 /// but real runtime. 30 cycles = 60 frames = 1s at 60 tps.
 pub const MOUSE_MOTION_CYCLES: u32 = 30;
 
+/// The single key the focus-walk probe injects (see
+/// [`ProbePlan::focus_walk_enable`]). `Tab` is a poison key for the
+/// BLIND chaos bot but the walker is a directed, paired, observed
+/// probe — the sanctioned exception. Spelling is canonical
+/// (`normalize_key_name` maps it to `KeyCode::Tab`).
+pub const FOCUS_WALK_KEY: &str = "Tab";
+
 /// Logical window HEIGHT mouse cell coordinates are scaled against
 /// (see [`MOUSE_CLICK_EXTENT_W_PX`]). Per-axis, deliberately: the
 /// probe children run headless without winit, so there is no real
@@ -307,6 +314,23 @@ pub struct ProbePlan {
     /// frames = one cycle). Sized to cover a meaningful share of the
     /// post-readiness span without dominating it.
     pub mouse_motion_cycles: u32,
+    /// Whether the focus-walk probe runs: a single scripted `Tab`
+    /// press at the readiness point, diffed against a doubled
+    /// focus-walk control pair. `false` disables it (tests slim the
+    /// matrix this way; the keyboard/mouse/motion matrices are
+    /// unaffected). Default ON — like the motion probe, the walker
+    /// asks a question no other matrix answers ("does focus
+    /// cycling change observable state at all").
+    ///
+    /// `Tab` is a POISON key for the BLIND chaos bot
+    /// ([`crate::discovery::source_scan::POISON_KEYS`] — a blind
+    /// press can close the very scene it exercises). The walker is
+    /// the sanctioned exception: a DIRECTED, PAIRED, OBSERVED probe.
+    /// Its finding still never reaches the chaos bot's surface —
+    /// the poison filters withhold it automatically — so probing
+    /// deliberately here buys knowledge without handing the blind
+    /// bot a loaded key.
+    pub focus_walk_enable: bool,
 }
 
 impl Default for ProbePlan {
@@ -326,6 +350,7 @@ impl Default for ProbePlan {
             mouse_motion_dx: MOUSE_MOTION_DX,
             mouse_motion_dy: MOUSE_MOTION_DY,
             mouse_motion_cycles: MOUSE_MOTION_CYCLES,
+            focus_walk_enable: true,
         }
     }
 }
@@ -435,6 +460,7 @@ impl ProbePlan {
             mouse_motion_dx: self.mouse_motion_dx,
             mouse_motion_dy: self.mouse_motion_dy,
             mouse_motion_cycles: self.mouse_motion_cycles,
+            focus_walk_enable: self.focus_walk_enable,
         })
     }
 
@@ -685,6 +711,74 @@ impl ProbePlan {
         Ok(vec![
             self.motion_probe_scenario()?,
             self.motion_control_scenario()?,
+        ])
+    }
+
+    /// The focus-walk PROBE scenario: a SUBSTITUTION pair with the
+    /// control run, differing by exactly ONE bit — the pressed key.
+    /// The probe taps a single scripted `Tab` at the readiness
+    /// point's frame where the control taps the inert control key
+    /// (each run presses exactly one key; the keyboard matrix's
+    /// pairing pattern, not an additive stack — the schema has no
+    /// zero-input bot). The paired diff answers "does advancing
+    /// keyboard focus change observable state at all".
+    ///
+    /// Forward-only by design: bevy_input_focus 0.20.1's
+    /// `handle_tab_navigation` observer reads `ButtonInput<KeyCode>`
+    /// for the Shift modifier, and the takeover's button state lags
+    /// its key events by one frame (`driver.rs`'s documented lag) —
+    /// a scripted Shift+Tab could race its own modifier. Plain Tab
+    /// has no such hazard. Multi-step walking is deliberately NOT
+    /// here: the differ-by-one-bit doctrine puts each extra Tab in
+    /// its own probe point, not one fat probe (a future knob).
+    ///
+    /// POISON doctrine: `Tab` is withheld from the BLIND chaos bot
+    /// (it can close the scene it should exercise); a directed,
+    /// paired, observed probe is the sanctioned way to learn what it
+    /// does. The finding never joins the chaos bot's keys — the
+    /// poison filters see to that.
+    pub fn focus_walk_probe_scenario(&self) -> Result<Scenario, ScenarioError> {
+        let readiness = probe_points(self.duration_s, self.tps)[0].frame;
+        let mut scenario = self.base_scenario("probe_focus_walk".to_string());
+        scenario.bot.key_presses = vec![Self::tap_press(readiness, FOCUS_WALK_KEY)];
+        validate_scenario(&scenario)?;
+        Ok(scenario)
+    }
+
+    /// The focus-walk CONTROL scenario: identical to the probe run
+    /// except the pressed key — the inert control key instead of
+    /// `Tab`, tapped at the same frame (the schema has no zero-input
+    /// bot, mirroring the motion control's rationale). Scheduled
+    /// TWICE by the flow: the pair is the walker's own determinism
+    /// gate and the first copy is the diff baseline.
+    ///
+    /// HONEST-INERT DOC: the probe asks "does a Tab press change
+    /// observable state". An inert answer means exactly that and
+    /// never more — in particular it does NOT mean "the game has no
+    /// focus system": focus cycling (bevy_input_focus 0.20.1) reacts
+    /// to Tab only when the game itself adds `TabNavigationPlugin`
+    /// (NOT part of DefaultPlugins) and spawns focusable entities
+    /// (`TabIndex`). A game with neither will read inert here and
+    /// still handle focus perfectly well through other channels
+    /// (pointer clicks set focus without any Tab involvement).
+    pub fn focus_walk_control_scenario(&self) -> Result<Scenario, ScenarioError> {
+        let readiness = probe_points(self.duration_s, self.tps)[0].frame;
+        let mut scenario = self.base_scenario("probe_focus_walk_control".to_string());
+        scenario.bot.key_presses = vec![Self::tap_press(readiness, &self.control_key)];
+        validate_scenario(&scenario)?;
+        Ok(scenario)
+    }
+
+    /// The focus-walk probe + control scenarios (control NOT doubled
+    /// here; the pool's job builder appends the second copy). Empty
+    /// when the focus-walk probe is disabled.
+    pub fn focus_walk_runs(&self) -> Result<Vec<Scenario>, ScenarioError> {
+        if !self.focus_walk_enable {
+            return Ok(Vec::new());
+        }
+        Ok(vec![
+            self.focus_walk_probe_scenario()?,
+            self.focus_walk_control_scenario()?,
         ])
     }
 

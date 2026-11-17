@@ -68,6 +68,9 @@ fn keyboard_only(keys: &[&str]) -> ProbePlan {
         // Motion probes stay default-ON in production plans; this
         // helper pins the KEYBOARD layer, so slim it away.
         mouse_motion_enable: false,
+        // Same for the focus walker: this helper pins the keyboard
+        // matrix, so the walk jobs are slimmed away too.
+        focus_walk_enable: false,
         ..ProbePlan::default()
     }
 }
@@ -106,6 +109,10 @@ struct SplitKinds {
     motion_probe: Option<PlaytestReport>,
     /// Motion control copies, in input order (pair-wise: a/b).
     motion_controls: Vec<PlaytestReport>,
+    /// Focus-walk probe, if the plan enables it.
+    focus_walk_probe: Option<PlaytestReport>,
+    /// Focus-walk control copies, in input order (pair-wise: a/b).
+    focus_walk_controls: Vec<PlaytestReport>,
 }
 
 fn split_kinds(results: &Results) -> SplitKinds {
@@ -116,6 +123,8 @@ fn split_kinds(results: &Results) -> SplitKinds {
     let mut mouse_controls = vec![];
     let mut motion_probe = None;
     let mut motion_controls = vec![];
+    let mut focus_walk_probe = None;
+    let mut focus_walk_controls = vec![];
     for r in results {
         let outcome = r.as_ref().expect("job must succeed");
         match &outcome.kind {
@@ -137,6 +146,12 @@ fn split_kinds(results: &Results) -> SplitKinds {
             ProbeJobKind::MotionControl { .. } => {
                 motion_controls.push(outcome.report.clone());
             }
+            ProbeJobKind::FocusWalkProbe { .. } => {
+                focus_walk_probe = Some(outcome.report.clone());
+            }
+            ProbeJobKind::FocusWalkControl { .. } => {
+                focus_walk_controls.push(outcome.report.clone());
+            }
         }
     }
     SplitKinds {
@@ -146,6 +161,8 @@ fn split_kinds(results: &Results) -> SplitKinds {
         mouse_controls,
         motion_probe,
         motion_controls,
+        focus_walk_probe,
+        focus_walk_controls,
     }
 }
 
@@ -253,8 +270,9 @@ fn mouse_matrix_reaches_pointer_games_and_gates_determinism() {
     let jobs = build_job_list(&plan).expect("job list");
     // 1 key × 2 points = 2 probes + 2 points × 2 = 4 key controls,
     // then 3×2 = 6 cells + 2 mouse controls, then 1 motion probe +
-    // 2 motion controls (default plan keeps the motion layer on).
-    assert_eq!(jobs.len(), 2 + 4 + 6 + 2 + 1 + 2);
+    // 2 motion controls, then 1 focus-walk probe + 2 focus-walk
+    // controls (default plan keeps the motion and walker layers on).
+    assert_eq!(jobs.len(), 2 + 4 + 6 + 2 + 1 + 2 + 1 + 2);
 
     let config = ProbePoolConfig::new(picking_binary());
     let results = run_jobs(&config, &jobs);
@@ -310,6 +328,38 @@ fn mouse_matrix_reaches_pointer_games_and_gates_determinism() {
         digest_series(&split.motion_controls[0]),
         "bevy_picking consumes wrapped CursorMoved — the motion probe \
          must find the hover-state effect on the picking game"
+    );
+
+    // Focus-walk layer rides the same run. Three pins:
+    //
+    // 1. Determinism: the doubled focus-walk control pair must be
+    //    byte-identical (the walker's own gate — same doctrine as
+    //    the mouse and motion gates above).
+    // 2. HONEST INERTNESS: the picking game never adds
+    //    `TabNavigationPlugin` (it is NOT in DefaultPlugins), so a
+    //    scripted Tab press must leave the world byte-identical to
+    //    the focus-walk control. Asserting divergence here would be
+    //    factually wrong; asserting equality pins the honest-inert
+    //    verdict at the pool layer. The POSITIVE walker control
+    //    lives in tests/discovery_flow.rs against
+    //    `takeover_demo_focus` (the tab-navigation consumer).
+    // 3. Presence: the walker ran at all (default-on knob).
+    assert_eq!(split.focus_walk_controls.len(), 2);
+    assert_eq!(
+        digest_series(&split.focus_walk_controls[0]),
+        digest_series(&split.focus_walk_controls[1]),
+        "focus-walk double-control determinism gate FAILED"
+    );
+    let walk_probe = split
+        .focus_walk_probe
+        .as_ref()
+        .expect("the focus-walk probe ran (default-on knob)");
+    assert_eq!(
+        digest_series(walk_probe),
+        digest_series(&split.focus_walk_controls[0]),
+        "the picking game binds no tab navigation — the walker must \
+         read honestly INERT (Tab produced no observable change), and \
+         the discovery_flow focus-walk tests carry the positive control"
     );
 
     // Every cell probe on this game is BOUND (fullscreen node): it
@@ -376,6 +426,30 @@ fn disabled_mouse_grid_contributes_no_jobs() {
             ProbeJobKind::MouseCell { .. } | ProbeJobKind::MouseControl { .. }
         )),
         "mouse jobs must be appended after the keyboard matrix"
+    );
+
+    // Walker jobs ride the default plan too: one probe plus the
+    // doubled control pair, appended AFTER the mouse matrix (same
+    // stable-staging doctrine), and NEVER present in a
+    // walker-disabled plan.
+    assert_eq!(
+        mouse_count(&|k| matches!(k, ProbeJobKind::FocusWalkProbe { .. })),
+        1
+    );
+    assert_eq!(
+        mouse_count(&|k| matches!(k, ProbeJobKind::FocusWalkControl { .. })),
+        2,
+        "focus-walk control is doubled (its own determinism gate)"
+    );
+    let first_walk = jobs
+        .iter()
+        .position(|j| matches!(j.kind, ProbeJobKind::FocusWalkProbe { .. }))
+        .expect("walker jobs exist on the default plan");
+    assert!(
+        jobs[..first_walk]
+            .iter()
+            .all(|j| !matches!(j.kind, ProbeJobKind::FocusWalkProbe { .. })),
+        "the walker's probe must be staged after the keyboard and mouse matrices"
     );
 }
 

@@ -16,8 +16,11 @@
 //! `keys`/`mouse_buttons` lists — nothing existing is removed or
 //! renamed; every existing consumer, cache entry and test keeps
 //! working. The new fields are additive, default-empty and
-//! skip-serialized when empty, so old JSON never grows new keys and
-//! new JSON stays readable by old consumers. `to_entries` projects
+//! skip-serialized when empty (scoped to the IR layer's fields;
+//! whole-matrix findings like `mouse_motion`/`focus_walk` instead
+//! serialize as `null` when absent via `#[serde(default)]` — same
+//! additive-promotion outcome: old JSON never grows new keys and
+//! new JSON stays readable by old consumers). `to_entries` projects
 //! the legacy shape into entries for D1-c consumers; the projection
 //! is lossy by design (entries are richer; a reverse mapping would
 //! only ever be approximate).
@@ -433,6 +436,35 @@ pub struct MouseMotionFinding {
     pub provenance: ProvenanceGrade,
 }
 
+/// The focus-walk probe finding: a single scripted `Tab` press at
+/// the readiness point, diffed against a doubled focus-walk control
+/// pair (same inert-key baseline, no Tab). Answers "does advancing
+/// keyboard focus change observable state AT ALL".
+///
+/// HONEST SCOPE (docs must not lie): an inert `effect` means "a Tab
+/// press produced no observable state change in this run" — NOT
+/// "the game has no focus system". bevy_input_focus 0.20.1 reacts
+/// to Tab only when the game itself adds `TabNavigationPlugin`
+/// (NOT part of DefaultPlugins) and spawns focusable entities, so
+/// a game can read inert here and still manage focus through other
+/// channels (e.g. pointer clicks setting focus directly).
+///
+/// Confidence vocabulary reuses [`KeyConfidence`]: `Exact` =
+/// observed divergence vs the focus-walk control; `Unclassified` =
+/// coverage-untrusted inert verdict (asymmetric or short-span
+/// probe/control pair). `Inferred` is never assigned.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FocusWalkFinding {
+    /// Observed effect (first divergence vs the focus-walk control
+    /// trace), or `None` if the probe matched the control.
+    pub effect: Option<Effect>,
+    /// How the verdict was earned (see the type docs).
+    pub confidence: KeyConfidence,
+    /// Derivation record: the differential probe sweep that
+    /// injected the Tab press (`probe_verified`).
+    pub provenance: ProvenanceGrade,
+}
+
 /// The discovered input surface of one game (per
 /// `docs/explanation/input-surface-discovery.md`, Report
 /// Integration section).
@@ -456,6 +488,15 @@ pub struct DiscoveredSurface {
     /// [`MouseMotionFinding`] OBJECT instead of a bare effect.
     #[serde(default)]
     pub mouse_motion: Option<MouseMotionFinding>,
+    /// Focus-walk probe finding, if the walker ran: whether a
+    /// single scripted `Tab` press changed observable state at the
+    /// readiness point. See [`FocusWalkFinding`] for the honest
+    /// scope of an inert verdict.
+    ///
+    /// `#[serde(default)]` + additive promotion, same pattern as
+    /// `mouse_motion`: pre-walker artifacts deserialize unchanged.
+    #[serde(default)]
+    pub focus_walk: Option<FocusWalkFinding>,
     /// Wheel-probe effect, if the wheel was probed.
     pub wheel: Option<Effect>,
     /// Gamepad buttons probed, same shape as `keys`.

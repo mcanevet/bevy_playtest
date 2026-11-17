@@ -212,6 +212,12 @@ pub fn plan_fingerprint(
     acc.push_str(&mouse.motion_dy.to_bits().to_string());
     acc.push('\u{1}');
     acc.push_str(&mouse.motion_cycles.to_string());
+    acc.push('\u{1}');
+    // Focus-walk knob: enabling/disabling the walker changes the
+    // probe runs (and thus the cached surface) — same aliasing
+    // hazard the mouse knobs guard against.
+    acc.push_str(&mouse.focus_walk_enable.to_string());
+    acc.push('\u{1}');
     hex16(&fnv1a(&acc))
 }
 
@@ -239,6 +245,11 @@ pub struct MouseFingerprint {
     pub motion_dy: f32,
     /// Motion oscillation cycles per run.
     pub motion_cycles: u32,
+    /// Whether the focus-walk probe runs (a single scripted Tab
+    /// press at the readiness point, doubled control pair). Threads
+    /// into the fingerprint: enabling/disabling changes the probe
+    /// runs and thus the cached surface.
+    pub focus_walk_enable: bool,
 }
 
 impl MouseFingerprint {
@@ -258,6 +269,7 @@ impl MouseFingerprint {
             motion_dx: plan.mouse_motion_dx,
             motion_dy: plan.mouse_motion_dy,
             motion_cycles: plan.mouse_motion_cycles,
+            focus_walk_enable: plan.focus_walk_enable,
         }
     }
 }
@@ -1268,6 +1280,7 @@ mod tests {
             motion_dx: 10.0,
             motion_dy: 5.0,
             motion_cycles: 30,
+            focus_walk_enable: true,
         };
         let fp = |mouse: MouseFingerprint| {
             plan_fingerprint(&["Digit1".to_string()], "KeyQ", 60, 3.0, mouse)
@@ -1363,6 +1376,14 @@ mod tests {
             }),
             "motion cycles"
         );
+        assert_ne!(
+            a,
+            fp(MouseFingerprint {
+                focus_walk_enable: false,
+                ..base
+            }),
+            "focus walk off"
+        );
         // Identical inputs are byte-stable (cross-process caching).
         assert_eq!(a, fp(base));
     }
@@ -1385,6 +1406,7 @@ mod tests {
             mouse_motion_dx: 20.0,
             mouse_motion_dy: 10.0,
             mouse_motion_cycles: 15,
+            focus_walk_enable: false,
             ..ProbePlan::default()
         };
         let extracted = MouseFingerprint::from_plan(&plan);
@@ -1398,6 +1420,7 @@ mod tests {
         assert_eq!(extracted.motion_dx, 20.0);
         assert_eq!(extracted.motion_dy, 10.0);
         assert_eq!(extracted.motion_cycles, 15);
+        assert!(!extracted.focus_walk_enable);
         // Disabled plans extract as fully-disabled fingerprints.
         let off = ProbePlan {
             mouse_grid_cols: 0,
