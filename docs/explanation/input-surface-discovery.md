@@ -267,7 +267,7 @@ backbone is a FALLBACK tier, not an always-on floor:
   exactly the surface that existed before the scan;
 - either arm is recorded in the layering notes; the battery's
   report, though, stamps notes only for the scan-hit arm (a
-  set-equal-to-backbone run is indistinguishable from the default
+  set-equal-to-backbone run keeps the declared default surface
   and stays unstamped — the `None` honesty contract), so the
   fallback arm's note is visible only to direct callers;
 - a short POISON list (`Escape`, `Tab`) is removed — the two keys
