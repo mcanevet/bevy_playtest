@@ -15,8 +15,9 @@
 //!   IS the fixture crate, so the scan walks this game's `src/`)
 //!   finds `KeyCode::Digit1`/`Digit2` and REPLACES the WASD/arrows
 //!   default with them — the ~200 chaos presses concentrate on the
-//!   keys this game actually reads, and the run goes clean out of
-//!   the box.
+//!   keys this game actually reads, and the input-layer verdicts go
+//!   clean out of the box (the progress-surface verdict is pinned
+//!   separately, see below).
 //! - `playtest_battery_injected`: `BEVY_PLAYTEST_DISCOVER_INJECT=1`
 //!   (implies discovery). The parent probes the input surface first
 //!   (cache-first; the cache lives in `.bevy_playtest/cache/`,
@@ -56,17 +57,19 @@ mod playtests {
         // ZERO config: no env vars, no scenario file. If this test
         // fails with a `frozen_world` finding, the source-derived
         // layering regressed (or someone renamed this game's
-        // Digit1/Digit2 bindings).
-        let report = bevy_playtest::battery::run(
+        // Digit1/Digit2 bindings). Golden verdict besides that: the
+        // stock demo exposes no verifiable progress surface, so the
+        // battery's honest finding (`progress_surface_empty`) is
+        // pinned present and ALONE — a re-greening is an oracle
+        // regression, any extra finding is a misfire.
+        let report = bevy_playtest::battery::run_and_expect_findings(
             env!("CARGO_BIN_EXE_fixture_loading_screen"),
             bevy_playtest::battery::BUILTIN_BATTERY,
-        )
-        .expect("battery run with the zero-config source scan");
-        assert_eq!(
-            report.status,
-            bevy_playtest::enums::PlaytestStatus::Pass,
-            "{}",
-            report.findings_summary(bevy_playtest::battery::BUILTIN_BATTERY)
+            &[(
+                "progress_surface_empty",
+                "run",
+                "no verifiable progress surface",
+            )],
         );
         // And pin the replacement itself, not just the outcome: the
         // game cites exactly Digit1/Digit2, so the scan-derived
@@ -86,9 +89,17 @@ mod playtests {
     #[test]
     fn playtest_battery_injected() {
         let _inject = InjectVarGuard::set();
-        bevy_playtest::battery::run_and_expect_clean(
+        // Same golden verdict as the zero-config run (see there);
+        // the discovery layer changes the key surface, not the
+        // progress surface.
+        bevy_playtest::battery::run_and_expect_findings(
             env!("CARGO_BIN_EXE_fixture_loading_screen"),
             bevy_playtest::battery::BUILTIN_BATTERY,
+            &[(
+                "progress_surface_empty",
+                "run",
+                "no verifiable progress surface",
+            )],
         );
     }
 }

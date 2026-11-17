@@ -499,12 +499,22 @@ struct Other;
 
 /// Two entities take turns crossing the threshold, never together:
 /// A is high on even frames, B on odd frames. Individually each
-/// satisfies "z > 1.0" infinitely often; never simultaneously.
+/// satisfies "z > 1.0" infinitely often; never simultaneously. A small
+/// bounded triangle-wave baseline keeps the transform VALUES evolving
+/// every frame — without it the pair is a pure two-state oscillator, a
+/// churning-but-dead world the frozen-world phantom detector correctly
+/// flags (see tests/progress_liveness.rs) — while staying far from the
+/// 1.0 threshold (high ≥ 2.0, low ≤ 0.6, never together).
 fn alternating_pair(mut q: Query<&mut Transform>, mut frame: bevy_ecs::prelude::Local<u64>) {
     let f = *frame;
     *frame += 1;
+    let baseline = (f % 60) as f32 * 0.01;
     for (i, mut t) in q.iter_mut().enumerate() {
-        t.translation.z = if (f % 2) == (i as u64 % 2) { 2.0 } else { 0.0 };
+        t.translation.z = if (f % 2) == (i as u64 % 2) {
+            2.0 + baseline
+        } else {
+            baseline
+        };
     }
 }
 
@@ -853,17 +863,169 @@ fn component_check_rejects_bounds_fields() {
     assert!(err.to_string().contains("min_x/max_x"));
 }
 
+// ---------------------------------------------------------------------------
+// nodes_in_bounds + with_component (M2): the selector now scopes the
+// bounds check to entities carrying a named marker component. Before
+// this change the combination was rejected at validation
+// (`unreachable!` panic risk otherwise); it is now a first-class,
+// driver-loop-recorder-evaluated invariant.
+// ---------------------------------------------------------------------------
+
+/// Moves MARKER-carrying entities strictly OUT of x bounds, everyone
+/// else stays put. Only the marker scope is watched; the pass/fail
+/// hinge is exactly "which entities are in scope".
+fn escape_x(mut q: Query<&mut Transform, With<Marker>>) {
+    for mut t in q.iter_mut() {
+        t.translation.x -= 0.5;
+    }
+}
+
 #[test]
-fn nodes_in_bounds_with_component_selector_is_rejected() {
-    let scenario = scenario_with_invariant(
-        r#"
+fn nodes_in_bounds_with_component_selector_is_accepted() {
+    let _slot = common::run_slot();
+    let mut app = App::new();
+    app.register_type::<Marker>();
+    app.register_type::<Transform>();
+    app.add_systems(Update, escape_x);
+    // In-scope entity: carries the marker, escapes x bounds.
+    app.world_mut()
+        .spawn((Marker, Transform::from_xyz(0.0, 1.0, 0.0)));
+    // Out-of-scope control: escapes too (different component, no
+    // Marker) — must NOT be counted against the scoped invariant.
+    app.world_mut()
+        .spawn((Other, Transform::from_xyz(0.0, 1.0, 0.0)));
+    let report = run_scenario(
+        &mut app,
+        &scenario_with_invariant(
+            r#"
     "name": "selected_bounds",
     "rule": "nodes_in_bounds",
     "target_selector": {"with_component": {"name": "Marker"}},
     "min_x": -10.0, "max_x": 10.0"#,
+        ),
+    )
+    .unwrap();
+    let entry = report
+        .violations
+        .iter()
+        .find(|v| v.rule == "nodes_in_bounds")
+        .expect("scoped bounds violation must fire");
+    assert!(entry.detail.contains("via with_component 'Marker'"));
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
+}
+
+/// Scope correctly EXCLUDES matching entities that are in bounds, and
+/// correctly EXCLUDES non-matching entities even when they violate:
+/// a fully-holding scoped invariant reports no violation and — since
+/// it matched entities across the run — is not vacuous either.
+#[test]
+fn scoped_bounds_hold_when_all_marked_entities_stay_inside() {
+    let _slot = common::run_slot();
+    let mut app = App::new();
+    app.register_type::<Marker>();
+    app.register_type::<Transform>();
+    app.register_type::<Other>();
+    app.add_systems(Update, advance_z); // gentle forward drift, in bounds
+    app.world_mut()
+        .spawn((Marker, Transform::from_xyz(0.0, 1.0, 0.0)));
+    // Non-marker entity violates the bounds ALL RUN (far out on x).
+    app.world_mut()
+        .spawn((Other, Transform::from_xyz(500.0, 1.0, 0.0)));
+    let report = run_scenario(
+        &mut app,
+        &scenario_with_invariant(
+            r#"
+    "name": "selected_bounds",
+    "rule": "nodes_in_bounds",
+    "target_selector": {"with_component": {"name": "Marker"}},
+    "min_x": -10.0, "max_x": 10.0"#,
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        report.status,
+        bevy_playtest::enums::PlaytestStatus::Pass,
+        "violations: {:?}",
+        report
+            .violations
+            .iter()
+            .map(|v| (v.rule.clone(), v.detail.clone()))
+            .collect::<Vec<_>>()
     );
-    let err = bevy_playtest::scenario::validate_scenario(&scenario).unwrap_err();
-    assert!(err.to_string().contains("with_component"));
+}
+
+/// Zero matching entities across the whole run: the scoped bounds
+/// invariant proves nothing and the audit must say so
+/// (vacuous_invariant), mirroring the component_check doctrine.
+#[test]
+fn scoped_bounds_with_zero_matches_is_vacuous() {
+    let _slot = common::run_slot();
+    let mut app = App::new();
+    app.register_type::<Marker>();
+    app.register_type::<Transform>();
+    app.add_systems(Update, advance_z);
+    // Only a non-marker entity: it escapes, but nobody watches it.
+    app.world_mut()
+        .spawn((Other, Transform::from_xyz(0.0, 1.0, 0.0)));
+    let report = run_scenario(
+        &mut app,
+        &scenario_with_invariant(
+            r#"
+    "name": "ghost_bounds",
+    "rule": "nodes_in_bounds",
+    "target_selector": {"with_component": {"name": "Marker"}},
+    "min_x": -10.0, "max_x": 10.0"#,
+        ),
+    )
+    .unwrap();
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|v| v.rule == "vacuous_invariant" && v.target == "ghost_bounds"),
+        "expected vacuous_invariant for ghost_bounds among {:?}",
+        report
+            .violations
+            .iter()
+            .map(|v| v.rule.clone())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// Unknown component name: loud oracle_error, blamed as an authoring
+/// problem (not vacuous, not a bounds violation).
+#[test]
+fn scoped_bounds_unknown_name_yields_oracle_error() {
+    let _slot = common::run_slot();
+    let mut app = App::new();
+    app.register_type::<Marker>();
+    app.register_type::<Transform>();
+    app.add_systems(Update, advance_z);
+    app.world_mut()
+        .spawn((Marker, Transform::from_xyz(0.0, 1.0, 0.0)));
+    let report = run_scenario(
+        &mut app,
+        &scenario_with_invariant(
+            r#"
+    "name": "typo_bounds",
+    "rule": "nodes_in_bounds",
+    "target_selector": {"with_component": {"name": "NoSuchComponent"}},
+    "min_x": -10.0, "max_x": 10.0"#,
+        ),
+    )
+    .unwrap();
+    let entry = report
+        .violations
+        .iter()
+        .find(|v| v.rule == "oracle_error" && v.target == "typo_bounds")
+        .expect("oracle_error for the unknown component name");
+    assert!(entry.detail.contains("unknown component 'NoSuchComponent'"));
+    // The oracle_error is authoring blame: it must NOT masquerade as a
+    // bounds violation or a vacuous verdict for the same invariant.
+    assert!(!report
+        .violations
+        .iter()
+        .any(|v| { v.target == "typo_bounds" && v.rule != "oracle_error" }));
 }
 
 /// Integer leaves are compared losslessly (2^53 range).

@@ -56,7 +56,20 @@ Public API surface for integrators.
   "oracles": ["string"],          // rejected: oracle selection not implemented
   "liveness": {
     "mode": "real_time",          // "off" rejected: not implemented
-    "timeout_s": number           // default 2.0; must span at least one frame
+    "timeout_s": number,          // default 2.0; must span at least one frame
+    "progress": {                 // progress-heartbeat liveness oracle
+      "mode": "auto",             // "auto" | "markers" | "off" (default auto)
+      "markers": ["string"],      // markers mode: named reflected resources/components
+      "include_paths": ["string"],// auto mode: extra reflected resources to watch;
+                                   //  entries ending in "::" are path prefixes matching
+                                   //  ALL resources under that module path
+      "exclude": ["string"],      // auto mode: paths to ignore
+      "window_s": number,         // default 8.0; verdict horizon — at authored
+                                   //  configs must be a whole multiple of sample_s
+                                   //  and sample_s a whole number of frames
+      "sample_s": number,         // default 0.25; sampling cadence (whole frames)
+      "require_surface": false    // empty verifiable surface → Fail (see below)
+    }
   }
 }
 ```
@@ -109,7 +122,12 @@ Two distinct error classes, at different stages:
   total ticks (`duration_s × tps`) > 10,000,000; simulated-time frame
   duration > 0.250 s (i.e. `tps` < 5 — `Time<Virtual>`'s max_delta
   clamp would silently distort dt); `liveness.timeout_s` non-finite,
-  ≤ 0, or shorter than one frame at the scenario's `tps`; scenario
+  ≤ 0, or shorter than one frame at the scenario's `tps`; authored
+  `liveness.progress` mis-sizing (window ≥ `duration_s`, sampling slower
+  than one frame, sampling ≥ window, non-finite/negative values,
+  `markers` mode with an empty marker list — the DEFAULT progress
+  config is exempt from the duration-coupled checks so it can ride
+  along short smoke runs); scenario
   `name` outside `[A-Za-z0-9_-]` (it is embedded in report file names —
   path safety); broken bound pairs; typo'd or empty key lists.
 
@@ -119,7 +137,13 @@ Two distinct error classes, at different stages:
   `Transform` (zero-annotation);
   bounds are per-axis (`min_x`/`max_x`/`min_y`/`max_y`/`min_z`/`max_z`),
   each defaulting
-  to ±1000 when unset. Additionally, a hard-coded global bounds check
+  to ±1000 when unset. A `target_selector:
+  {"with_component": {"name": "..."}}` narrows the check to entities
+  carrying that named registered component (full type path or an
+  unambiguous short path — same resolution rules as
+  `component_check`, ambiguity and unknown names reported as
+  `oracle_error`); an invariant that never matched a checkable entity
+  is `vacuous_invariant`. Additionally, a hard-coded global bounds check
   (±1000 on x/y/z) runs on all entities regardless of invariants or
   tagging — stray geometry will trip it even with zero invariants declared.
 - `component_check`: an authored-intent oracle. Selects every entity
@@ -163,6 +187,44 @@ Two distinct error classes, at different stages:
   while nothing visible moved — presenter layers must write
   Transform/UI to be observable) instead of "soft-lock?"; see
   [Why liveness is time-boxed](../explanation/why-liveness-is-time-boxed.md).
+  Phantom
+  writes — every frame `Changed<Transform>` fires while the transform
+  values stay bit-identical across sampled intervals (a world
+  rewriting itself without changing) — defeat the change-streak and are
+  caught by a value-hash interval check (30-frame intervals) instead,
+  reported once per crossing with a "phantom writes" detail. The
+  interval length is a fixed property of the detector — it trades
+  detection latency for per-sample cost and is deliberately not
+  scenario-configurable. The hash
+  covers translation AND rotation AND scale, so orientation/scale
+  animation is genuine change, never phantom; a softer "mostly
+  phantom writes" variant fires when ≥90% of interval frames (not
+  necessarily all) rewrite bit-identical values, resetting only on a
+  genuine value change.
+- **Progress heartbeat** (`liveness.progress`) — the
+  churning-but-dead complement to frozen world: the frame loop stays
+  hot and transforms jitter, but no game-verifiable state evolves over
+  the window (default 8 s). Sampled every `sample_s` (default 0.25 s);
+  a window is stalled when it churned at every sampled frame while no
+  watched channel showed a non-ticker change. Resources that change in
+  ≥90% of sampled transitions are tickers (heartbeats, frame counters)
+  and are suppressed — the stalled detail names them. Entity/archetype
+  counts are recorded for breadth but never count as progress
+  evidence: spawn churn is engine bookkeeping, not state evolution.
+  Channels: auto mode watches reflected component types plus
+  `include_paths` resources (minus `exclude`); markers mode watches
+  only the named reflected types; `off` disables the oracle entirely.
+  Authored configs are held to a coherent sampling grid:
+  `sample_s·tps` must be a whole frame count and `window_s` a whole
+  multiple of it (the default config rides along unvalidated and is
+  re-quantized coherently instead). When nothing
+  game-verifiable is in scope, the report gains an informational
+  `progress_surface_empty` note, escalating to Fail under
+  `strict_warnings: true` or `progress.require_surface: true` (the
+  built-in battery scenario sets `require_surface`). Verdicts require
+  at least one complete window, so runs shorter than `window_s` get
+  samples but no progress verdict. Per-run samples are exported in the
+  report's `progress_samples` series.
 - **Panic capture** — crash → Crash (in-process)
 - **Log capture** — ERROR → Fail, WARN → informational (unless
   `strict_warnings: true`). A log→tracing bridge is installed
@@ -206,6 +268,12 @@ Two distinct error classes, at different stages:
 - `state_digest`: `[{ frame, hash }]` — per-frame broadened state digests,
   present only when the scenario sets `record_digest: true`; omitted
   (empty) otherwise
+- `progress_samples`: `[{ frame, surface_hash, churn, channels }]` —
+  the progress-oracle evidence series (frame-indexed, deterministic;
+  `surface_hash` is the canonical hash of the whole observable
+  surface, `churn` says the frame loop was alive, `channels` counts
+  the channels in scope). Non-empty whenever
+  `liveness.progress.mode` is not `"off"`.
 - `harness_mode`: `"in_process"`
 - `scenario_source`: `"file"`, `"builtin_smoke"`, or `"builtin_battery"`
 - `log_capture_available` (absent when not applicable; `log_capture_available: false` also produces an

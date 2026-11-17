@@ -66,11 +66,11 @@ pub struct DigestSnapshot {
 }
 
 /// Internal hasher using FNV-1a algorithm (same as `replay.rs` for consistency).
-fn fnv_hasher() -> u64 {
+pub(crate) fn fnv_hasher() -> u64 {
     0xcbf29ce484222325
 }
 
-fn hash_u64(mut h: u64, v: u64) -> u64 {
+pub(crate) fn hash_u64(mut h: u64, v: u64) -> u64 {
     for b in v.to_le_bytes() {
         h ^= b as u64;
         h = h.wrapping_mul(0x100000001b3);
@@ -78,7 +78,7 @@ fn hash_u64(mut h: u64, v: u64) -> u64 {
     h
 }
 
-fn hash_usize(h: u64, v: usize) -> u64 {
+pub(crate) fn hash_usize(h: u64, v: usize) -> u64 {
     hash_u64(h, v as u64)
 }
 
@@ -213,7 +213,11 @@ pub fn resource_is_excluded(full_path: &str, short_path: &str) -> bool {
 ///
 /// Snapshots (opt-in, `with_snapshots`) use [`render_canonical`], the
 /// string-rendering twin: same canonicalization, human-readable output.
-fn collect_resource_reflections_locked<'a>(
+/// Exposed (`pub(crate)`) for reuse by the progress-liveness recorder,
+/// which filters the same game-resource pairs by `include_paths` and
+/// hashes their values with [`hash_canonical`] into its own surface
+/// fingerprint.
+pub(crate) fn collect_resource_reflections_locked<'a>(
     world: &'a World,
     registry: &'a bevy_reflect::TypeRegistry,
 ) -> Vec<(String, &'a dyn bevy_reflect::Reflect)> {
@@ -351,7 +355,10 @@ fn collect_resource_digests(world: &World, hasher: &mut u64) {
 /// engine component counts churn with plugin bookkeeping (relationship
 /// markers etc.) and harness component counts track bot bookkeeping, none
 /// of which is game state.
-fn collect_component_type_counts(world: &World) -> BTreeMap<String, usize> {
+/// Exposed (`pub(crate)`) for reuse by the progress-liveness recorder,
+/// which needs raw component-type counts (not their digest) so it can
+/// hash them into its own per-frame surface fingerprint.
+pub(crate) fn collect_component_type_counts(world: &World) -> BTreeMap<String, usize> {
     let Some(registry_arc) = world.get_resource::<bevy_ecs::reflect::AppTypeRegistry>() else {
         // No reflection registry — no component-type coverage.
         return BTreeMap::new();
@@ -583,7 +590,7 @@ fn render_canonical(value: &dyn bevy_reflect::PartialReflect) -> String {
 /// - Opaque floats: `f32`/`f64` hashed bitwise via `to_bits()`;
 ///   other opaque leaves hash their `Debug` rendering (residual risk
 ///   surface, same as `render_canonical`).
-fn hash_canonical(value: &dyn bevy_reflect::PartialReflect, hasher: &mut u64) {
+pub(crate) fn hash_canonical(value: &dyn bevy_reflect::PartialReflect, hasher: &mut u64) {
     fn rec(value: &dyn bevy_reflect::PartialReflect, hasher: &mut u64) {
         use bevy_reflect::ReflectRef;
 

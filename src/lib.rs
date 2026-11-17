@@ -12,6 +12,7 @@ pub mod junit;
 pub mod oracles;
 #[cfg(feature = "takeover")]
 pub mod plugin;
+pub mod progress;
 pub mod replay;
 pub mod rules;
 pub mod scenario;

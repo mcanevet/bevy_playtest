@@ -347,7 +347,7 @@ pub const BATTERY_LITERAL: &str = "battery";
 /// never drift from the schema contract.
 pub fn smoke_scenario() -> Result<crate::scenario::Scenario, String> {
     let scenario: crate::scenario::Scenario = serde_json::from_str(
-        r#"{"name":"smoke","bot":{"type":"chaos","seed":42},"duration_s":5.0}"#,
+        r#"{"name":"smoke","bot":{"type":"chaos","seed":42},"duration_s":5.0,"liveness":{"progress":{"mode":"off"}}}"#,
     )
     .map_err(|err| format!("built-in smoke scenario failed to parse: {err}"))?;
     crate::scenario::validate_scenario(&scenario)
@@ -359,12 +359,17 @@ pub fn smoke_scenario() -> Result<crate::scenario::Scenario, String> {
 /// seeded chaos pass with all oracles (20s run, 15s frozen-world
 /// grace — shorter than the run so the liveness oracle CAN fire;
 /// static-screen games are covered by the grace, not by an unreachable
-/// oracle). Multi-seed aggregation lands with the runner-side battery
+/// oracle). Progress-liveness demands a verifiable surface
+/// (require_surface): a battery pass that could not check progress
+/// is not a green battery. **Breaking** relative to 0.11: games that
+/// never register game-state types now fail the battery with
+/// progress_surface_empty instead of passing vacuously.
+/// Multi-seed aggregation lands with the runner-side battery
 /// API; the takeover runs one pass per process by design (replay
 /// verification needs process-clean state).
 pub fn battery_scenario() -> Result<crate::scenario::Scenario, String> {
     let scenario: crate::scenario::Scenario = serde_json::from_str(
-        r#"{"name":"battery","bot":{"type":"chaos","seed":42},"duration_s":20.0,"liveness":{"timeout_s":15.0}}"#,
+        r#"{"name":"battery","bot":{"type":"chaos","seed":42},"duration_s":20.0,"liveness":{"timeout_s":15.0,"progress":{"require_surface":true}}}"#,
     )
     .map_err(|err| format!("built-in battery scenario failed to parse: {err}"))?;
     crate::scenario::validate_scenario(&scenario)

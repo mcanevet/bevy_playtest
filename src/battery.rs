@@ -911,6 +911,71 @@ pub fn run_and_expect_clean(binary: &str, scenario: &str) {
     }
 }
 
+/// Golden-verdict twin of [`run_and_expect_clean`]: run one scenario
+/// and assert the report carries EXACTLY the expected findings —
+/// the same rule on the same target with a detail containing the
+/// given needle — and nothing else. For a game whose honest verdict
+/// under the battery IS findings (e.g. a stock demo exposing no
+/// verifiable progress surface), pinning the exact verdict turns CI
+/// red into a regression guard: the finding is expected, so it must
+/// stay present AND stay alone — a NEW finding (a regression or an
+/// oracle misfire) fails the pin, and so does the pinned finding
+/// changing shape beyond its needle.
+///
+/// `expected` items are `(rule, target, detail_needle)` triples; the
+/// needle must appear in the entry's detail (a short stable phrase —
+/// full details embed frame counts and churn statistics that vary
+/// with machine timing). Panic messages name every difference.
+/// Returns the report on success so callers can pin additional
+/// fields (e.g. `source_derived_keys`).
+pub fn run_and_expect_findings(
+    binary: &str,
+    scenario: &str,
+    expected: &[(&str, &str, &str)],
+) -> crate::state::PlaytestReport {
+    let report = match run(binary, scenario) {
+        Ok(report) => report,
+        Err(e) => panic!("{e}"),
+    };
+    let mut problems: Vec<String> = Vec::new();
+    for (rule, target, needle) in expected {
+        let needle_desc = format!("{rule}/{target} (detail contains {needle:?})");
+        match report
+            .violations
+            .iter()
+            .find(|v| v.rule == *rule && v.target == *target)
+        {
+            Some(entry) => {
+                if !entry.detail.contains(needle) {
+                    problems.push(format!(
+                        "expected finding {needle_desc} has detail:\n  {}",
+                        entry.detail
+                    ));
+                }
+            }
+            None => problems.push(format!("expected finding {needle_desc} is missing")),
+        }
+    }
+    let expected_pairs: std::collections::BTreeSet<(&str, &str)> =
+        expected.iter().map(|(r, t, _)| (*r, *t)).collect();
+    for v in &report.violations {
+        if !expected_pairs.contains(&(v.rule.as_str(), v.target.as_str())) {
+            problems.push(format!(
+                "UNEXPECTED finding {} (target: {}): {}",
+                v.rule, v.target, v.detail
+            ));
+        }
+    }
+    if !problems.is_empty() {
+        panic!(
+            "golden verdict mismatch:\n  {}\n{}",
+            problems.join("\n  "),
+            report.findings_summary(scenario)
+        );
+    }
+    report
+}
+
 /// Withhold poison keys ([`crate::discovery::source_scan::POISON_KEYS`])
 /// from a probe-verified injectable surface, returning the filtered
 /// list plus the refusal note naming what was withheld (refusal over

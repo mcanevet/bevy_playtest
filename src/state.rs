@@ -132,6 +132,12 @@ pub struct PlaytestReport {
     /// compact for runs that didn't record.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub state_digest: Vec<crate::digest::StateDigest>,
+    /// Per-sample progress-liveness series (frame, whole-surface hash,
+    /// churn, channel count) recorded when the scenario's
+    /// liveness.progress mode is not `off`. Evidence behind every
+    /// progress verdict; comparable across runs.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub progress_samples: Vec<crate::progress::ProgressSample>,
     /// Build profile of the GAME binary that produced this report.
     /// In-process and takeover runs alike stamp the reporting
     /// process's own `cfg!(debug_assertions)` — the report-writing
@@ -254,6 +260,7 @@ impl PlaytestReport {
             // completed, so no profile is claimable.
             game_build_profile: None,
             state_digest: vec![],
+            progress_samples: vec![],
             discovered_surface: None,
             injected_surface_keys: None,
             source_derived_keys: None,

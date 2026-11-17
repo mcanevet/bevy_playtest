@@ -25,8 +25,8 @@
 
 use crate::enums::BotType;
 use crate::scenario::{
-    validate_scenario, BotConfig, KeyPressInput, MotionInput, MouseClickInput, Scenario,
-    ScenarioError,
+    validate_scenario, BotConfig, KeyPressInput, LivenessConfig, MotionInput, MouseClickInput,
+    ProgressConfig, ProgressMode, Scenario, ScenarioError,
 };
 
 /// Simulated ticks per second for probe runs. Frames in generated
@@ -805,7 +805,16 @@ impl ProbePlan {
             duration_s: self.duration_s,
             invariants: vec![],
             oracles: None,
-            liveness: Default::default(),
+            // Progress-liveness monitoring is meaningless for a 2-3s
+            // input-discovery probe (and the default 8s window cannot
+            // fit inside such short durations). Off by construction.
+            liveness: LivenessConfig {
+                progress: ProgressConfig {
+                    mode: ProgressMode::Off,
+                    ..ProgressConfig::default()
+                },
+                ..Default::default()
+            },
             verify_replay: false,
             record_digest: true,
         }
