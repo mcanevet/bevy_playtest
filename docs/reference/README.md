@@ -157,7 +157,12 @@ Two distinct error classes, at different stages:
 
 - **NaN/finite transforms** — any non-finite `Transform` → Fail
 - **Frozen world** — no movement of any entity over the liveness grace
-  window (default 2 s at 60 tps) → Fail (catches soft-locks).
+  window (default 2 s at 60 tps) → Fail (catches soft-locks). With
+  `record_digest: true`, a silent streak where the state digest kept
+  changing reports "stepping but visually silent" (the sim is running
+  while nothing visible moved — presenter layers must write
+  Transform/UI to be observable) instead of "soft-lock?"; see
+  [Why liveness is time-boxed](../explanation/why-liveness-is-time-boxed.md).
 - **Panic capture** — crash → Crash (in-process)
 - **Log capture** — ERROR → Fail, WARN → informational (unless
   `strict_warnings: true`). A log→tracing bridge is installed

@@ -79,6 +79,16 @@ A `frozen_world` violation additionally gets `_meta`:
 }
 ```
 
+With `record_digest: true`, the block also carries `stepping` —
+`true` when the state digest kept changing through the silent
+streak (the sim was running while nothing visible moved; the detail
+then says "stepping but visually silent" with the remedy), `false`
+when the digest was flat too (corroborating the freeze), and null
+(key present, value `null`) when no digest was recorded — the oracle
+cannot know and says so honestly; a digest-less run the oracle alone
+reported carries no `_meta` block at all.
+See [Why liveness is time-boxed](../explanation/why-liveness-is-time-boxed.md).
+
 `probed_keys_total` counts keys with an INFORMATIVE raw probe record:
 never-probed group-completion siblings and the control key are
 visible in `discovered_surface.keys` but excluded from the count, so

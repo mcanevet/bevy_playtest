@@ -266,6 +266,12 @@ impl PlaytestReport {
     /// `discovered_surface`. Idempotent and a no-op when no surface
     /// is attached — the annotation must never invent data.
     ///
+    /// MERGES, never overwrites: fields already present (e.g. the
+    /// frozen_world oracle's `stepping` evidence, set when the run
+    /// recorded a state digest) are kept; only absent probe-stat
+    /// fields are filled. This keeps the oracle's evidence and the
+    /// discovery stats side by side in one `_meta` block.
+    ///
     /// Called by the battery after discovery ran (Phase 7 wires the
     /// flow; the annotation is report-local so cache-loaded surfaces
     /// work identically to freshly-probed ones).
@@ -275,8 +281,26 @@ impl PlaytestReport {
         };
         let meta = surface.frozen_world_meta();
         for v in &mut self.violations {
-            if v.rule == "frozen_world" && v.meta.is_none() {
+            if v.rule != "frozen_world" {
+                continue;
+            }
+            let Some(existing) = v.meta.as_mut() else {
                 v.meta = Some(meta.clone());
+                continue;
+            };
+            // Merge: fill only the fields the oracle's evidence left
+            // absent, so nothing already reported is overwritten.
+            if existing.probed_keys_effective.is_none() {
+                existing.probed_keys_effective = meta.probed_keys_effective;
+            }
+            if existing.probed_keys_total.is_none() {
+                existing.probed_keys_total = meta.probed_keys_total;
+            }
+            if existing.pruned_devices.is_none() {
+                existing.pruned_devices = meta.pruned_devices.clone();
+            }
+            if existing.note.is_none() {
+                existing.note = meta.note.clone();
             }
         }
     }
