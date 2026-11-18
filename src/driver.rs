@@ -1683,6 +1683,22 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     let ui_recapture_interval =
         crate::discovery::ui_surface::UiSurfaceTracker::recapture_interval(tps);
 
+    // Render-liveness sampler (`render-liveness`): identical
+    // construction to the two trackers above — borrowed into the
+    // `catch_unwind` loop so a panicking run can still report the
+    // partial evidence (a camera that existed before the crash is
+    // evidence worth keeping; refusal over silence). The RESULT is
+    // computed only when the render-sub-app gate passed: the
+    // "not evaluated" tier attaches NOTHING.
+    #[cfg(feature = "render-liveness")]
+    let render_liveness_attached = crate::discovery::render_liveness::render_sub_app_present(app);
+    #[cfg(feature = "render-liveness")]
+    let render_liveness_tracker = std::cell::RefCell::new(
+        crate::discovery::render_liveness::RenderLivenessTracker::default(),
+    );
+    #[cfg(feature = "render-liveness")]
+    let render_liveness_interval = crate::discovery::render_liveness::sample_interval(tps);
+
     let loop_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         for i in 0..total_ticks {
             // Defense against a foreign log::set_max_level(Off): the
@@ -1740,6 +1756,36 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             if record_digest {
                 crate::digest::record_digest_system(app.world_mut());
             }
+            // Render-liveness sample (`render-liveness`): placed AFTER
+            // digest recording so the current frame's digest is
+            // visible, and reads the CURRENT frame's frozen-world
+            // streak (still unreset: `RunState.frame` increments at
+            // the end of this block, and `frozen_frames` was last
+            // written by this frame's oracle run). Same recorder
+            // doctrine as everything above: driver-invoked, never a
+            // scheduled system. `sim_active` for this tick: the world
+            // produced visible activity this frame
+            // (`frozen_frames == 0`), OR the opt-in broadened state
+            // digest just changed (visually silent but stepping —
+            // the same broadened evidence the frozen_world detail
+            // refinement uses).
+            #[cfg(feature = "render-liveness")]
+            if render_liveness_attached {
+                let sim_active = app
+                    .world()
+                    .get_resource::<RunState>()
+                    .is_some_and(|s| s.frozen_frames == 0)
+                    || app
+                        .world_mut()
+                        .get_resource_mut::<crate::digest::StateDigestRecorder>()
+                        .is_some_and(|mut r| r.changed_since_last_sample());
+                render_liveness_tracker.borrow_mut().observe(
+                    app.world(),
+                    i,
+                    render_liveness_interval,
+                    sim_active,
+                );
+            }
             // component_check evaluation: a driver-loop recorder (NOT
             // a scheduled system — `&World` reflection access cannot
             // coexist with ResMut<RunViolations> in one system, and
@@ -1777,6 +1823,15 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     let crash_detected = loop_result.is_err();
 
     let wall_time_s = start.elapsed().as_secs_f64();
+
+    // Render-liveness verdict: derive the tier from the samples the
+    // loop took (partial evidence if the run panicked — kept on
+    // purpose). The ATTACHMENT decision stays the render-sub-app
+    // gate: no renderer ⇒ `None` ⇒ "not evaluated", the field is
+    // simply absent (older-schema consumers never see a surprise).
+    #[cfg(feature = "render-liveness")]
+    let render_liveness_tracker_result = render_liveness_attached
+        .then(|| std::cell::RefCell::into_inner(render_liveness_tracker).into_result());
 
     let state = app
         .world_mut()
@@ -2029,6 +2084,72 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         });
     }
 
+    // render_liveness (informational, `render-liveness` feature):
+    // the structural camera-health verdict as a violation entry so
+    // it rides the same violations list consumers already read. The
+    // attachment gate (render sub-app present) is the
+    // "not evaluated" tier; the tier/`sim_active` nuance lives in
+    // the detail text, and the full evidence ALSO rides the
+    // report's `render_liveness` field. Informational by registry
+    // (src/rules.rs `is_informational`) — never gates status.
+    #[cfg(feature = "render-liveness")]
+    if let Some(rl) = render_liveness_tracker_result.as_ref() {
+        let (detail, last_detail) = match rl.tier {
+            crate::discovery::render_liveness::RenderLivenessTier::Live => {
+                // Structural findings only; the "live" tier emits
+                // NOTHING (refusal over silence: no finding, no noise).
+                (String::new(), String::new())
+            }
+            crate::discovery::render_liveness::RenderLivenessTier::NoCameras => (
+                format!(
+                    "simulation was observed active during the run ({} \
+                     {}) but no camera ever existed in any of them: \
+                     the game has nothing wired up to display its state",
+                    rl.samples.max(1),
+                    if rl.samples.max(1) == 1 {
+                        "sample"
+                    } else {
+                        "samples"
+                    }
+                ),
+                "no camera ever existed".to_string(),
+            ),
+            crate::discovery::render_liveness::RenderLivenessTier::AllCamerasInactive => (
+                format!(
+                    "{} camera(s) existed but every sampled camera had \
+                     is_active == false: rendering was disabled (a \
+                     debug-disabled camera left on, or game logic parking \
+                     the camera)",
+                    rl.cameras_seen
+                ),
+                "every sampled camera was inactive".to_string(),
+            ),
+            crate::discovery::render_liveness::RenderLivenessTier::AllCamerasSkip => (
+                format!(
+                    "{} camera(s) existed with an active one, but no \
+                     sampled active camera used a write-mode \
+                     CameraOutputMode, so nothing was written \
+                     to any target (may be intentional: compositing or \
+                     prepass-only setups park cameras on Skip)",
+                    rl.cameras_seen
+                ),
+                "no sampled active camera wrote output".to_string(),
+            ),
+        };
+        if !detail.is_empty() {
+            snap.push(crate::state::ViolationEntry {
+                rule: Rule::RenderLiveness.name().to_string(),
+                target: "world".to_string(),
+                first_frame: 0,
+                last_frame: state.frame,
+                count: 1,
+                detail,
+                last_detail,
+                meta: None,
+            });
+        }
+    }
+
     Ok(PlaytestReport {
         schema_version: 1,
         status,
@@ -2070,6 +2191,8 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         capability_census: Some(capability_census),
         #[cfg(feature = "ui-surface")]
         ui_surface: ui_surface_tracker.into_result(),
+        #[cfg(feature = "render-liveness")]
+        render_liveness: render_liveness_tracker_result,
     })
 }
 

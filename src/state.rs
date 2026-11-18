@@ -236,6 +236,20 @@ pub struct PlaytestReport {
     #[cfg(feature = "ui-surface")]
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ui_surface: Option<crate::discovery::ui_surface::UiSurfaceResult>,
+    /// Structural render-liveness verdict: whether the game had a
+    /// camera, whether it was active, whether its output was
+    /// written anywhere (`render-liveness` feature; `None` when the
+    /// feature is off or the game has no render sub-app — "not
+    /// evaluated", never "healthy"). Same additive-honesty
+    /// contract as
+    /// [`Self::capability_census`]: absence never means "fine".
+    /// The finding ALSO rides `violations` as an informational
+    /// `render_liveness` entry; this field carries the evidence
+    /// (tier, camera counts, sample count, notes). See
+    /// [`crate::discovery::render_liveness`].
+    #[cfg(feature = "render-liveness")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub render_liveness: Option<crate::discovery::render_liveness::RenderLivenessResult>,
 }
 
 impl PlaytestReport {
@@ -276,6 +290,10 @@ impl PlaytestReport {
             // first-frame point, so no UI surface exists.
             #[cfg(feature = "ui-surface")]
             ui_surface: None,
+            // Crash stub: same reasoning — no render-liveness
+            // verdict exists, and absence never means "healthy".
+            #[cfg(feature = "render-liveness")]
+            render_liveness: None,
         }
     }
 

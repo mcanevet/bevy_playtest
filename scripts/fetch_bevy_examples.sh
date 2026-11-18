@@ -317,6 +317,7 @@ playtest = [
     "dep:bevy_playtest",
     "bevy_playtest/takeover",
     "bevy_playtest/takeover-winit",
+    "bevy_playtest/render-liveness",
 ]
 
 [dependencies]

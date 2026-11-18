@@ -63,6 +63,23 @@ macOS runners (and developer machines) have Metal and are unaffected —
 no extra packages are needed. The panic is a Linux/GPU-less-host issue;
 the `mesa-vulkan-drivers` stanza above is Linux-only.
 
+## What render_liveness proves here (and what it cannot)
+
+With the `render-liveness` feature, the report carries an
+informational `render_liveness` verdict about the game's cameras (no
+camera ever spawned, every sampled camera disabled, or no active
+camera writing output — every sampled active camera sat on
+`CameraOutputMode::Skip`; a disabled camera's mode is irrelevant —
+see the
+[report reference](../reference/README.md#oracles)). Even on a
+`lavapipe` host, that verdict is STRUCTURAL: it reads the main-world
+`Camera` components, never the render world or the GPU. A camera can
+be present, enabled, and writing — and still produce a black image
+(bad clear color, broken pipeline, empty scene); `render_liveness`
+cannot tell. Pixel-level liveness ("did anything non-black actually
+appear") would need reading back render targets, which is a separate,
+future oracle; nothing on this page should be read as promising it.
+
 [`PlaytestDefaultPlugins`]: ../reference/README.md#plugins
 [`initialize_renderer`]: https://github.com/bevyengine/bevy/blob/v0.20.1/crates/bevy_render/src/renderer/mod.rs
 [linux_dependencies.md]: https://github.com/bevyengine/bevy/blob/latest/docs/linux_dependencies.md

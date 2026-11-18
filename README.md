@@ -103,6 +103,16 @@ these oracles watch:
   [Why liveness is time-boxed](docs/explanation/why-liveness-is-time-boxed.md))
 - **Panic capture** — crash → Crash
 - **Log capture** — ERROR → Fail, WARN → informational
+- **Render liveness** — with the `render-liveness` feature, a
+  sim-active run on a game that HAS a render pipeline but never had a
+  camera, kept every sampled camera disabled (`is_active == false`),
+  or never had an active camera writing output (every sampled
+  active camera sat on `CameraOutputMode::Skip`; a disabled
+  camera's mode is irrelevant — it renders nothing), gains an
+  informational `render_liveness` entry (structural wiring only: it
+  reads main-world `Camera` components, never the rendered pixels —
+  a camera that renders black still passes; see
+  [headless CI without a GPU](docs/how-to/headless-ci-gpu.md))
 - **Vacuity guard** — if no entity with a `Transform` (or, under
   `ui-liveness`, a `UiTransform`) existed at any point during the run, a
   Pass proves nothing; it fails loudly instead (the criterion is
