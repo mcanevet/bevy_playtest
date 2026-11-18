@@ -366,6 +366,26 @@ for `cargo test` integration:
   per-violation findings summary if anything gates; `scenario` is a path
   or the literal `BUILTIN_BATTERY` (`"battery"`, the zero-config verdict
   run) — `"smoke"` is the equivalent built-in minimal scenario
+- `run_and_expect_findings(binary, scenario, &[(rule, target,
+  detail_needle)])` — golden verdict: panics unless the report
+  carries EXACTLY the expected findings (same rule+target, detail
+  containing the needle) and nothing else; returns the report for
+  additional pins
+- `run_and_expect_scoped_findings(binary, scenario, &[])` — the
+  stricter sibling: declares EXPECTED findings as scoped
+  predicates, not an allowlist. Each `ExpectFinding` (rule, mandatory
+  justification, optional target, inclusive first-frame window,
+  occurrence count defaulting to 1) must consume exactly one matching
+  violation entry whose occurrence `count` equals the declared value:
+  any uncovered violation still fails, and an expectation that stops
+  matching (game fixed, draw stream shifted) fails the run until the
+  declaration is updated — expectations cannot silently rot. Scope
+  tightly: e.g. a menu-idle `frozen_world` fires at
+  onset + liveness-window frames, so a window around that fire-frame
+  admits only startup-phase freezes and leaves mid-game wedges red.
+  Differences from `run_and_expect_clean`: informational findings
+  (warnings, capture notes) also fail unless covered by an
+  expectation, and a `crash` status fails the run outright
 - `run_with_config(&BatteryConfig)` — explicit config:
   `BatteryConfig { binary, scenario, timeout_secs }`
 - `BatteryError` — infrastructure failures only: `Spawn`, `Timeout`,
