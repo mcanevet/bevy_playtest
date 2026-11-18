@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/mcanevet/bevy_playtest/compare/v0.11.0...v0.12.0) - 2026-11-18
+
+### Added
+
+- *(oracles)* add informational render-liveness structural rule
+- *(battery)* run_and_expect_scoped_findings — scoped, double-sided expected findings
+- *(driver)* multi-slot concurrent chaos keyboard with drawn hold durations
+- *(liveness)* progress-heartbeat, bounds-selectors, phantom-write oracles
+- report log_bridge_available to expose compound log-capture loss
+- *(discovery)* focus-walker probe
+- *(discovery)* periodic ui-surface re-enumeration
+
+### Fixed
+
+- make battery temp dirs unique across same-tick sibling runs
+- detect persistent log-max-level tampering, correct defense docs
+- defend log-crate capture against a foreign set_max_level(Off)
+- *(oracles)* refine frozen_world detail with digest stepping evidence
+- *(discovery)* address adversarial review of periodic ui-surface
+
+### Other
+
+- *(battery)* fix rustdoc splice, deterministic same-tick regression test
+- *(discovery)* clarify is_first guard intent in ui-surface observe
+
 ## [0.11.0](https://github.com/mcanevet/bevy_playtest/compare/v0.10.0...v0.11.0) - 2026-11-17
 
 ### Added
