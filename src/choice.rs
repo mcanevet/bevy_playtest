@@ -32,10 +32,15 @@ pub enum ChoiceKind {
     MousePosition,
     /// A chaos-bot mouse button-index draw.
     MouseButton,
+    /// A chaos-bot per-press key hold-duration draw. The recorded value
+    /// is reduced in `0..=28`; the delivered hold is `value + 2`
+    /// frames. Deliberately NOT [`ChoiceKind::Key`]: the action log
+    /// filters on `Key`, and a duration draw is not a key press.
+    KeyHoldFrames,
 }
 
 /// One recorded random draw.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Choice {
     pub frame: u64,
     /// Reduced value in [0, bound).
@@ -46,6 +51,15 @@ pub struct Choice {
     /// draws (action log, surface coverage) from mouse draws.
     #[serde(default)]
     pub kind: ChoiceKind,
+    /// What the reduced value RESOLVED to, when that is meaningful:
+    /// a key-index draw records the canonical key name it selected.
+    /// Without this, `value` would index a draw-time list (e.g. the
+    /// unheld-key candidates) that the report does not contain, and
+    /// the action log could not name the pressed key. Absent (None,
+    /// serialized only when set) for draws whose value is not an
+    /// index — mouse coordinates, hold durations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 /// Source of bot randomness (plain struct, no Bevy Resource derive).
@@ -100,13 +114,11 @@ impl ChoiceStream {
     /// entry recorded for frame F. Entries recorded for frames that
     /// were skipped (never drawn) are consumed without effect — they
     /// can no longer shift later draws onto the wrong values.
-    pub fn below(&mut self, frame: u64, bound: u64) -> u64 {
-        self.below_kind(frame, bound, ChoiceKind::Key)
-    }
-
-    /// Like [`below`](Self::below), but tags the recorded draw with the
-    /// given kind so report consumers can tell key draws from mouse
-    /// draws.
+    ///
+    /// Deliberately no untagged variant: the action log filters on
+    /// `ChoiceKind::Key`, so an implicitly-`Key`-tagged helper would
+    /// let a future caller fabricate `key_press` entries. Call
+    /// [`below_kind`](Self::below_kind) with an explicit kind.
     pub fn below_kind(&mut self, frame: u64, bound: u64, kind: ChoiceKind) -> u64 {
         // Consume replay entries older than the requested frame.
         while self.replay.front().is_some_and(|c| c.frame < frame) {
@@ -144,19 +156,22 @@ impl ChoiceStream {
             value,
             bound,
             kind,
+            label: None,
         });
         value
     }
 
-    /// Bernoulli(num/den).
-    pub fn chance(&mut self, frame: u64, num: u64, den: u64) -> bool {
-        self.below(frame, den) < num
-    }
-
-    /// Uniform f32 in [lo, hi].
-    pub fn unit_f32(&mut self, frame: u64, lo: f32, hi: f32) -> f32 {
-        let draw = self.below(frame, 1 << 24) as f32 / (1u64 << 24) as f32;
-        lo + (hi - lo) * draw
+    /// Attach `label` to the most recently recorded draw. Used when a
+    /// draw's reduced value is an index into a draw-time list (e.g. the
+    /// chaos bot's unheld-key candidates): the resolution depends on
+    /// the drawn value, so the label can only be computed AFTER the
+    /// draw — the caller resolves the index and stamps it here.
+    /// Without the label, the action log could not name the pressed
+    /// key from the report alone.
+    pub fn label_last(&mut self, label: String) {
+        if let Some(last) = self.recorded.last_mut() {
+            last.label = Some(label);
+        }
     }
 }
 
@@ -173,25 +188,28 @@ mod tests {
                     value: 0,
                     bound: 1,
                     kind: ChoiceKind::Key,
+                    label: None,
                 },
                 Choice {
                     frame: 2,
                     value: 5,
                     bound: 10,
                     kind: ChoiceKind::Key,
+                    label: None,
                 },
                 Choice {
                     frame: 3,
                     value: 3,
                     bound: 4,
                     kind: ChoiceKind::Key,
+                    label: None,
                 },
             ],
             Continuation::Prng,
         );
-        let a = cs.below(1, 1);
-        let b = cs.below(2, 10);
-        let c = cs.below(3, 4);
+        let a = cs.below_kind(1, 1, ChoiceKind::Key);
+        let b = cs.below_kind(2, 10, ChoiceKind::Key);
+        let c = cs.below_kind(3, 4, ChoiceKind::Key);
         assert_eq!(a, 0);
         assert_eq!(b, 5);
         assert_eq!(c, 3);
@@ -202,7 +220,10 @@ mod tests {
         let mut cs1 = ChoiceStream::from_seed(123);
         let mut cs2 = ChoiceStream::from_seed(123);
         for i in 0..10 {
-            assert_eq!(cs1.below(i, 100), cs2.below(i, 100));
+            assert_eq!(
+                cs1.below_kind(i, 100, ChoiceKind::Key),
+                cs2.below_kind(i, 100, ChoiceKind::Key)
+            );
         }
     }
 }

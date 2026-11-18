@@ -207,12 +207,66 @@ fn logical_key_for_code(code: KeyCode, shift_held: bool) -> bevy_input::keyboard
 
 /// Chaos bot: emits random raw key presses. Uses the scenario's
 /// raw_surface (or the default WASD+arrows surface) — it does not yet
-/// consult an IntentSurface. Keys are held for `hold_frames` frames before
-/// release to avoid the press+release-in-same-frame cancellation bug.
+/// consult an IntentSurface. Up to [`CHAOS_HOLD_SLOTS`] keys are held
+/// concurrently, each for a per-press drawn duration, so the bot can
+/// form chords (accelerate + steer) and exercise charge/grind-style
+/// hold mechanics instead of typing one key at a time.
+///
+/// The draw selects among surface keys not currently held — a physical
+/// user cannot press a key they are already holding — so every key
+/// draw delivers a real press. Expiry is nonetheless last-holder-
+/// releases (see [`ChaosHoldState::release`]): with two slots the
+/// `Released` message for a key fires only when no slot still holds it.
+/// (Chaos and the scripted keyboard bot are mutually exclusive per
+/// scenario, so slot-vs-slot is the only collision case.) All holds
+/// deliver at least 2 frames so `ButtonInput` sees `Pressed` for at
+/// least one full frame.
 #[derive(Resource, Default)]
 struct ChaosHoldState {
-    /// If Some((key_code, release_frame)), this key is currently held.
-    held: Option<(bevy_input::keyboard::KeyCode, u64)>,
+    /// Active holds: `(key_code, release_frame)`, one entry per occupied
+    /// slot. Kept sorted by `release_frame` so expiry is a pop-front.
+    held: Vec<(bevy_input::keyboard::KeyCode, u64)>,
+}
+
+/// Concurrent chaos key-hold slots.
+const CHAOS_HOLD_SLOTS: usize = 2;
+
+/// Draw bounds for chaos hold durations, INCLUSIVE frame counts:
+/// delivered holds span `MIN..=MAX` frames (2..=30).
+const CHAOS_HOLD_MIN_FRAMES: u64 = 2;
+const CHAOS_HOLD_MAX_FRAMES: u64 = 30;
+
+impl ChaosHoldState {
+    /// Whether any slot currently holds `code`.
+    fn is_held(&self, code: bevy_input::keyboard::KeyCode) -> bool {
+        self.held.iter().any(|&(c, _)| c == code)
+    }
+
+    /// Register that one holder of `code` let go (the entry was already
+    /// removed from `held`). Returns `true` when no other slot still
+    /// holds the key — only then may the caller write the `Released`
+    /// message (an early release would clear another slot's hold on
+    /// the same key). The draw never selects a held key, so this
+    /// guards a collision that cannot happen today — kept because it
+    /// is the invariant `MouseHoldState` upholds on the mouse side,
+    /// and cheap defense-in-depth if a future policy (or a larger K)
+    /// lets two slots share a key.
+    fn release(&mut self, code: bevy_input::keyboard::KeyCode) -> bool {
+        !self.held.iter().any(|&(c, _)| c == code)
+    }
+
+    /// Register a new hold in a free slot, keeping `held` sorted by
+    /// `release_frame` so expiry is a front-pop. Same-key re-presses
+    /// land in a separate slot entry — `release` handles the
+    /// last-holder-releases rule.
+    fn press(&mut self, code: bevy_input::keyboard::KeyCode, release_at: u64) {
+        let pos = self
+            .held
+            .iter()
+            .position(|&(_, at)| release_at < at)
+            .unwrap_or(self.held.len());
+        self.held.insert(pos, (code, release_at));
+    }
 }
 
 fn chaos_bot_system(
@@ -225,24 +279,37 @@ fn chaos_bot_system(
 ) {
     let rate = scenario.0.bot.input_rate_hz.max(1);
     let interval = (state.tps / rate as u64).max(1);
-    // Chaos presses have no per-press schedule; hold each key long enough
-    // (2 frames) that ButtonInput sees Pressed for at least one full frame.
-    let hold_frames = 2u64;
 
-    // Release held key if its hold duration expired.
-    if let Some((code, release_at)) = hold_state.held {
-        if state.frame >= release_at {
+    // Release expired holds, oldest first. `release` reports whether
+    // any OTHER slot still holds the key — only the LAST holder's
+    // expiry writes the key's `Released` message.
+    //
+    // Ordering note: expiry runs BEFORE the candidate computation, so
+    // a key expiring on a rate tick immediately re-ents the candidate
+    // pool and can be re-drawn the SAME frame — the batch then carries
+    // Released(W) followed by Pressed(W). That is a physically
+    // realizable ultra-fast retap, and the chaos draw order (release
+    // then press) keeps the pair from cancelling (net `pressed` stays
+    // true), but a game branching on `just_released` observes a key-up
+    // the same frame the key is (again) down. Intentional; pinned by
+    // `chaos_same_frame_retap_observes_both_edges` in driver_smoke.
+    while hold_state
+        .held
+        .first()
+        .is_some_and(|&(_, release_at)| state.frame >= release_at)
+    {
+        let (code, _) = hold_state.held.remove(0);
+        if hold_state.release(code) {
             keyboard.key_event(code, ButtonState::Released, primary_window.single().ok());
-            hold_state.held = None;
         }
     }
 
-    // Don't pick a new key while one is held.
-    if hold_state.held.is_some() {
+    // `input_rate_hz` still governs press opportunities: one chance per
+    // rate tick, taken only when a slot is free.
+    if !state.frame.is_multiple_of(interval) {
         return;
     }
-
-    if !state.frame.is_multiple_of(interval) {
+    if hold_state.held.len() >= CHAOS_HOLD_SLOTS {
         return;
     }
     // The absent-surface default is BACKBONE_KEYS — the fallback
@@ -258,20 +325,57 @@ fn chaos_bot_system(
     if keys.is_empty() {
         return; // chaos keyboard opted out
     }
-    let idx = choices.0.below(state.frame, keys.len() as u64) as usize;
-    let Some(canonical) = crate::scenario::normalize_key_name(keys[idx]) else {
+    // Candidates exclude surface keys a slot currently holds: a
+    // physical user cannot press a key they are already holding down.
+    // Drawing only among unheld keys guarantees every key draw
+    // DELIVERS a press — the action log derives its entries from key
+    // draws, so a drawn-but-skipped press would fabricate an audit
+    // entry — and prevents the physically-impossible
+    // press-press-release ordering (double `just_pressed` fire). The
+    // draw bound shrinks as slots occupy surface keys and is recorded
+    // per draw, so replay stays faithful.
+    let candidates: Vec<&str> = keys
+        .iter()
+        .filter_map(|&k| {
+            let canonical = crate::scenario::normalize_key_name(k)?;
+            let code = keycode_from_canonical(canonical)?;
+            (!hold_state.is_held(code)).then_some(canonical)
+        })
+        .collect();
+    if candidates.is_empty() {
+        return; // every surface key is held (slots >= surface size)
+    }
+    let idx = choices.0.below_kind(
+        state.frame,
+        candidates.len() as u64,
+        crate::choice::ChoiceKind::Key,
+    ) as usize;
+    // Resolve the index NOW and label the draw this frame: `value`
+    // indexes the unheld-candidate list at draw time, which the report
+    // does not contain — the label is what lets the action log name a
+    // real key.
+    choices.0.label_last(candidates[idx].to_string());
+    let Some(code) = keycode_from_canonical(candidates[idx]) else {
         return;
     };
-    let Some(code) = keycode_from_canonical(canonical) else {
-        return;
-    };
+    // Per-press hold duration, drawn AFTER the key index so both draws
+    // land at the same frame (mouse bot precedent: position + button at
+    // one frame). Value is reduced in [0, 28]; delivered hold is 2..=30
+    // frames. Tagged KeyHoldFrames, NOT Key — the action log filters
+    // on `ChoiceKind::Key`, and a duration draw is not a key press.
+    let hold_draw = choices.0.below_kind(
+        state.frame,
+        CHAOS_HOLD_MAX_FRAMES - CHAOS_HOLD_MIN_FRAMES + 1,
+        crate::choice::ChoiceKind::KeyHoldFrames,
+    );
+    let hold_frames = CHAOS_HOLD_MIN_FRAMES + hold_draw;
     // Dual-form emission mirrors winit's pipeline: raw `KeyboardInput`
     // plus wrapped `WindowEvent::KeyboardInput`, with `logical_key`
     // derived for the key code (US QWERTY assumption, same as the
     // `KeyCode` names) and `text` set on printable presses.
     keyboard.key_event(code, ButtonState::Pressed, primary_window.single().ok());
     state.metrics.input_count += 1;
-    hold_state.held = Some((code, state.frame + hold_frames));
+    hold_state.press(code, state.frame + hold_frames);
 }
 
 /// Synthetic keyboard bot: replays scheduled key presses through the real
@@ -513,8 +617,7 @@ struct MouseHoldState {
     /// Outstanding holds per button across all sources (chaos +
     /// scripted). A button leaves this map when its count reaches 0.
     counts: HashMap<bevy_input::mouse::MouseButton, u32>,
-    /// Pending chaos hold: one button at a time, matching the chaos
-    /// keyboard bot's one-key-at-a-time model. `(button, release_frame)`.
+    /// Pending chaos hold: one button at a time. `(button, release_frame)`.
     chaos_pending: Option<(bevy_input::mouse::MouseButton, u64)>,
     /// Pending scripted holds: one entry per outstanding scripted click
     /// `(button, release_frame)`. A Vec, not a single slot — the schema
@@ -1855,7 +1958,9 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
 
     // Action log: one entry per emitted input press, so a report's claim
     // of bot activity is auditable. Only key draws appear here — mouse
-    // draws are not key presses.
+    // draws are not key presses. `details` carries the draw's label
+    // (canonical key name): the recorded `value` indexes the draw-time
+    // unheld-candidate list, which the report does not contain.
     let action_log = choices
         .iter()
         .filter(|c| c.kind == crate::choice::ChoiceKind::Key)
@@ -1863,7 +1968,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             frame: c.frame,
             source: "bot".to_string(),
             action: format!("key_press:{}", c.value),
-            details: None,
+            details: c.label.clone(),
         })
         .collect();
 
@@ -1998,4 +2103,71 @@ fn is_progress_informational(rule: &str, strict_warnings: bool, require_surface:
         return false;
     }
     is_informational(rule, strict_warnings)
+
+#[cfg(test)]
+mod chaos_hold_tests {
+    //! Unit tests for the multi-slot chaos hold model: slot capacity,
+    //! last-holder-releases refcounting on same-key collisions, and
+    //! release-order bookkeeping. These mirror the mouse hold-count
+    //! tests at the integration level (`overlapping_mouse_holds_
+    //! refcount_per_button`) at the unit level of the state machine.
+
+    use super::*;
+
+    #[test]
+    fn press_fills_slots_up_to_capacity() {
+        let mut st = ChaosHoldState::default();
+        st.press(KeyCode::KeyW, 10);
+        st.press(KeyCode::ArrowLeft, 20);
+        assert_eq!(st.held.len(), CHAOS_HOLD_SLOTS);
+        // Sorted by release frame: earliest expiry pops first.
+        assert_eq!(st.held[0], (KeyCode::KeyW, 10));
+        assert_eq!(st.held[1], (KeyCode::ArrowLeft, 20));
+    }
+
+    #[test]
+    fn same_key_in_two_slots_last_holder_releases() {
+        let mut st = ChaosHoldState::default();
+        // Two slots hold the SAME key with different expiries.
+        st.press(KeyCode::KeyW, 10);
+        st.press(KeyCode::KeyW, 20);
+        // EARLY expiry: the other slot still holds W, so no Released
+        // message may fire.
+        st.held.remove(0);
+        assert!(
+            !st.release(KeyCode::KeyW),
+            "early release must be swallowed"
+        );
+        // LATE expiry: last holder lets go, Released fires.
+        st.held.remove(0);
+        assert!(st.release(KeyCode::KeyW), "last holder must release");
+        assert!(st.held.is_empty());
+    }
+
+    #[test]
+    fn distinct_keys_release_independently() {
+        let mut st = ChaosHoldState::default();
+        st.press(KeyCode::KeyW, 10);
+        st.press(KeyCode::KeyA, 10);
+        st.held.remove(0); // W expires
+        assert!(st.release(KeyCode::KeyW), "distinct keys never refcount");
+        assert_eq!(st.held.len(), 1, "A's hold must survive W's release");
+        st.held.remove(0); // A expires
+        assert!(st.release(KeyCode::KeyA));
+        assert!(st.held.is_empty());
+    }
+
+    #[test]
+    fn held_stays_sorted_by_release_frame() {
+        let mut st = ChaosHoldState::default();
+        // Insert out of order; expiry must still pop earliest-first.
+        st.press(KeyCode::KeyW, 30);
+        st.press(KeyCode::KeyA, 10);
+        assert_eq!(st.held.first().unwrap().1, 10);
+        // Slot freed, press again later than both remaining expiries:
+        st.held.remove(0);
+        st.press(KeyCode::KeyS, 40);
+        assert_eq!(st.held[0].1, 30);
+        assert_eq!(st.held[1].1, 40);
+    }
 }

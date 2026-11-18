@@ -250,7 +250,7 @@ pub fn fingerprint_system(world: &mut World) {
     let draws: Vec<crate::choice::Choice> = recorded
         .iter()
         .filter(|c| c.frame == frame)
-        .copied()
+        .cloned()
         .collect();
     let hash = fingerprint_frame(frame, &draws, world);
     if let Some(mut series) = world.get_resource_mut::<ReplaySeries>() {
