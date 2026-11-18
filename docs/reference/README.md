@@ -86,8 +86,8 @@ The chaos bot clicks as well as types — no scenario changes required.
 On each input tick it picks a random surface button, moves a harness
 owned cursor to a random quantized position (a single draw, 16 bits
 per axis, scaled into a 1280×1280 theoretical viewport), presses, and
-releases after 2 frames (same scheduling as chaos keys). Clicks reach
-the game through real `MouseButtonInput` messages, so
+releases after 2 frames (fixed, unlike chaos keys — see below). Clicks
+reach the game through real `MouseButtonInput` messages, so
 `ButtonInput<MouseButton>` and message-based input handlers both see
 them; scenario seeds replay identically.
 
@@ -101,6 +101,32 @@ harness-owned resource (`driver::CursorInputResource`), not the game's
 `Window.cursor_position` — UI systems that hit-test against the window
 cursor (e.g. `bevy_ui` hover) will not see chaos clicks land where the
 bot placed them. Button state itself is fully exercised.
+
+### Chaos keyboard (multi-slot holds)
+
+Chaos keys are no longer one-at-a-time. On each input tick (still
+governed by `input_rate_hz`) the bot presses one surface key whenever a
+hold slot is free, holding up to **2 keys concurrently** and releasing
+each after a **per-press drawn duration of 2–30 frames**. This lets the
+bot form chords (accelerate + steer) and exercise hold-to-charge
+mechanics without knowing what any key means. The draw selects among
+surface keys not currently held — a physical user cannot press a key
+they are already holding — so every key draw delivers a real press.
+Expiry follows a last-holder-releases rule as defense-in-depth (see the
+`ChaosHoldState::release` doc comment), but the candidate filter makes
+same-key double-holds unreachable with today's draw policy: a key can
+never occupy two slots, so `ButtonInput` never sees a premature
+release.
+
+Both per-press draws — key index and hold duration — are recorded in
+`choices` with their frame and bound, and covered by the replay
+fingerprint. Duration draws are tagged `kind: "key_hold_frames"`
+(the key-index draw stays `kind: "key"`); the action log derives its
+`key_press` entries from key draws only, so a duration draw never
+masquerades as a press. Note that `choices` streams are not comparable
+across harness versions that change the draw sequence — the added
+duration draw (and the candidate-set bound) changes per-frame draw
+order by design.
 
 ### Rejection at load
 
@@ -263,8 +289,14 @@ Two distinct error classes, at different stages:
 - `schema_version`, `frame_count`, `tps`, `simulated_duration_s`,
   `wall_time_s`, `error`
 - `action_log`: `[{ frame, source, action, details }]` — audited bot
-  inputs
-- `choices` (the bot's recorded random draws)
+  inputs; `details` on a `key_press` entry names the canonical key the
+  draw resolved to (the `action` value indexes the draw-time unheld-
+  candidate list, which the report does not contain)
+- `choices` (the bot's recorded random draws): `{ frame, value, bound,
+  kind, label }` — `kind` separates key-index draws (`key`), per-press
+  hold-duration draws (`key_hold_frames`), and mouse draws
+  (`mouse_position`, `mouse_button`); `label` (present only on
+  key-index draws) names the selected key
 - `state_digest`: `[{ frame, hash }]` — per-frame broadened state digests,
   present only when the scenario sets `record_digest: true`; omitted
   (empty) otherwise
