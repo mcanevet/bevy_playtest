@@ -333,15 +333,37 @@ impl std::error::Error for BatteryError {}
 /// stamped separately in `report.source_derived_keys`). An authored
 /// scenario file is never injected into — declaration beats
 /// inference; discovery then describes rather than replaces.
-pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, BatteryError> {
-    let dir = std::env::temp_dir().join(format!(
-        "bevy_playtest_battery_{}_{}",
+/// A unique per-run temp-directory path (not yet created).
+///
+/// Uniqueness = pid + nanosecond timestamp + a process-local monotonic
+/// counter. Neither ingredient suffices alone:
+/// - the clock is coarse — two battery runs started by the same test
+///   binary (parallel `#[test]`s) can land within one clock tick and
+///   would then SHARE one directory; one run's cleanup guard deletes
+///   it out from under the other's still-running child, so the child
+///   cannot write its report;
+/// - a counter alone doesn't separate processes; the pid does.
+fn battery_temp_dir() -> std::path::PathBuf {
+    static RUN_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = RUN_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "bevy_playtest_battery_{}_{}_{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos(),
-    ));
+        seq,
+    ))
+}
+
+pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, BatteryError> {
+    // Unique temp dir (see `battery_temp_dir`): one throwaway root per
+    // run, shared by the report, child cwd and any `./`-relative child
+    // writes. Uniqueness is pid + nanoseconds + a process-local
+    // counter — the clock alone lets same-tick sibling #[test]s share
+    // (and race-cleanup) one directory.
+    let dir = battery_temp_dir();
     std::fs::create_dir_all(&dir).map_err(|e| BatteryError::Spawn(e.to_string()))?;
     // RAII cleanup: EVERY return path (spawn error, timeout, missing
     // report, bad JSON) removes the temp dir — a failing test in CI
@@ -951,5 +973,16 @@ mod tests {
         let (kept, note) = withhold_probe_poison(&["Digit1".to_string(), "KeyV".to_string()]);
         assert_eq!(kept, vec!["Digit1".to_string(), "KeyV".to_string()]);
         assert_eq!(note, None, "no withholding happened — stay silent");
+    }
+
+    #[test]
+    fn battery_temp_dirs_are_unique_per_call() {
+        // Regression: two same-tick calls (parallel #[test]s in one
+        // test binary share the pid AND can share a clock tick) must
+        // still get distinct directories — a shared dir means one
+        // run's cleanup guard deletes the other's report mid-write.
+        let a = battery_temp_dir();
+        let b = battery_temp_dir();
+        assert_ne!(a, b, "back-to-back calls must never reuse a dir");
     }
 }
