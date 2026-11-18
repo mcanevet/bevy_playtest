@@ -273,6 +273,23 @@ Two distinct error classes, at different stages:
   repaired (each tick's tail stays lost) and is detected instead,
   reported as an informational `log_level_tampered` violation whose
   count is the number of tampered ticks.
+- **Render liveness** (`render-liveness` feature) — informational,
+  never gating: a sim-active run whose game HAS a render sub-app
+  (the `render_liveness` report field stays absent otherwise — "not
+  evaluated" never means "healthy") but whose cameras never existed,
+  were all disabled (`is_active == false`), or had no active camera
+  writing output (every sampled active camera sat on
+  `CameraOutputMode::Skip`, which may be intentional for
+  compositing/prepass setups; a disabled camera's mode is
+  irrelevant — it renders nothing) gains an informational
+  `render_liveness` violation. STRUCTURAL ONLY: the rule reads
+  main-world `Camera` components, never the render world or the
+  GPU — a live camera that renders black passes. Evidence (tier,
+  `cameras_seen`, `samples`, `sim_active_ever`, notes — collected
+  at cadence-gated samples only, not continuously) rides the
+  report's `render_liveness` field;
+  see the [headless-CI how-to](../how-to/headless-ci-gpu.md) for the
+  promise boundary.
 
 ## Report
 
@@ -322,6 +339,11 @@ Two distinct error classes, at different stages:
   `log_bridge_lost` violation, which is emitted when the capture
   subscriber won and not silenced by the
   `BEVY_PLAYTEST_ALLOW_MISSING_LOG_CAPTURE` escape hatch)
+- `render_liveness` (present only with the `render-liveness` feature
+  AND a render sub-app in the game; carries `{ cameras_seen,
+  sim_active_ever, tier, samples, notes }` — the evidence behind the
+  informational `render_liveness` violation; absence means "not
+  evaluated", never "healthy")
 
 The `log_capture_available`/`log_bridge_lost` and
 `log_capture_lost` violation entries are the HUMAN-facing layer:

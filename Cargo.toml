@@ -68,6 +68,14 @@ bevy_ui = { version = "0.20.1", default-features = false, optional = true }
 bevy_ui_widgets = { version = "0.20.1", optional = true }
 bevy_picking = { version = "0.20.1", optional = true }
 bevy_camera = { version = "0.20.1", default-features = false, optional = true }
+# Structural render-liveness rule (the `render-liveness` feature,
+# src/discovery/render_liveness.rs): needs to probe for
+# `bevy_render::RenderApp` (the sub-app whose presence distinguishes
+# "renderer initialized, worth judging cameras" from "no render
+# pipeline, not evaluated"). default-features = false keeps it
+# renderer-only (no winit/GPU init). Under takeover the `bevy`
+# meta-crate already unifies it — zero new crates there.
+bevy_render = { version = "0.20.1", default-features = false, optional = true }
 bevy_input_focus = { version = "0.20.1", optional = true }
 bevy_a11y = { version = "0.20.1", optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -111,6 +119,14 @@ bevy_asset = "0.20.1"
 bevy_image = "0.20.1"
 bevy_mesh = "0.20.1"
 bevy_utils = "0.20.1"
+
+# The render_liveness integration test drives the bevy_camera/
+# bevy_render-typed API surface, which only exists under the
+# feature — cargo SKIPS the target (rather than failing to build
+# it) when the feature is off, keeping plain `cargo test` green.
+[[test]]
+name = "render_liveness"
+required-features = ["render-liveness"]
 
 [[bin]]
 name = "takeover_demo"
@@ -327,6 +343,23 @@ ui-surface = [
     "bevy_ecs/serialize",
     "bevy_math/serialize",
 ]
+
+# Structural render-liveness rule (`render_liveness`,
+# informational): verifies the GAME has a structurally live render
+# path — at least one camera, not all disabled, output written to
+# SOME target — during a sim-active run. Detects missing/inactive/
+# Skip cameras; CANNOT see the render world or the GPU, so a live
+# camera that renders black passes here (pixel checking is reserved
+# for a future oracle). Attached only when a render sub-app EXISTS
+# (`bevy_render::RenderApp` in the sub-app table): a headless
+# server or unit-test app with no renderer is "not evaluated",
+# never accused. Census-neutral by construction: the tracker is a
+# driver-loop recorder (pure `fn(&World)` + one `App` sub-app
+# lookup), never a registered system. `bevy_render` edge: zero new
+# crates under takeover (unified by the `bevy` meta-crate);
+# in-process-only consumers who opt in gain the renderer crate.
+# See src/discovery/render_liveness.rs.
+render-liveness = ["dep:bevy_camera", "dep:bevy_render"]
 
 # Leafwing InputManager declared-binding reader + intent-tap
 # (D1-d). Pure reflection: no leafwing dependency in this crate — the

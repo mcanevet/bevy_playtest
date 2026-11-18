@@ -7,28 +7,28 @@
 /// Single source of truth: declares the `Rule` enum, the `Rule::ALL`
 /// registry slice, and the snake_case `name()` mapping from one list.
 macro_rules! declare_rules {
-    ($( $variant:ident => $name:literal ),* $(,)?) => {
+    ($( $(#[$attr:meta])* $variant:ident => $name:literal ),* $(,)?) => {
         /// All oracle rule names as an enum.
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         pub enum Rule {
-            $($variant),*
+            $($(#[$attr])* $variant),*
         }
 
         impl Rule {
             /// All registered rules (derived from the same list as the
             /// enum itself — cannot drift).
-            pub const ALL: &[Rule] = &[$(Rule::$variant),*];
+            pub const ALL: &[Rule] = &[$($(#[$attr])* Rule::$variant),*];
 
             /// The string name used in reports (snake_case).
             pub fn name(self) -> &'static str {
                 match self {
-                    $(Rule::$variant => $name),*
+                    $($(#[$attr])* Rule::$variant => $name),*
                 }
             }
 
             /// Look up a rule by its report name (inverse of `name`).
             pub fn from_name(name: &str) -> Option<Rule> {
-                $(if name == $name { return Some(Rule::$variant); })*
+                $($(#[$attr])* if name == $name { return Some(Rule::$variant); })*
                 None
             }
         }
@@ -56,6 +56,8 @@ impl Rule {
             Self::NodesInBounds => "Entity positions stay inside declared play-space bounds.",
             Self::ComponentCheck => "An authored-intent check: a numeric field on a reflected component must satisfy the declared comparison across the selected entities (always, or eventually within a deadline).",
             Self::FiniteTransforms => "Every entity's Transform holds finite values (no NaN/inf).",
+            #[cfg(feature = "render-liveness")]
+            Self::RenderLiveness => "A structurally live render path: a sim-active run with something to draw should have at least one camera that is enabled and written out; informational — a structural rule, it sees the main-world camera components, never the rendered pixels (a live camera rendering black passes).",
             Self::VacuousRun => "Nothing was ever observable: no entities to check and no inputs emitted — the run proves nothing about the game.",
             Self::VacuousInvariant => "An invariant matched zero entities; the check proves nothing until there is something to check.",
             Self::ReplayDivergence => "Same scenario + seed run twice must produce identical per-frame fingerprints; divergence means hidden nondeterminism (wall clock, unseeded RNG, unordered iteration).",
@@ -70,14 +72,16 @@ impl Rule {
     /// never gating the run status. Derived from the enum so the
     /// registry cannot drift.
     pub fn is_informational(self) -> bool {
-        matches!(
-            self,
+        match self {
             Self::LogWarn
-                | Self::LogCaptureLost
-                | Self::LogBridgeLost
-                | Self::LogLevelTampered
-                | Self::ProgressSurfaceEmpty
-        )
+            | Self::LogCaptureLost
+            | Self::LogBridgeLost
+            | Self::LogLevelTampered
+            | Self::ProgressSurfaceEmpty => true,
+            #[cfg(feature = "render-liveness")]
+            Self::RenderLiveness => true,
+            _ => false,
+        }
     }
 }
 
@@ -93,6 +97,14 @@ declare_rules! {
     NodesInBounds => "nodes_in_bounds",
     FiniteTransforms => "finite_transforms",
     ComponentCheck => "component_check",
+
+    // Structural render-path health (informational; render-liveness
+    // feature). A visual game with no working camera is soft-broken,
+    // but "renders correctly" cannot be judged structurally — see
+    // Rule::meaning and docs/how-to/headless-ci-gpu.md. Compiled out
+    // entirely when the feature is off (Rule::ALL shrinks with it).
+    #[cfg(feature = "render-liveness")]
+    RenderLiveness => "render_liveness",
 
     // Vacuity guard: a run where nothing was ever observable.
     VacuousRun => "vacuous_run",

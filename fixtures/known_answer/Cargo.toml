@@ -15,6 +15,7 @@ playtest = [
     "dep:bevy_playtest",
     "bevy_playtest/takeover",
     "bevy_playtest/takeover-winit",
+    "bevy_playtest/render-liveness",
     # Declared-tier discovery (D1-d): the LW reader/tap/reconcile
     # machinery compiled into the harness the fixture drives.
     "bevy_playtest/lw-reader",

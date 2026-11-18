@@ -42,6 +42,12 @@ pub struct StateDigestRecorder {
     /// Stop recording after this frame (bounds memory during divergence tracing).
     pub stop_after: Option<u64>,
     pub digests: Vec<StateDigest>,
+    /// Last digest hash seen by the render-liveness sampler this run
+    /// (driver-loop bookkeeping only — never serialized). Lets the
+    /// sampler detect "digest changed since I last looked" without
+    /// copying the series or caring about its length.
+    #[cfg_attr(not(feature = "render-liveness"), allow(dead_code))]
+    pub(crate) last_sampled_hash: Option<u64>,
     /// Optional snapshots keyed by frame (only populated if `with_snapshots`).
     pub snapshots: BTreeMap<u64, DigestSnapshot>,
 }
@@ -898,6 +904,32 @@ pub fn record_digest_system(world: &mut World) {
     }
 }
 
+impl StateDigestRecorder {
+    /// Whether the latest recorded digest differs from the last one
+    /// this caller's per-tick sampling observed. The FIRST call
+    /// reports `false` (the initial frame's digest is a state, not a
+    /// step — at tick 0 there is no prior frame to have changed
+    /// from; a genuinely stepping world is caught by the NEXT
+    /// per-tick comparison instead, which the driver runs every
+    /// tick). Updates the caller's bookkeeping on every call.
+    ///
+    /// NOTE: single-observer by construction (the render-liveness
+    /// sampler is the only caller, invoked once per driver tick);
+    /// a second observer sharing this field would corrupt both.
+    #[cfg_attr(not(feature = "render-liveness"), allow(dead_code))]
+    pub(crate) fn changed_since_last_sample(&mut self) -> bool {
+        let changed = match (self.last_sampled_hash, self.digests.last()) {
+            (None, None) => false,
+            // First observation: initial state is not a step.
+            (None, Some(_)) => false,
+            (Some(prev), Some(d)) => prev != d.hash,
+            (Some(_), None) => false,
+        };
+        self.last_sampled_hash = self.digests.last().map(|d| d.hash);
+        changed
+    }
+}
+
 /// Compare two digest series; returns the first divergence.
 pub fn compare(a: &[StateDigest], b: &[StateDigest]) -> Result<(), Divergence> {
     // Compare frame-by-frame; if frames disagree, that's also a divergence.
@@ -1240,6 +1272,7 @@ mod tests {
             with_snapshots: true,
             stop_after: Some(5),
             digests: vec![],
+            last_sampled_hash: None,
             snapshots: BTreeMap::new(),
         });
         app.insert_resource(RunState::default());
@@ -1405,5 +1438,55 @@ mod tests {
             digest_after, digest_changed,
             "UiTransform change must affect digest"
         );
+    }
+
+    #[test]
+    fn changed_since_last_sample_first_call_reports_no_step() {
+        // Doctrine (drive-by fix from round-2 review): the initial
+        // frame's digest is a STATE, not a STEP — at tick 0 there
+        // is no prior frame to have changed from. The first call
+        // must therefore report `false` even when a digest exists,
+        // so a static-but-digestable world is not accused of
+        // sim activity (a genuinely stepping world is caught by
+        // the next per-tick comparison).
+        let mut r = StateDigestRecorder {
+            digests: vec![StateDigest { frame: 0, hash: 7 }],
+            ..Default::default()
+        };
+        assert!(
+            !r.changed_since_last_sample(),
+            "first observation of an initial digest must not count as a step"
+        );
+        // And the world stays quiet if the digest never changes.
+        r.digests.push(StateDigest { frame: 1, hash: 7 });
+        assert!(!r.changed_since_last_sample());
+        // A real change is still detected from the first sample on.
+        r.digests.push(StateDigest { frame: 2, hash: 9 });
+        assert!(r.changed_since_last_sample());
+    }
+
+    #[test]
+    fn changed_since_last_sample_ignores_old_series_prefix() {
+        // Bookkeeping starts from the CALLER's last sample, not the
+        // beginning of the recorded series: a digest that predates
+        // the sampling observer must not register as a change.
+        let mut r = StateDigestRecorder {
+            digests: vec![
+                StateDigest { frame: 0, hash: 1 },
+                StateDigest { frame: 1, hash: 2 },
+            ],
+            ..Default::default()
+        };
+        assert!(!r.changed_since_last_sample()); // adopts hash 2
+        assert!(!r.changed_since_last_sample()); // unchanged since
+    }
+
+    #[test]
+    fn changed_since_last_sample_absent_recorder_is_quiet() {
+        // No digests at all (or the resource went missing): never a
+        // step, and never panics.
+        let mut r = StateDigestRecorder::default();
+        assert!(!r.changed_since_last_sample());
+        assert!(!r.changed_since_last_sample());
     }
 }

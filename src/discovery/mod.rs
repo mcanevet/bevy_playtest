@@ -29,7 +29,11 @@
 //! to find when the game itself uses Leafwing. `ui_surface` — the
 //! declared UI/interactable enumeration — sits behind `ui-surface`
 //! for the same reason: it links the bevy_ui/picking/widgets stack
-//! that the enumeration mirrors.
+//! that the enumeration mirrors. `render_liveness` — the structural
+//! camera-health probe — sits behind `render-liveness`: it reads
+//! main-world `Camera` components and probes for `bevy_render`'s
+//! sub-app, so its deps are `bevy_camera` + `bevy_render` (both
+//! already in the takeover graph via the `bevy` meta-crate).
 
 pub mod cache;
 pub mod census;
@@ -45,6 +49,8 @@ pub mod lw;
 pub mod probe_pool;
 pub mod probe_scenarios;
 pub mod provenance;
+#[cfg(feature = "render-liveness")]
+pub mod render_liveness;
 pub mod source_scan;
 pub mod static_scan;
 pub mod suggestions;
