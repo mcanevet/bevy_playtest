@@ -2103,6 +2103,7 @@ fn is_progress_informational(rule: &str, strict_warnings: bool, require_surface:
         return false;
     }
     is_informational(rule, strict_warnings)
+}
 
 #[cfg(test)]
 mod chaos_hold_tests {

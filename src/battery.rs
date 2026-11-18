@@ -976,6 +976,205 @@ pub fn run_and_expect_findings(
     report
 }
 
+/// A declared expectation that one specific, scoped finding will be
+/// present in the battery report. This is NOT an allowlist: an
+/// expectation is a predicate that consumes at most ONE matching
+/// violation, and the run still fails on (a) any violation not
+/// covered by a declared expectation, (b) any expectation that found
+/// no matching violation (so an expectation can never silently rot
+/// into covering nothing — if the game stops exhibiting the finding,
+/// the test goes red until the expectation is removed), and (c) a
+/// `pass` report with expectations declared (the declared finding
+/// did not occur).
+///
+/// Occurrence counts are part of the contract: the tracker dedups
+/// violations by `(rule, target)` and bumps `count` on recurrence, so
+/// an entry's `count` says how many times the finding occurred. An
+/// expectation only consumes an entry whose `count` equals the
+/// declared [`ExpectFinding::times`] (default 1) — a merged entry
+/// covering MORE occurrences than declared (e.g. the adjudicated
+/// menu freeze plus a later mid-game wedge of the same rule/target)
+/// is left uncovered and fails the run loudly.
+///
+/// Scope beyond the rule name is mandatory for discriminating uses:
+/// e.g. expecting the menu-idle `frozen_world` that fires at the end
+/// of the liveness window after onset-at-frame-0 must NOT swallow a
+/// mid-game wedge, which fires much later (if it can fire at all in
+/// the run window).
+#[derive(Debug, Clone)]
+pub struct ExpectFinding {
+    rule: crate::rules::Rule,
+    target: Option<String>,
+    /// Inclusive window the violation's `first_frame` must lie in.
+    first_frame_in: (u64, u64),
+    /// Occurrence count (`ViolationEntry::count`) the matched entry
+    /// must have EXACTLY — one-for-one consumption, occurrence-level.
+    times: u64,
+    /// Why this expectation exists — mandatory (see [`Self::new`]),
+    /// lands in failure messages, so the claim is reviewable rather
+    /// than a magic incantation.
+    justification: String,
+}
+
+impl ExpectFinding {
+    /// Expect a violation of `rule` (rule + target scoped by default;
+    /// add `.first_frame_in` for phase discrimination).
+    ///
+    /// `justification` is a mandatory reviewable reason: it appears
+    /// verbatim in failure messages. An expectation is a published
+    /// claim about the game's behavior; it must say why. Empty or
+    /// whitespace-only justifications are rejected.
+    pub fn new(rule: crate::rules::Rule, justification: impl Into<String>) -> Self {
+        let justification = justification.into();
+        assert!(
+            !justification.trim().is_empty(),
+            "ExpectFinding::new: a justification is mandatory — say WHY the \
+             finding is expected (it appears verbatim in failure messages)"
+        );
+        Self {
+            rule,
+            target: None,
+            first_frame_in: (0, u64::MAX),
+            times: 1,
+            justification,
+        }
+    }
+
+    /// Require the violation's `target` to equal `target` exactly.
+    pub fn target(mut self, target: impl Into<String>) -> Self {
+        self.target = Some(target.into());
+        self
+    }
+
+    /// Require the violation's `first_frame` to lie in `range`
+    /// (inclusive) — the phase discriminator.
+    pub fn first_frame_in(mut self, range: std::ops::RangeInclusive<u64>) -> Self {
+        self.first_frame_in = (*range.start(), *range.end());
+        self
+    }
+
+    /// Declare that the finding occurred exactly `n` times. The
+    /// matched entry's occurrence `count` must EQUAL `n` — not "at
+    /// least". Default 1. More occurrences than declared are never
+    /// absorbed; fewer are an unsatisfied expectation. Values below
+    /// 1 are clamped to 1: this API expresses presence, never
+    /// absence.
+    pub fn times(mut self, n: u64) -> Self {
+        self.times = n.max(1);
+        self
+    }
+
+    fn matches(&self, v: &crate::state::ViolationEntry) -> bool {
+        self.rule.name() == v.rule
+            && self.target.as_deref().is_none_or(|t| t == v.target)
+            && v.first_frame >= self.first_frame_in.0
+            && v.first_frame <= self.first_frame_in.1
+            && v.count == self.times
+    }
+
+    fn describe(&self) -> String {
+        let window = if self.first_frame_in == (0, u64::MAX) {
+            "<any>".to_string()
+        } else {
+            format!("{}..={}", self.first_frame_in.0, self.first_frame_in.1)
+        };
+        format!(
+            "{} on target {:?} firing in frames {}, occurring {} time(s) ({})",
+            self.rule.name(),
+            self.target.as_deref().unwrap_or("<any>"),
+            window,
+            self.times,
+            self.justification,
+        )
+    }
+}
+
+/// Like [`run_and_expect_clean`], but with declared expected
+/// findings. Each expectation must consume exactly one matching
+/// violation entry — occurrence-level one-for-one: the entry's
+/// `count` must equal the expectation's declared `times` (default
+/// 1), so more recurrences than declared are left uncovered and
+/// fail. Any uncovered violation still fails the run, any
+/// unsatisfied expectation fails it too, and a `crash` status fails
+/// it outright regardless of matching. Note the difference from
+/// [`run_and_expect_clean`]: informational findings (warnings,
+/// capture notes) also fail unless covered by an expectation.
+pub fn run_and_expect_scoped_findings(binary: &str, scenario: &str, expects: &[ExpectFinding]) {
+    let report = match run(binary, scenario) {
+        Ok(report) => report,
+        Err(e) => panic!("{e}"),
+    };
+    let mut problems: Vec<String> = Vec::new();
+    if report.status == crate::enums::PlaytestStatus::Crash {
+        // A crashed run is never a satisfied one, however the
+        // violation bookkeeping shook out.
+        problems.push(format!(
+            "RUN CRASHED (status: {}) — expected findings cannot certify a crashed run",
+            report.status
+        ));
+    }
+    // Greedy one-for-one consumption. Expectations are meant to be
+    // few and non-overlapping (each describes one adjudicated
+    // finding); ambiguity itself is the error to fix.
+    let mut covered = vec![false; report.violations.len()];
+    let mut unsatisfied: Vec<&ExpectFinding> = Vec::new();
+    for exp in expects {
+        match report
+            .violations
+            .iter()
+            .zip(covered.iter_mut())
+            .find(|(v, used)| !**used && exp.matches(v))
+        {
+            Some((_, slot)) => *slot = true,
+            None => {
+                problems.push(format!("expected finding NOT observed: {}", exp.describe()));
+                unsatisfied.push(exp);
+            }
+        }
+    }
+    for exp in &unsatisfied {
+        // Diagnose sibling competition: an expectation can miss
+        // because an EARLIER, looser one consumed its entry. Bind
+        // target too, so a genuinely-absent finding on a DIFFERENT
+        // target isn't misattributed to scope overlap.
+        let stolen = report
+            .violations
+            .iter()
+            .zip(covered.iter())
+            .any(|(v, used)| {
+                *used
+                    && v.rule == exp.rule.name()
+                    && exp.target.as_deref().is_none_or(|t| t == v.target)
+            });
+        if stolen {
+            problems.push(format!(
+                "possible cause: another declared expectation consumed an entry with \
+                 rule {} — check declaration order for overlapping scopes",
+                exp.rule.name()
+            ));
+        }
+    }
+    for (v, used) in report.violations.iter().zip(covered.iter()) {
+        if !used {
+            problems.push(format!(
+                "UNEXPECTED violation: [{}] {} (target: {}, frames {}-{}, x{}): {}",
+                report.status, v.rule, v.target, v.first_frame, v.last_frame, v.count, v.detail,
+            ));
+        }
+    }
+    if !problems.is_empty() {
+        let mut msg = String::from("playtest findings diverge from declared expectations:\n");
+        for p in &problems {
+            msg.push_str(&format!("  - {p}\n"));
+        }
+        msg.push_str(&format!(
+            "  report status: {}\n  reproduce: BEVY_PLAYTEST_SCENARIO={} cargo run --features playtest --bin <game>\n",
+            report.status, scenario
+        ));
+        panic!("{}", msg.trim_end());
+    }
+}
+
 /// Withhold poison keys ([`crate::discovery::source_scan::POISON_KEYS`])
 /// from a probe-verified injectable surface, returning the filtered
 /// list plus the refusal note naming what was withheld (refusal over
@@ -1059,5 +1258,117 @@ mod tests {
         let c = battery_temp_dir_at(frozen);
         assert_ne!(a, c);
         assert_ne!(b, c);
+    }
+
+    fn frozen_entry(first_frame: u64) -> crate::state::ViolationEntry {
+        crate::state::ViolationEntry {
+            rule: "frozen_world".to_string(),
+            target: "world".to_string(),
+            first_frame,
+            last_frame: first_frame,
+            count: 1,
+            detail: "no Transform or UI change for N frames — soft-lock?".to_string(),
+            last_detail: "no Transform or UI change for N frames — soft-lock?".to_string(),
+            meta: None,
+        }
+    }
+
+    #[test]
+    fn expect_finding_scopes_discriminate_phases() {
+        use crate::rules::Rule;
+        // The menu-idle expectation: frozen_world fires at
+        // onset + grace (20 s battery, 15 s liveness @ 60 tps ⇒
+        // ~901 frames). A TIGHT window around the minimum possible
+        // fire-frame admits only freezes beginning within ~20 frames
+        // of startup — the menu phase.
+        let menu_idle = ExpectFinding::new(
+            Rule::FrozenWorld,
+            "menu is an idle world; escape needs a lucky New Game click",
+        )
+        .target("world")
+        .first_frame_in(880..=920);
+        // A mid-game wedge (onset ~100) fires at ~1001 — the menu
+        // expectation must NOT absorb it, so the run stays red.
+        let midgame_wedge = frozen_entry(1001);
+        assert!(
+            !menu_idle.matches(&midgame_wedge),
+            "a menu-scoped first_frame_in window must not absorb a mid-run freeze"
+        );
+        // The actual menu finding (onset 0) fires at ~901: matches.
+        let menu_freeze = frozen_entry(901);
+        assert!(menu_idle.matches(&menu_freeze));
+        // Default (no window): any first_frame matches, but rule +
+        // target still bind.
+        let loose = ExpectFinding::new(Rule::FrozenWorld, "why");
+        assert!(loose.matches(&midgame_wedge));
+        assert!(
+            !loose.matches(&{
+                let mut v = frozen_entry(901);
+                v.rule = "input_sink".to_string();
+                v
+            }),
+            "a different rule never matches"
+        );
+        let targeted = ExpectFinding::new(Rule::FrozenWorld, "why").target("camera");
+        assert!(
+            !targeted.matches(&menu_freeze),
+            "a different target never matches"
+        );
+    }
+
+    #[test]
+    fn expect_finding_occurrence_count_is_part_of_the_contract() {
+        use crate::rules::Rule;
+        // The tracker merges recurrences of the same (rule, target)
+        // into ONE entry with count = occurrences (state.rs dedup).
+        // The reviewer's wedge-hiding attack: menu freeze + a later
+        // mid-game freeze merge to count=2; a default (times=1)
+        // expectation must REFUSE the merged entry — the wedge stays
+        // uncovered and the run stays red.
+        let menu_only = ExpectFinding::new(
+            Rule::FrozenWorld,
+            "menu idle world; escape needs a lucky New Game click",
+        )
+        .target("world")
+        .first_frame_in(880..=920);
+        let mut merged = frozen_entry(901);
+        merged.count = 2; // menu freeze at 901 + wedge at ~1000+
+        merged.last_frame = 1000;
+        assert!(
+            !menu_only.matches(&merged),
+            "a times=1 expectation must not absorb a count=2 merged entry (wedge hiding)"
+        );
+        // Declaring .times(2) consumes the merged entry — the caller
+        // has to SAY the finding occurred twice.
+        let declared_twice = menu_only.clone().times(2);
+        assert!(declared_twice.matches(&merged));
+        assert!(
+            !declared_twice.matches(&frozen_entry(901)),
+            "times=2 must not absorb a single occurrence either — exact equality"
+        );
+    }
+
+    #[test]
+    fn expect_finding_describe_carries_the_claim() {
+        use crate::rules::Rule;
+        let exp = ExpectFinding::new(
+            Rule::FrozenWorld,
+            "adjudicated true positive (see FIXTURES.md)",
+        )
+        .target("world")
+        .first_frame_in(0..=1000);
+        let d = exp.describe();
+        assert!(d.contains("frozen_world"), "{d}");
+        assert!(d.contains("0..=1000"), "{d}");
+        assert!(d.contains("adjudicated true positive"), "{d}");
+        // The full-range default window renders as <any>, not
+        // 0..=u64::MAX.
+        let loose = ExpectFinding::new(Rule::FrozenWorld, "why");
+        assert!(loose.describe().contains("<any>"), "{}", loose.describe());
+        assert!(
+            !loose.describe().contains("18446744073709551615"),
+            "{}",
+            loose.describe()
+        );
     }
 }
