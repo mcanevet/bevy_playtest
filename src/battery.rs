@@ -305,6 +305,34 @@ impl std::fmt::Display for BatteryError {
 
 impl std::error::Error for BatteryError {}
 
+/// A unique per-run temp-directory path (not yet created).
+///
+/// Uniqueness = pid + nanosecond timestamp + a process-local monotonic
+/// counter. The pid only separates *processes* and the clock is coarse
+/// — two battery runs started by the same test binary (parallel
+/// `#[test]`s) share the pid and can land within one clock tick, which
+/// without the counter would hand them ONE shared directory: one
+/// run's cleanup guard deletes it out from under the other's
+/// still-running child, so the child cannot write its report.
+fn battery_temp_dir() -> std::path::PathBuf {
+    battery_temp_dir_at(std::time::SystemTime::now())
+}
+
+/// [`battery_temp_dir`] with an injectable clock, so tests can pin the
+/// same-tick collision the counter exists to close.
+fn battery_temp_dir_at(now: std::time::SystemTime) -> std::path::PathBuf {
+    static RUN_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = RUN_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "bevy_playtest_battery_{}_{}_{}",
+        std::process::id(),
+        now.duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos(),
+        seq,
+    ))
+}
+
 /// Run with explicit config. Returns the parsed report on any
 /// completed run — INCLUDING failing ones (findings are the report's
 /// content, not an infrastructure error). Inspect `report.status` /
@@ -333,36 +361,10 @@ impl std::error::Error for BatteryError {}
 /// stamped separately in `report.source_derived_keys`). An authored
 /// scenario file is never injected into — declaration beats
 /// inference; discovery then describes rather than replaces.
-/// A unique per-run temp-directory path (not yet created).
-///
-/// Uniqueness = pid + nanosecond timestamp + a process-local monotonic
-/// counter. Neither ingredient suffices alone:
-/// - the clock is coarse — two battery runs started by the same test
-///   binary (parallel `#[test]`s) can land within one clock tick and
-///   would then SHARE one directory; one run's cleanup guard deletes
-///   it out from under the other's still-running child, so the child
-///   cannot write its report;
-/// - a counter alone doesn't separate processes; the pid does.
-fn battery_temp_dir() -> std::path::PathBuf {
-    static RUN_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let seq = RUN_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
-        "bevy_playtest_battery_{}_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos(),
-        seq,
-    ))
-}
-
 pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, BatteryError> {
     // Unique temp dir (see `battery_temp_dir`): one throwaway root per
     // run, shared by the report, child cwd and any `./`-relative child
-    // writes. Uniqueness is pid + nanoseconds + a process-local
-    // counter — the clock alone lets same-tick sibling #[test]s share
-    // (and race-cleanup) one directory.
+    // writes.
     let dir = battery_temp_dir();
     std::fs::create_dir_all(&dir).map_err(|e| BatteryError::Spawn(e.to_string()))?;
     // RAII cleanup: EVERY return path (spawn error, timeout, missing
@@ -981,8 +983,16 @@ mod tests {
         // test binary share the pid AND can share a clock tick) must
         // still get distinct directories — a shared dir means one
         // run's cleanup guard deletes the other's report mid-write.
-        let a = battery_temp_dir();
-        let b = battery_temp_dir();
-        assert_ne!(a, b, "back-to-back calls must never reuse a dir");
+        // Freezing the clock pins the exact collision the original
+        // pid+nanos naming suffered; only the counter separates them.
+        let frozen = std::time::SystemTime::now();
+        let a = battery_temp_dir_at(frozen);
+        let b = battery_temp_dir_at(frozen);
+        assert_ne!(a, b, "same-tick calls must never reuse a dir");
+        // And the separator really is the counter: every path ends
+        // in a strictly increasing seq component.
+        let c = battery_temp_dir_at(frozen);
+        assert_ne!(a, c);
+        assert_ne!(b, c);
     }
 }
