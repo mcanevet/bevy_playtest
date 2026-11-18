@@ -1172,13 +1172,18 @@ mod tests {
     }
 
     fn tempdir() -> std::path::PathBuf {
+        // Counter separates same-tick sibling tests sharing one pid
+        // (the clock alone is not unique enough — see battery.rs).
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
-            "bevy_playtest_source_scan_test_{}_{}",
+            "bevy_playtest_source_scan_test_{}_{}_{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            seq,
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
