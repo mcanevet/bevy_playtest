@@ -427,7 +427,7 @@ done
 # NOTE: the escape hatch deliberately avoids the `BEVY_PLAYTEST_`
 # prefix — game binaries reject unknown `BEVY_PLAYTEST_*` vars
 # (exit 3), so a leaked value must not poison test children.
-THETAWAVE_REV="fe66df3e72dadeadf64df050cab1e3953f2b075c"
+THETAWAVE_REV="e5354f81558da6b8e4d1157f4178d1d2537ec9b9"
 echo "Processing: thetawave (fork port @ ${THETAWAVE_REV})"
 target_dir="${FIXTURES_DIR}/thetawave"
 tmp_dir="$(mktemp -d)"

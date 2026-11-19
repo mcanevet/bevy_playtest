@@ -36,7 +36,7 @@ game's actual `InputMap`s and that a driven action reaches
   `storage` feature — upstream parity, excluded from the playtest
   battery; gameplay unchanged. The port itself lives in the
   [mcanevet/thetawave](https://github.com/mcanevet/thetawave) fork
-  (branch `bevy-0.20-pause-sound`) and is cloned into `fixtures/thetawave/` by
+  (branch `bevy-0.20-seed-sweep`) and is cloned into `fixtures/thetawave/` by
   `scripts/fetch_bevy_examples.sh` at the pinned commit SHA — same
   pattern as the showcase games, except the remote is our fork
   because the port is ours.

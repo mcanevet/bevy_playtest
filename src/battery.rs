@@ -74,7 +74,9 @@ pub use crate::plugin::BATTERY_LITERAL as BUILTIN_BATTERY;
 /// How long to wait for the run to finish before failing the test
 /// (runs are bounded by their `duration_s`, but a hung or looping
 /// game must fail the test, not hang CI forever).
-const DEFAULT_TIMEOUT_SECS: u64 = 300;
+/// Default per-member timeout for sweeps and explicit-config runs
+/// (seconds).
+pub const DEFAULT_TIMEOUT_SECS: u64 = 300;
 
 /// Stable sentence shared by BOTH arms of bevy_render's
 /// `GPU_NOT_FOUND_ERROR_MESSAGE` (bevy_render 0.20.1,
@@ -210,6 +212,7 @@ pub fn run(binary: &str, scenario: &str) -> Result<PlaytestReport, BatteryError>
         binary: binary.to_string(),
         scenario: scenario.to_string(),
         timeout_secs: DEFAULT_TIMEOUT_SECS,
+        seed_override: None,
     })
 }
 
@@ -228,6 +231,18 @@ pub struct BatteryConfig {
     pub scenario: String,
     /// Wall-clock kill switch for a hung game (seconds).
     pub timeout_secs: u64,
+    /// Override the scenario's declared seed (`scenario.bot.seed`),
+    /// including the built-in battery's. `None` = honor the scenario.
+    /// Travels to the child via [`crate::plugin::ENV_SEED`] and is
+    /// honored AFTER scenario loading (so the discovery-inject and
+    /// source-scan layering arms — which key off the builtin literal
+    /// and write scenario VARIANT files — compose with it: the
+    /// override applies to whatever scenario the child actually
+    /// loads). Also the manual-repro story: reproduce any single
+    /// battery run by hand with
+    /// `BEVY_PLAYTEST_SCENARIO=battery BEVY_PLAYTEST_SEED=<seed> cargo run --features playtest --bin <game>`
+    /// (the seed var alone is inert — the takeover needs its scenario).
+    pub seed_override: Option<u64>,
 }
 
 /// Battery failure modes that are NOT game findings (infrastructure
@@ -261,6 +276,10 @@ pub enum BatteryError {
     GpuMissing { exit_code: Option<i32> },
     /// A report was written but could not be parsed.
     ReportParse(String),
+    /// The seed sweep failed on infrastructure (a member run that
+    /// errored before producing a report, or an unreadable
+    /// regression file), not on a game finding.
+    Sweep(String),
 }
 
 impl std::fmt::Display for BatteryError {
@@ -290,6 +309,9 @@ impl std::fmt::Display for BatteryError {
                  the full recipe."
             ),
             Self::ReportParse(e) => write!(f, "playtest report is not valid JSON: {e}"),
+            Self::Sweep(e) => {
+                write!(f, "seed sweep infrastructure failure: {e}")
+            }
         }
     }
 }
@@ -520,12 +542,21 @@ pub fn run_with_overrides(
     }
     cmd.env(ENV_SCENARIO, &scenario_arg)
         .env(ENV_REPORT, &report_path);
+    // Seed override (seed sweeps + manual repro of a single member):
+    // honored by the takeover AFTER scenario loading, so it composes
+    // with injected/scan-layered scenario variants.
+    if let Some(seed) = config.seed_override {
+        cmd.env(crate::plugin::ENV_SEED, seed.to_string());
+    }
 
     // Deterministic OS randomness (Linux): preload the shim so the
     // game's `getrandom()` (rand::rng(), the getrandom crate, ahash)
     // returns a stream seeded from the scenario seed. Decided here,
     // stamped on the report after the run.
-    let randomness = match detrng_decision(&scenario_arg, overrides) {
+    // Same precedence as the bot's seed in the child: `seed_override`
+    // (applied by the takeover after scenario loading) wins, so every
+    // member of a seed sweep gets its own OS randomness too.
+    let randomness = match detrng_decision(&scenario_arg, config.seed_override.or(overrides.seed)) {
         Ok((so, seed)) => {
             // APPENDED to an inherited LD_PRELOAD: some preloads (e.g.
             // sanitizer runtimes) must come first, and interposition still
@@ -653,7 +684,7 @@ const DETRNG_SO: &str = env!("BEVY_PT_DETRNG_SHIM");
 /// `Ok((shim path, seed))`, or the reason it is not used.
 fn detrng_decision(
     scenario_arg: &str,
-    overrides: &ScenarioOverrides,
+    seed_override: Option<u64>,
 ) -> Result<(&'static str, u64), String> {
     if std::env::var_os(ENV_DETRNG_DISABLE).is_some() {
         return Err(format!("disabled by {ENV_DETRNG_DISABLE}"));
@@ -672,7 +703,7 @@ fn detrng_decision(
             "shim path contains a space or colon, which LD_PRELOAD cannot express: {DETRNG_SO}"
         ));
     }
-    let seed = match overrides.seed {
+    let seed = match seed_override {
         Some(seed) => seed,
         None if scenario_arg == BUILTIN_BATTERY => {
             crate::plugin::battery_scenario()
