@@ -44,8 +44,11 @@ pub fn fingerprint_frame(frame: u64, choices: &[crate::choice::Choice], world: &
     }
     // Canonical order: collect and sort all translations, so Query
     // iteration order never leaks into the fingerprint.
+    // Harness-injected probe entities (the screen-liveness rig) are
+    // excluded: their fixed pose is harness bookkeeping and would
+    // leak probe presence into replay comparisons.
     let mut translations: Vec<[f32; 3]> = world
-        .query_filtered::<&Transform, ()>()
+        .query_filtered::<&Transform, bevy_ecs::query::Without<crate::injected::HarnessInjected>>()
         .iter(world)
         .map(|t| [t.translation.x, t.translation.y, t.translation.z])
         .collect();

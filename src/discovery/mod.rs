@@ -34,6 +34,10 @@
 //! main-world `Camera` components and probes for `bevy_render`'s
 //! sub-app, so its deps are `bevy_camera` + `bevy_render` (both
 //! already in the takeover graph via the `bevy` meta-crate).
+//! `screen_liveness` — the pixel-observed successor (harness probe
+//! camera + screenshot readback + perceptual hash) — sits behind
+//! `screen-liveness`, which chains `render-liveness` plus
+//! `bevy_asset`/`bevy_image` for the offscreen `Image` target.
 
 pub mod cache;
 pub mod census;
@@ -51,6 +55,8 @@ pub mod probe_scenarios;
 pub mod provenance;
 #[cfg(feature = "render-liveness")]
 pub mod render_liveness;
+#[cfg(feature = "screen-liveness")]
+pub mod screen_liveness;
 pub mod source_scan;
 pub mod static_scan;
 pub mod suggestions;

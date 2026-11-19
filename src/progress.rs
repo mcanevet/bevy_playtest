@@ -219,8 +219,18 @@ impl ProgressRecorder {
         let mut component_counts: Option<std::collections::BTreeMap<String, usize>> = None;
         for channel in &self.channels {
             let value = match channel {
-                Channel::EntityCount => world.entities().count_spawned() as u64,
-                Channel::ArchetypeCount => world.archetypes().len() as u64,
+                Channel::EntityCount => {
+                    // Probe hygiene: injected entities (the
+                    // screen-liveness rig) are not game breadth.
+                    world.entities().count_spawned() as u64
+                        - crate::injected::injected_count(world) as u64
+                }
+                Channel::ArchetypeCount => {
+                    // Probe-only archetypes (no game entity inside)
+                    // would not exist without the harness rig.
+                    world.archetypes().len() as u64
+                        - crate::injected::archetype_excess(world) as u64
+                }
                 Channel::ComponentCount(path) => {
                     let counts = component_counts
                         .get_or_insert_with(|| collect_component_type_counts(world));

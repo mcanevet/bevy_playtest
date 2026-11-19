@@ -290,6 +290,30 @@ Two distinct error classes, at different stages:
   report's `render_liveness` field;
   see the [headless-CI how-to](../how-to/headless-ci-gpu.md) for the
   promise boundary.
+- **Screen liveness** (`screen-liveness` feature, implies
+  `render-liveness`) — informational, never gating: PIXEL
+  observation where `render_liveness` is structural. The harness
+  spawns its own marker-tagged `Camera2d` (only when the game itself
+  has a 2D camera — a purely-3D view cannot be faithfully mirrored)
+  and requests a screenshot every `tps/2` ticks; captured frames are
+  box-filtered to an 8x8 luma grid and hashed, consecutive hashes
+  compared by Hamming distance. A sim-active run whose captured
+  screen never changed across EVERY consecutive capture pair gains
+  an informational `screen_liveness` violation ("pixels did not
+  flow despite a stepping world"; may be intentional — menus,
+  dialogue, level-load art). Honest boundaries, fail-open:
+  a run with no 2D game camera at any cadence tick is labeled
+  `not_evaluated_3d` (never guessed), and fewer than two usable
+  captures (ultra-short run, or GPU readback failure) come out
+  `insufficient_captures` — the question is refused, not guessed.
+  The rig requires the render sub-app AND an `Assets<Image>` store;
+  absence of either means the `screen_liveness` report field stays
+  absent — "not evaluated", never "healthy". The 8x8 grid has a
+  documented under-sensitivity floor: sub-cell motion (one cell is
+  ~40x30 px at the 320x240 capture size) is invisible by design;
+  live tiers emit nothing. Evidence (tier, requests, captures,
+  `max_hamming`, `sim_active_ever`, notes) rides the report's
+  `screen_liveness` field.
 
 ## Report
 
@@ -344,6 +368,12 @@ Two distinct error classes, at different stages:
   sim_active_ever, tier, samples, notes }` — the evidence behind the
   informational `render_liveness` violation; absence means "not
   evaluated", never "healthy")
+- `screen_liveness` (present only with the `screen-liveness` feature
+  AND a render sub-app AND an image-asset store in the game; carries
+  `{ requests, captures, max_hamming, sim_active_ever, tier, notes }`
+  — the pixel-observed evidence behind the informational
+  `screen_liveness` violation; absence means "not evaluated", never
+  "healthy")
 
 The `log_capture_available`/`log_bridge_lost` and
 `log_capture_lost` violation entries are the HUMAN-facing layer:
