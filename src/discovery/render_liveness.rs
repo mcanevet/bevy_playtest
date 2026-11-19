@@ -271,12 +271,25 @@ impl RenderLivenessTracker {
         self.samples += 1;
 
         // `QueryState::try_new` works from `&World` (immutable,
-        // safe). `None` means `Camera` is not registered in this
-        // world, so no camera can exist: empty AND complete (same
-        // doctrine as the UI-surface enumeration).
-        let cameras: Vec<Entity> = QueryState::<Entity, With<Camera>>::try_new(world)
-            .map(|mut state| state.iter(world).collect())
-            .unwrap_or_default();
+        // safe). Registration-safe probe hygiene: the filtered
+        // query (excluding harness-injected probe cameras) needs
+        // `HarnessInjected` registered; when it is not (bare test
+        // worlds, or a run without the screen-liveness rig), the
+        // plain camera query is used — no marker, no probe, and the
+        // fallback changes nothing. `None` on the PLAIN query means
+        // `Camera` itself is unregistered: no camera can exist —
+        // empty AND complete (same doctrine as the UI-surface
+        // enumeration).
+        let cameras: Vec<Entity> = match QueryState::<
+            Entity,
+            (With<Camera>, Without<crate::injected::HarnessInjected>),
+        >::try_new(world)
+        {
+            Some(mut state) => state.iter(world).collect(),
+            None => QueryState::<Entity, With<Camera>>::try_new(world)
+                .map(|mut state| state.iter(world).collect())
+                .unwrap_or_default(),
+        };
         let ordered = {
             // Deterministic order: ascending entity index.
             let mut v = cameras;

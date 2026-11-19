@@ -1447,6 +1447,7 @@ dependencies = [
  "tracing",
  "tracing-log",
  "tracing-subscriber",
+ "wgpu-types",
 ]
 
 [[package]]
