@@ -178,6 +178,40 @@ fn rejects_duplicate_invariant_names() {
 }
 
 #[test]
+fn rejects_entity_shaped_nodes_in_bounds_invariant_names() {
+    // The invariant NAME is the finding's TARGET, and the sweep's
+    // fingerprint layer canonicalizes entity-debug-shaped
+    // nodes_in_bounds targets (and the literal "entity") to the
+    // global oracle's canonical key. A name like "3v1" or "entity"
+    // would collide: one regression-file line would silence the
+    // authored invariant AND the global oracle's finding. Reject at
+    // validation so the collision is unreachable.
+    for name in ["3v1", "entity", "17v3", "0v0"] {
+        let mut json = minimal_scenario("chaos");
+        json["invariants"] = serde_json::json!([
+            { "name": name, "rule": "nodes_in_bounds" }
+        ]);
+        let s = parse(json);
+        let err = validate_scenario(&s).unwrap_err().to_string();
+        assert!(
+            err.contains("collide with the global oracle"),
+            "name {name:?} must be rejected: {err}"
+        );
+    }
+    // Sanity: the same names stay legal for component_check (its
+    // rule string differs, so no canonicalization applies) and
+    // ordinary bounds names stay legal.
+    let mut json = minimal_scenario("chaos");
+    json["invariants"] = serde_json::json!([
+        { "name": "3v1", "rule": "component_check", "target_selector": {"with_component": {"name": "Hp"}},
+          "path": "current", "check": "le", "value": 100 },
+        { "name": "arena_bounds", "rule": "nodes_in_bounds" }
+    ]);
+    let s = parse(json);
+    validate_scenario(&s).expect("non-colliding names are legal");
+}
+
+#[test]
 fn rejects_custom_invariants_at_parse_time() {
     // "custom" is removed from InvariantRule: it fails deserialization
     // with an unknown-variant error.

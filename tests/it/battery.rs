@@ -38,6 +38,7 @@ fn battery_child_runs_in_its_own_cwd_and_home() {
     // asserts on its exit code relayed through the no-report
     // failure.
     let err = run_with_config(&BatteryConfig {
+        seed_override: None,
         binary: env!("CARGO_BIN_EXE_takeover_demo_cwd_check").to_string(),
         scenario: BUILTIN_BATTERY.to_string(),
         timeout_secs: 30,
@@ -82,6 +83,7 @@ fn gpu_panic_gets_named_failure_with_remediation() {
     // Simulated — no GPU-less host needed: the battery diagnoses
     // the child's stderr TEXT, not real renderer behavior.
     let err = run_with_config(&BatteryConfig {
+        seed_override: None,
         binary: env!("CARGO_BIN_EXE_takeover_demo_gpu_panic").to_string(),
         scenario: BUILTIN_BATTERY.to_string(),
         timeout_secs: 30,
@@ -113,6 +115,7 @@ fn generic_panic_keeps_plain_no_report_failure() {
     // with no report must keep the PLAIN NoReport verdict —
     // detection must never mask or rewrite other failures.
     let err = run_with_config(&BatteryConfig {
+        seed_override: None,
         binary: env!("CARGO_BIN_EXE_takeover_demo_panic_generic").to_string(),
         scenario: BUILTIN_BATTERY.to_string(),
         timeout_secs: 30,
@@ -137,6 +140,7 @@ fn bounded_drain_survives_a_held_pipe() {
     // grace, never hanging.
     let started = std::time::Instant::now();
     let err = run_with_config(&BatteryConfig {
+        seed_override: None,
         binary: env!("CARGO_BIN_EXE_takeover_demo_stderr_grandchild").to_string(),
         scenario: BUILTIN_BATTERY.to_string(),
         timeout_secs: 3,
@@ -176,6 +180,7 @@ fn held_pipe_does_not_block_exit_diagnosis() {
     // timeout-path sibling above.
     let started = std::time::Instant::now();
     let err = run_with_config(&BatteryConfig {
+        seed_override: None,
         binary: env!("CARGO_BIN_EXE_takeover_demo_stderr_grandchild_exit").to_string(),
         scenario: BUILTIN_BATTERY.to_string(),
         timeout_secs: 3,
@@ -211,14 +216,16 @@ fn os_randomness_is_deterministic_per_seed() {
         r#"{"bot":{"type":"chaos","seed":5},"duration_s":0.2,"tps":60,"record_digest":true}"#,
     )
     .unwrap();
-    let run = || {
+    let run_seeded = |seed_override: Option<u64>| {
         run_with_config(&BatteryConfig {
             binary: env!("CARGO_BIN_EXE_takeover_demo_rng").to_string(),
             scenario: scenario.to_string_lossy().into_owned(),
             timeout_secs: 60,
+            seed_override,
         })
         .expect("demo run completes")
     };
+    let run = || run_seeded(None);
     let last = |r: &bevy_playtest::state::PlaytestReport| {
         r.state_digest
             .last()
@@ -233,6 +240,20 @@ fn os_randomness_is_deterministic_per_seed() {
         "the battery must say it intercepted randomness"
     );
     assert_eq!(last(&a), last(&b), "same seed must give the same world");
+
+    // A seed sweep's override reseeds the OS randomness too: each member
+    // must get its own world, not seed 5's with only the bot changed.
+    let swept = run_seeded(Some(6));
+    assert_eq!(
+        swept.randomness.as_deref(),
+        Some("intercepted getrandom() (LD_PRELOAD), seed 6"),
+        "the randomness seed must follow seed_override"
+    );
+    assert_ne!(
+        last(&a),
+        last(&swept),
+        "seed 6 must build a different world"
+    );
 
     // Unset even if a run panics, so later tests in this process keep
     // the shim.

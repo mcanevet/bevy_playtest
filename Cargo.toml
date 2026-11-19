@@ -257,6 +257,14 @@ name = "takeover_demo_panic_generic"
 path = "src/bin/takeover_demo_panic_generic.rs"
 required-features = ["takeover"]
 
+# Crash-member child for the seed-sweep gate tests: a real App run
+# under takeover whose Update system panics, producing a Crash-status
+# report (see tests/it/sweep.rs).
+[[bin]]
+name = "takeover_demo_crash"
+path = "src/bin/takeover_demo_crash.rs"
+required-features = ["takeover"]
+
 # Grandchild-holding-pipe child for the battery's bounded-drain
 # regression, TIMEOUT path: spawns a grandchild that INHERITS its
 # stderr (the battery's tee pipe) and parks, then parks forever —

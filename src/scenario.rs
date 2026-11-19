@@ -56,8 +56,8 @@ pub struct Scenario {
     /// value reproducibility over throughput.
     #[serde(default = "default_true")]
     pub single_threaded: bool,
-    /// Escalate warning-class violations (bevy_warning, log_warn) to
-    /// gating severity. Default false: headless runs routinely trip
+    /// Escalate warning-class violations (log_warn) to gating
+    /// severity. Default false: headless runs routinely trip
     /// render/audio warnings that are benign without a GPU.
     #[serde(default)]
     pub strict_warnings: bool,
@@ -1144,6 +1144,36 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                 if rule.value.is_some() || rule.path.is_some() || rule.check.is_some() {
                     return Err(ScenarioError::Rejected(format!(
                         "invariant '{}': nodes_in_bounds does not use value/path/check",
+                        rule.name
+                    )));
+                }
+                // The invariant NAME is the finding's TARGET
+                // (`invariant_eval` reports `rule=nodes_in_bounds`,
+                // `target=inv.name`), while the GLOBAL oracle reports
+                // per-entity debug targets that the sweep's
+                // fingerprint layer canonicalizes to
+                // `nodes_in_bounds:entity`. A name shaped like a bevy
+                // entity debug string ("3v1") — or the literal
+                // "entity" — would collapse to (or collide with)
+                // that canonical key: one regression-file line would
+                // then silence two DIFFERENT findings. Reject such
+                // names for this rule; component_check names never
+                // collapse (different rule string), and
+                // finite_transforms has no authored counterpart.
+                let name = rule.name.trim();
+                let entity_shaped = name == "entity"
+                    || name.split_once('v').is_some_and(|(idx, gen)| {
+                        !idx.is_empty()
+                            && !gen.is_empty()
+                            && idx.bytes().all(|b| b.is_ascii_digit())
+                            && gen.bytes().all(|b| b.is_ascii_digit())
+                    });
+                if entity_shaped {
+                    return Err(ScenarioError::Rejected(format!(
+                        "invariant '{}': a nodes_in_bounds name may not look like a bevy \
+                         entity — '{name}' would collide with the global oracle's \
+                         canonicalized `nodes_in_bounds:entity` fingerprint; pick a \
+                         descriptive name",
                         rule.name
                     )));
                 }

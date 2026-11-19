@@ -63,6 +63,16 @@ pub const ENV_HEADLESS: &str = "BEVY_PLAYTEST_HEADLESS";
 /// flow can merge real reader data into the surface (fail-open: a
 /// missing/failed export never fails the run).
 pub const ENV_DISCOVER_SCAN: &str = "BEVY_PLAYTEST_DISCOVER_SCAN";
+/// Optional seed override (takeover runs): when set, overrides the
+/// loaded scenario's `bot.seed` — including the built-in literals —
+/// AFTER loading, so it composes with scan-layered scenario
+/// variants. Set by the battery parent
+/// ([`crate::battery::BatteryConfig::seed_override`], driven by the
+/// seed sweep) and by hand for manual single-run repro:
+/// `BEVY_PLAYTEST_SCENARIO=battery BEVY_PLAYTEST_SEED=<seed> cargo
+/// run --features playtest --bin <game>` (the seed var alone is
+/// inert — the takeover needs its scenario to take over at all).
+pub const ENV_SEED: &str = "BEVY_PLAYTEST_SEED";
 pub use crate::sinks::ENV_ALLOW_MISSING_LOG_CAPTURE;
 /// Seed for the deterministic-randomness shim the battery preloads into
 /// the game process (Linux). Set by the battery parent; read by the shim
@@ -73,7 +83,7 @@ pub const ENV_DETRNG_SEED: &str = "BEVY_PLAYTEST_DETRNG_SEED";
 /// parent. Listed as known so an inherited value is never rejected.
 pub const ENV_DETRNG_DISABLE: &str = "BEVY_PLAYTEST_DETRNG_DISABLE";
 
-const KNOWN_ENV_VARS: [&str; 10] = [
+const KNOWN_ENV_VARS: [&str; 11] = [
     ENV_SCENARIO,
     ENV_REPORT,
     ENV_HEADLESS,
@@ -87,6 +97,7 @@ const KNOWN_ENV_VARS: [&str; 10] = [
     // Test-selection var (set by the acceptance suite / CI matrix to
     // pick one fixture); inherited by the game process harmlessly.
     "BEVY_PLAYTEST_FIXTURE",
+    ENV_SEED,
 ];
 
 /// Exit codes for the takeover process contract.
@@ -241,7 +252,7 @@ fn take_over(app: &mut App, config: TakeoverConfig) {
 }
 
 fn run_takeover(app: &mut App, config: &TakeoverConfig) -> ! {
-    let (scenario, source) = if config.scenario_path == SMOKE_LITERAL {
+    let (mut scenario, source) = if config.scenario_path == SMOKE_LITERAL {
         (
             match smoke_scenario() {
                 Ok(s) => s,
@@ -275,6 +286,30 @@ fn run_takeover(app: &mut App, config: &TakeoverConfig) -> ! {
             "file",
         )
     };
+    // Seed override: applied AFTER scenario loading and BEFORE the
+    // pass/replay dispatch so it covers every branch the takeover
+    // can take — builtin literals, file scenarios and
+    // scan-layered variants alike. Pass B (replay) is a fresh child
+    // process re-running the same scenario env, so it inherits the
+    // override from the environment automatically. A non-u64 value
+    // is a config error, not a warning — this is a REPRO knob, and
+    // a typo'd seed that silently runs the declared seed instead is
+    // the worst possible failure mode (the operator believes they
+    // reproduced a member they did not). Matches the strict env
+    // contract: a typo'd setting must never be mistaken for a
+    // configured option.
+    if let Some(value) = std::env::var_os(ENV_SEED) {
+        match value.to_string_lossy().parse::<u64>() {
+            Ok(seed) => scenario.bot.seed = seed,
+            Err(_) => {
+                eprintln!(
+                    "bevy_playtest: {ENV_SEED} is not a u64 ('{}')",
+                    value.to_string_lossy()
+                );
+                std::process::exit(exit_code::CONFIG_ERROR);
+            }
+        }
+    }
     // Replay verification needs TWO freshly built Apps. The takeover
     // already owns process lifetime and `set_runner` hands us the App
     // after plugin-build; a true rebuild requires re-running the
