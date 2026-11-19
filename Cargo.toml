@@ -107,7 +107,7 @@ log = "0.4.35"
 # can hash identical; a static one can drift), so those tests
 # self-skip on software adapters. Dev/test-only; same resolved
 # wgpu-types already in the graph via bevy_render.
-wgpu-types = "30"
+wgpu-types = "30.0.2"
 # D1-d: the lw-reader tests read REAL Leafwing InputManager 0.22
 # registrations (in-process App fixtures). Dev/test-only: consumers'
 # graphs never see leafwing, even with `lw-reader` ON (the reader is
