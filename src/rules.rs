@@ -58,6 +58,8 @@ impl Rule {
             Self::FiniteTransforms => "Every entity's Transform holds finite values (no NaN/inf).",
             #[cfg(feature = "render-liveness")]
             Self::RenderLiveness => "A structurally live render path: a sim-active run with something to draw should have at least one camera that is enabled and written out; informational — a structural rule, it sees the main-world camera components, never the rendered pixels (a live camera rendering black passes).",
+            #[cfg(feature = "screen-liveness")]
+            Self::ScreenLiveness => "A screen that reflects its simulation: a sim-active run's captured frames should not be bit-identical forever; informational — pixel-hash evidence from a harness-owned capture rig (2D views only; legitimately static screens like menus are a judgment call, not an oracle).",
             Self::VacuousRun => "Nothing was ever observable: no entities to check and no inputs emitted — the run proves nothing about the game.",
             Self::VacuousInvariant => "An invariant matched zero entities; the check proves nothing until there is something to check.",
             Self::ReplayDivergence => "Same scenario + seed run twice must produce identical per-frame fingerprints; divergence means hidden nondeterminism (wall clock, unseeded RNG, unordered iteration).",
@@ -80,6 +82,8 @@ impl Rule {
             | Self::ProgressSurfaceEmpty => true,
             #[cfg(feature = "render-liveness")]
             Self::RenderLiveness => true,
+            #[cfg(feature = "screen-liveness")]
+            Self::ScreenLiveness => true,
             _ => false,
         }
     }
@@ -105,6 +109,16 @@ declare_rules! {
     // entirely when the feature is off (Rule::ALL shrinks with it).
     #[cfg(feature = "render-liveness")]
     RenderLiveness => "render_liveness",
+
+    // Pixel-observed screen health (informational; screen-liveness
+    // feature): the successor probe to render_liveness — a
+    // harness-owned capture rig reads back what the renderer
+    // actually produced and hashes it; a screen that never changed
+    // while the simulation claimed activity is surfaced as evidence,
+    // never a failure (legitimately static screens exist). Compiled
+    // out entirely when the feature is off.
+    #[cfg(feature = "screen-liveness")]
+    ScreenLiveness => "screen_liveness",
 
     // Vacuity guard: a run where nothing was ever observable.
     VacuousRun => "vacuous_run",

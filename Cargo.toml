@@ -76,6 +76,16 @@ bevy_camera = { version = "0.20.1", default-features = false, optional = true }
 # renderer-only (no winit/GPU init). Under takeover the `bevy`
 # meta-crate already unifies it — zero new crates there.
 bevy_render = { version = "0.20.1", default-features = false, optional = true }
+# Pixel-observed screen-liveness rule (the `screen-liveness`
+# feature, src/discovery/screen_liveness.rs): spawns a harness-owned
+# `Camera2d` rendering into an offscreen `Image` and reads pixels back
+# via bevy_render's screenshot wire. Needs `Assets<Image>` +
+# `Image`/`RenderAssetUsages` from bevy_asset/bevy_image — bevy_render
+# does NOT re-export them — plus `Camera2d`/`RenderTarget` (already
+# optional via bevy_camera). default-features = false on both; under
+# takeover the `bevy` meta-crate already unifies all of them.
+bevy_asset = { version = "0.20.1", default-features = false, optional = true }
+bevy_image = { version = "0.20.1", default-features = false, optional = true }
 bevy_input_focus = { version = "0.20.1", optional = true }
 bevy_a11y = { version = "0.20.1", optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -90,6 +100,14 @@ bevy = { version = "0.20.1", optional = true }
 # protocol as bevy's B000x hierarchy validators) to prove the harness
 # captures them. Dev/test-only: consumers' graphs never see it.
 log = "0.4.35"
+# Software-adapter detection for the screen_liveness GPU-positive
+# tests: pixel CONTENT pins (live-vs-frozen tiers) are only
+# meaningful on hardware rasterizers — lavapipe (DeviceType::Cpu)
+# readback is content-unfaithful in both directions (a moving scene
+# can hash identical; a static one can drift), so those tests
+# self-skip on software adapters. Dev/test-only; same resolved
+# wgpu-types already in the graph via bevy_render.
+wgpu-types = "30"
 # D1-d: the lw-reader tests read REAL Leafwing InputManager 0.22
 # registrations (in-process App fixtures). Dev/test-only: consumers'
 # graphs never see leafwing, even with `lw-reader` ON (the reader is
@@ -100,6 +118,12 @@ leafwing-input-manager = "0.22"
 # covers runtime use, but the test must prove the bevy_* filter drops a
 # genuinely registered engine type. Dev-deps do not taint consumers.
 bevy_time = { version = "0.20.1", features = ["bevy_reflect"] }
+# GPU-positive screen_liveness tests: DefaultPlugins-minus-Winit app
+# shape (real renderer, headless surface contract) + Sprite scenes,
+# mirroring the T2 capture spike. Dev/test-only: consumers' graphs
+# never see it (the spike proved the capture wire works under the
+# `bevy` meta-crate's plugin graph).
+bevy = "0.20.1"
 # Unmask system names in the TEST graph (bevy_utils/debug: without it
 # `DebugName` displays a placeholder for every system). The static scan's
 # ENGINE_DRIVER_NAMES filter is name-based, so the exact-count
@@ -127,6 +151,14 @@ bevy_utils = "0.20.1"
 [[test]]
 name = "render_liveness"
 required-features = ["render-liveness"]
+
+# The screen_liveness integration test drives the capture rig
+# (bevy_asset/bevy_image/bevy_camera/bevy_render API surface) and,
+# for its GPU-positive cases, the real renderer — both only exist
+# under the feature.
+[[test]]
+name = "screen_liveness"
+required-features = ["screen-liveness"]
 
 [[bin]]
 name = "takeover_demo"
@@ -360,6 +392,32 @@ ui-surface = [
 # in-process-only consumers who opt in gain the renderer crate.
 # See src/discovery/render_liveness.rs.
 render-liveness = ["dep:bevy_camera", "dep:bevy_render"]
+
+# Pixel-observed screen-liveness rule (`screen_liveness`,
+# informational): the successor probe to `render_liveness` — instead
+# of reading camera components, it captures what the renderer ACTUALLY
+# produced: a harness-owned Camera2d renders the 2D scene into an
+# offscreen Image and a per-cadence-tick GPU readback (bevy_render's
+# screenshot wire) yields an 8x8 average-threshold perceptual hash;
+# hashes that never change while the simulation reports activity are
+# a frozen screen, hashes that do change prove pixels flowed. 2D
+# first: purely-3D scenes (no Camera2d present) are honestly "not
+# evaluated for 3d" — the rule never accuses what it cannot see.
+# Captures drain through the game's own ScreenshotPlugin schedule;
+# a post-run GPU wait-poll plus direct channel drain is the escape
+# hatch. Census-neutral: probe camera + screenshot-request entities
+# carry the `HarnessInjected` marker, excluded from the state digest
+# and every breadth enumeration, and the render_liveness camera
+# query ignores the probe. Extra deps beyond render-liveness:
+# bevy_asset (Assets<Image>) + bevy_image (Image,
+# RenderAssetUsages::RENDER_WORLD) — both already unified by the
+# `bevy` meta-crate under takeover. See
+# src/discovery/screen_liveness.rs.
+screen-liveness = [
+    "render-liveness",
+    "dep:bevy_asset",
+    "dep:bevy_image",
+]
 
 # Leafwing InputManager declared-binding reader + intent-tap
 # (D1-d). Pure reflection: no leafwing dependency in this crate — the
