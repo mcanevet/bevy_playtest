@@ -22,6 +22,8 @@ pub mod rules;
 pub mod scenario;
 pub mod sinks;
 pub mod state;
+#[cfg(feature = "takeover")]
+pub mod sweep;
 
 /// Convenience re-export: run a scenario, get a report.
 pub use driver::run_scenario;

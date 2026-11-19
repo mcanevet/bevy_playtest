@@ -207,6 +207,7 @@ pub fn run_evaluation(
                 binary: binary.to_string(),
                 scenario: BUILTIN_BATTERY.to_string(),
                 timeout_secs: 900,
+                seed_override: None,
             },
             &ScenarioOverrides {
                 seed: Some(seed),

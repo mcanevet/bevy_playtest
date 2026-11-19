@@ -306,6 +306,7 @@ pub fn lw_lens_scenario_file(tag: &str) -> (std::path::PathBuf, impl Drop) {
 pub fn run_lw_lens(tag: &str) -> bevy_playtest::state::PlaytestReport {
     let (scenario, _cleanup) = lw_lens_scenario_file(tag);
     let config = bevy_playtest::battery::BatteryConfig {
+        seed_override: None,
         binary: env!("CARGO_BIN_EXE_fixture_known_answer").to_string(),
         scenario: scenario.to_string_lossy().into_owned(),
         timeout_secs: 300,

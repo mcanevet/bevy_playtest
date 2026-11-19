@@ -48,6 +48,7 @@ mod scenario_schema;
 mod screen_liveness;
 mod state_digest;
 mod state_trace;
+mod sweep;
 mod takeover_e2e;
 mod ui_liveness;
 mod ui_surface;

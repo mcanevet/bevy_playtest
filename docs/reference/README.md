@@ -163,7 +163,11 @@ Two distinct error classes, at different stages:
   `Transform` (zero-annotation);
   bounds are per-axis (`min_x`/`max_x`/`min_y`/`max_y`/`min_z`/`max_z`),
   each defaulting
-  to ±1000 when unset. A `target_selector:
+  to ±1000 when unset. The invariant's `name` must not look like a
+  bevy entity debug string (`3v1`) or the literal `entity` — the name
+  doubles as the finding's target, and such a name would collide
+  with the seed-sweep fingerprint of the global bounds oracle (which
+  canonicalizes per-entity targets). A `target_selector:
   {"with_component": {"name": "..."}}` narrows the check to entities
   carrying that named registered component (full type path or an
   unambiguous short path — same resolution rules as
@@ -468,6 +472,7 @@ disables the takeover.
 | `BEVY_PLAYTEST_HEADLESS` | Assert headlessness without running a scenario: no window, no display needed |
 | `BEVY_PLAYTEST_REPLAY_PASS_B` | Internal: replay pass-B marker |
 | `BEVY_PLAYTEST_ALLOW_MISSING_LOG_CAPTURE` | Acknowledge a lost log subscriber instead of failing |
+| `BEVY_PLAYTEST_SEED` | Override the loaded scenario's `bot.seed` (after loading — composes with scan-layered variants). Reproduce any single battery or sweep member by hand: pair with `BEVY_PLAYTEST_SCENARIO` (the seed var alone leaves the takeover inert) |
 
 Unknown `BEVY_PLAYTEST_*` variables abort the game process with exit
 code 3 — a typo'd setting must never be mistaken for a configured option.

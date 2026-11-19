@@ -80,6 +80,7 @@ fn menu_drive_scenario_file(tag: &str) -> (std::path::PathBuf, impl Drop) {
 fn run_menu_drive(tag: &str) -> bevy_playtest::state::PlaytestReport {
     let (scenario, _cleanup) = menu_drive_scenario_file(tag);
     let config = bevy_playtest::battery::BatteryConfig {
+        seed_override: None,
         binary: env!("CARGO_BIN_EXE_fixture_thetawave").to_string(),
         scenario: scenario.to_string_lossy().into_owned(),
         timeout_secs: 300,
