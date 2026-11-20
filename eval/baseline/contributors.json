@@ -65,5 +65,5 @@
       "unmeasurable_reason": "phase 1: needs the explorer's own report"
     }
   ],
-  "note": "Baseline: chaos bot before phase 1, measured by the Exploration evaluation workflow on GitHub runners (run 44752095130, main @ PR #108); traces omitted."
+  "note": "Baseline: chaos bot before phase 1, measured by the Exploration evaluation workflow on GitHub runners (run 44752095130, commit 0722110418c15122cced3cd3c797aeac53254841); traces omitted."
 }

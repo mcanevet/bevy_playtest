@@ -7,11 +7,14 @@ name: Exploration evaluation
 # results land in the run summary and as JSON artifacts.
 # See docs/explanation/exploration-targets.md.
 #
-# No schedule: every input is pinned (seeds, fixtures, Bevy revision), so
-# results only change when the code does. PRs that can change
-# exploration get a QUICK evaluation (2 seeds x 3,000 frames); the full
-# one (5 x 5,000) is run on demand before claiming an improvement. It is
-# never a required check, so it does not delay CI's merge gate.
+# No schedule. Results change when the code changes, and can also drift
+# with the environment (runner image, software renderer, games using
+# OS-seeded randomness; see the Determinism section of the doc), so the
+# full evaluation (5 x 5,000) is run on demand, against a fresh baseline
+# when comparing. PRs that can change exploration get a QUICK evaluation
+# (2 seeds x 5,000 frames: same frame budget as the baseline, so median
+# frames compare; hit counts out of 2 do not). Never a required check, so
+# it does not delay CI's merge gate.
 
 on:
   pull_request:
@@ -22,6 +25,9 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "fixtures/Cargo.lock"
+      - "fixtures/known_answer/**"
+      - "rust-toolchain.toml"
+      - ".cargo/config.toml"
       - "scripts/fetch_bevy_examples.sh"
       - ".github/workflows/evaluate.yml"
       - ".github/actions/setup/**"
@@ -100,7 +106,7 @@ jobs:
           FIXTURE: ${{ matrix.fixture }}
           # Quick on PRs; full (or the inputs) when run by hand.
           SEEDS: ${{ inputs.seeds || (github.event_name == 'pull_request' && '2' || '5') }}
-          FRAMES: ${{ inputs.frames || (github.event_name == 'pull_request' && '3000' || '5000') }}
+          FRAMES: ${{ inputs.frames || '5000' }}
         run: |
           ./target/debug/bevy_playtest_eval \
             --targets "eval/targets/$FIXTURE.json" \
