@@ -1282,7 +1282,7 @@ fn ui_liveness_system(
 #[derive(Resource)]
 pub struct RunState {
     pub frame: u64,
-    tps: u64,
+    pub(crate) tps: u64,
     metrics: crate::state::Metrics,
     frame_timing: FrameTimingStats,
     /// Consecutive frames with no liveness evidence; read by the
