@@ -1,0 +1,102 @@
+{
+  "fixture": "game_menu",
+  "frames": 5000,
+  "seeds": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "runs": [
+    {
+      "seed": 1,
+      "status": "Fail",
+      "wall_s": 44.6,
+      "violation_rules": [
+        "progress_surface_empty"
+      ],
+      "error": null
+    },
+    {
+      "seed": 2,
+      "status": "Fail",
+      "wall_s": 45.9,
+      "violation_rules": [
+        "progress_surface_empty"
+      ],
+      "error": null
+    },
+    {
+      "seed": 3,
+      "status": "Fail",
+      "wall_s": 44.7,
+      "violation_rules": [
+        "progress_surface_empty"
+      ],
+      "error": null
+    },
+    {
+      "seed": 4,
+      "status": "Fail",
+      "wall_s": 44.7,
+      "violation_rules": [
+        "progress_surface_empty"
+      ],
+      "error": null
+    },
+    {
+      "seed": 5,
+      "status": "Fail",
+      "wall_s": 43.7,
+      "violation_rules": [
+        "frozen_world",
+        "progress_surface_empty"
+      ],
+      "error": null
+    }
+  ],
+  "targets": [
+    {
+      "id": "G1",
+      "description": "Enter both settings sub-menus (display and sound)",
+      "hits": 3,
+      "runs": 5,
+      "median_frame": 3115,
+      "unmeasurable_reason": null
+    },
+    {
+      "id": "G2",
+      "description": "Change a setting (display quality or volume)",
+      "hits": 4,
+      "runs": 5,
+      "median_frame": 1371,
+      "unmeasurable_reason": null
+    },
+    {
+      "id": "G3",
+      "description": "Start the game (GameState::Game)",
+      "hits": 5,
+      "runs": 5,
+      "median_frame": 259,
+      "unmeasurable_reason": null
+    },
+    {
+      "id": "G4",
+      "description": "Visit every menu screen and the game in one run",
+      "hits": 3,
+      "runs": 5,
+      "median_frame": 3115,
+      "unmeasurable_reason": null
+    },
+    {
+      "id": "G5",
+      "description": "Report Quit as a terminal action, never a crash",
+      "hits": null,
+      "runs": 5,
+      "median_frame": null,
+      "unmeasurable_reason": "phase 1: needs the explorer's own report"
+    }
+  ],
+  "note": "Baseline: chaos bot before phase 1 (commit 6995762), measured locally; traces omitted. Re-measure with bevy_playtest_eval."
+}
