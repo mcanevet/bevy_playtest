@@ -190,6 +190,13 @@ pub struct PlaytestReport {
     /// reports. See [`crate::discovery::state_trace`].
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub state_trace: Option<crate::discovery::state_trace::StateTrace>,
+    /// Whether the battery made OS-seeded randomness deterministic for
+    /// this run, and how or why not (e.g. "intercepted getrandom()
+    /// (LD_PRELOAD), seed 42" / "not intercepted: not Linux"). Stamped
+    /// by the battery parent; `None` for in-process runs (the process
+    /// already started, so nothing could be intercepted) and old reports.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub randomness: Option<String>,
     /// Load-time capability census rows captured during
     /// `run_scenario` startup, before bot/oracle registration
     /// (present whenever
@@ -276,6 +283,7 @@ impl PlaytestReport {
             #[cfg(feature = "lw-reader")]
             lw_reconciled: None,
             state_trace: None,
+            randomness: None,
             // Crash stub: the run never reached the census attach
             // point, so no census exists.
             capability_census: None,

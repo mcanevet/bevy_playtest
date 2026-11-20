@@ -315,6 +315,13 @@ name = "takeover_demo_empty"
 path = "src/bin/takeover_demo_empty.rs"
 required-features = ["takeover"]
 
+# Demo whose world depends on OS randomness (getrandom()): positive
+# control for the battery's deterministic-randomness shim.
+[[bin]]
+name = "takeover_demo_rng"
+path = "src/bin/takeover_demo_rng.rs"
+required-features = ["takeover"]
+
 # Score a game's exploration against a committed targets file
 # (eval/targets/*.json); used by the evaluation workflow.
 [[bin]]

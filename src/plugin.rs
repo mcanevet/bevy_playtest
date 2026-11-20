@@ -64,7 +64,16 @@ pub const ENV_HEADLESS: &str = "BEVY_PLAYTEST_HEADLESS";
 /// missing/failed export never fails the run).
 pub const ENV_DISCOVER_SCAN: &str = "BEVY_PLAYTEST_DISCOVER_SCAN";
 pub use crate::sinks::ENV_ALLOW_MISSING_LOG_CAPTURE;
-const KNOWN_ENV_VARS: [&str; 8] = [
+/// Seed for the deterministic-randomness shim the battery preloads into
+/// the game process (Linux). Set by the battery parent; read by the shim
+/// (`detrng/shim.rs`), never by the takeover itself.
+pub const ENV_DETRNG_SEED: &str = "BEVY_PLAYTEST_DETRNG_SEED";
+
+/// Opt-out for the deterministic-randomness shim, read by the battery
+/// parent. Listed as known so an inherited value is never rejected.
+pub const ENV_DETRNG_DISABLE: &str = "BEVY_PLAYTEST_DETRNG_DISABLE";
+
+const KNOWN_ENV_VARS: [&str; 10] = [
     ENV_SCENARIO,
     ENV_REPORT,
     ENV_HEADLESS,
@@ -72,6 +81,9 @@ const KNOWN_ENV_VARS: [&str; 8] = [
     ENV_REPLAY_PASS_B_DIGEST,
     ENV_ALLOW_MISSING_LOG_CAPTURE,
     ENV_DISCOVER_SCAN,
+    ENV_DETRNG_SEED,
+    // Battery-parent opt-out for the shim; harmless if inherited.
+    ENV_DETRNG_DISABLE,
     // Test-selection var (set by the acceptance suite / CI matrix to
     // pick one fixture); inherited by the game process harmlessly.
     "BEVY_PLAYTEST_FIXTURE",

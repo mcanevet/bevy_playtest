@@ -136,9 +136,26 @@ these oracles watch:
   flagged)
 
 Determinism: the seed controls the bot's choices — same seed → same
-inputs → same bot behavior. It does not control game-side randomness
-or wall-clock reads, so an unchanged game can still produce a
-different verdict; the battery leaves replay verification off. To
+inputs → same bot behavior. On Linux the battery also makes the game's
+OS-seeded randomness repeatable: it preloads a tiny shim (`LD_PRELOAD`)
+whose `getrandom()` is seeded from the scenario seed. That covers
+callers going through libc's `getrandom`: the `getrandom` crate 0.3+,
+hence `rand::rng()` (rand 0.9+) and ahash. Not covered: `getrandom`
+0.2 (raw syscall), `/dev/urandom` readers, glibc `arc4random`, and
+clock-based seeds. Only the main thread's stream is guaranteed to
+repeat (game systems run there under the takeover's single-threaded
+executor); other threads share a seeded stream whose order depends on
+thread timing. The shim is built with a plain `rustc` call, so cross
+builds with a custom target linker may fail to build it; the run then
+reports randomness as not intercepted. The report's
+`randomness` field says whether that happened, or why not (not Linux,
+in-process run, or `BEVY_PLAYTEST_DETRNG_DISABLE=1` set in the test's
+environment). The shim also affects anything else in the game process
+that asks the OS for randomness, networking crypto included, so it is
+test-build-only by construction. Seeds taken from the clock and other
+wall-clock reads are not controlled, so an unchanged game can still
+produce a different verdict; the battery leaves replay verification
+off. To
 prove determinism, enable
 [replay verification](#verification-depth-what-is-proven-vs-what-is-asserted),
 which runs the scenario twice and compares per-frame fingerprints.

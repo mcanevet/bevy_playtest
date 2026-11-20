@@ -193,3 +193,73 @@ fn held_pipe_does_not_block_exit_diagnosis() {
         started.elapsed().as_secs_f32()
     );
 }
+
+/// Deterministic OS randomness (Linux): the battery preloads a shim so
+/// the game's `getrandom()` is seeded from the scenario seed. Two runs
+/// of a game that places an entity from OS randomness must then build
+/// the same world (same digests); with the shim disabled they must not
+/// (the value is drawn from 997 positions, so a chance match is ~0.1%).
+#[cfg(target_os = "linux")]
+#[test]
+fn os_randomness_is_deterministic_per_seed() {
+    let _slot = common::run_slot();
+    let dir = std::env::temp_dir().join(format!("bevy_playtest_detrng_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let scenario = dir.join("scenario.json");
+    std::fs::write(
+        &scenario,
+        r#"{"bot":{"type":"chaos","seed":5},"duration_s":0.2,"tps":60,"record_digest":true}"#,
+    )
+    .unwrap();
+    let run = || {
+        run_with_config(&BatteryConfig {
+            binary: env!("CARGO_BIN_EXE_takeover_demo_rng").to_string(),
+            scenario: scenario.to_string_lossy().into_owned(),
+            timeout_secs: 60,
+        })
+        .expect("demo run completes")
+    };
+    let last = |r: &bevy_playtest::state::PlaytestReport| {
+        r.state_digest
+            .last()
+            .map(|d| d.hash)
+            .expect("digest recorded")
+    };
+
+    let (a, b) = (run(), run());
+    assert_eq!(
+        a.randomness.as_deref(),
+        Some("intercepted getrandom() (LD_PRELOAD), seed 5"),
+        "the battery must say it intercepted randomness"
+    );
+    assert_eq!(last(&a), last(&b), "same seed must give the same world");
+
+    // Unset even if a run panics, so later tests in this process keep
+    // the shim.
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            // SAFETY: test env mutation, serialized by the run slot.
+            unsafe { std::env::remove_var(bevy_playtest::battery::ENV_DETRNG_DISABLE) };
+        }
+    }
+    // SAFETY: test env mutation, serialized by the run slot.
+    unsafe { std::env::set_var(bevy_playtest::battery::ENV_DETRNG_DISABLE, "1") };
+    let restore = Restore;
+    let (c, d) = (run(), run());
+    drop(restore);
+    assert!(
+        c.randomness
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("not intercepted: disabled"),
+        "{:?}",
+        c.randomness
+    );
+    assert_ne!(
+        last(&c),
+        last(&d),
+        "without the shim, OS randomness must differ between runs (else the test proves nothing)"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
