@@ -84,9 +84,11 @@ fn detects_nan_transform() {
 fn detects_out_of_bounds() {
     let _slot = common::run_slot();
     let mut app = App::new();
+    // A runaway: flies off at 200 units/frame and is never despawned
+    // (leaves the ±1000 default box at frame 5, then keeps going).
     app.add_systems(bevy_app::Update, |mut q: Query<&mut Transform>| {
         for mut t in q.iter_mut() {
-            t.translation.x = 5000.0; // beyond DEFAULT_BOUNDS_EXTENT (1000)
+            t.translation.x += 200.0;
         }
     });
     app.world_mut().spawn(Transform::from_xyz(0.0, 0.0, 0.0));
@@ -96,6 +98,36 @@ fn detects_out_of_bounds() {
         violated_with(report.status, &rule_names(&report), "nodes_in_bounds"),
         "expected nodes_in_bounds violation, got {:?}: {:?}",
         report.status,
+        report.violations
+    );
+}
+
+/// Negative controls for the default bounds oracle: being far away is
+/// not a runaway. Static level geometry beyond ±1000 (thetawave's arena
+/// barrier sits at y = 2250) and entities coming IN from far away must
+/// not be flagged; only something that keeps moving away is.
+#[test]
+fn far_but_static_or_inbound_entities_are_not_runaways() {
+    let _slot = common::run_slot();
+    #[derive(bevy_ecs::component::Component)]
+    struct Inbound;
+    let mut app = App::new();
+    app.add_systems(
+        bevy_app::Update,
+        |mut q: Query<&mut Transform, bevy_ecs::query::With<Inbound>>| {
+            for mut t in q.iter_mut() {
+                t.translation.y -= 10.0; // moving toward the origin
+            }
+        },
+    );
+    app.world_mut().spawn(Transform::from_xyz(0.0, 2250.0, 0.0)); // static wall
+    app.world_mut()
+        .spawn((Transform::from_xyz(0.0, 5000.0, 0.0), Inbound));
+
+    let report = run_scenario(&mut app, &short_scenario()).expect("run completes");
+    assert!(
+        !rule_names(&report).contains(&"nodes_in_bounds".to_string()),
+        "static or inbound far entities must not be flagged as runaways: {:?}",
         report.violations
     );
 }

@@ -93,9 +93,11 @@ each input 2 frames so `ButtonInput`-based games observe it — while
 these oracles watch:
 
 - **Non-finite translations** — any non-finite `Transform.translation` → Fail (rotations/scales are not checked)
-- **Runaway geometry** — entities leaving bounds (a hard-coded global
-  ±1000 on x/y/z runs even with nothing declared; authored scenarios
-  tighten per-axis)
+- **Runaway geometry** — with nothing declared, an entity outside a
+  global ±1000 box on x/y/z that keeps moving away for 0.5 s (e.g. a
+  projectile that is never despawned); far-but-static level geometry and
+  objects coming in from afar are not flagged. Bounds declared in an
+  authored scenario are checked strictly, per axis
 - **Frozen world** — no entity movement (or UI change, under
   `ui-liveness`) across the liveness grace window → Fail (catches
   soft-locks; with `record_digest: true` a silent-but-stepping world
