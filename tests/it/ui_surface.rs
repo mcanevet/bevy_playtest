@@ -146,6 +146,31 @@ mod ui_tests {
     }
 
     #[test]
+    fn click_through_pickable_is_not_a_target() {
+        let mut app = setup_app();
+        let node = Node {
+            width: Val::Px(50.),
+            height: Val::Px(50.),
+            ..default()
+        };
+        let world = app.world_mut();
+        let inert = world.spawn((node.clone(), Pickable::IGNORE)).id();
+        let live = world.spawn((node, Pickable::default())).id();
+
+        run_frames(&mut app, 2);
+
+        let surface = enumerate_ui(app.world());
+        assert!(
+            surface.interactables.iter().any(|i| i.entity == live),
+            "a hoverable Pickable is a target"
+        );
+        assert!(
+            surface.interactables.iter().all(|i| i.entity != inert),
+            "Pickable::IGNORE declares a click-through node, not a target"
+        );
+    }
+
+    #[test]
     fn tab_index_focusable_is_enumerated() {
         let mut app = setup_app();
 
