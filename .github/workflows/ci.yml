@@ -122,12 +122,14 @@ jobs:
       - name: Install Bazelisk (pinned)
         run: |
           set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
           curl -sfL --retry 3 \
-            -o /usr/local/bin/bazel \
+            -o "$HOME/.local/bin/bazel" \
             https://github.com/bazelbuild/bazelisk/releases/download/v1.30.0/bazelisk-linux-amd64
-          echo "a248ae2b2b62b5baebb748f6fba7203bff1a27e5d01b55399a8406744cb539e8  /usr/local/bin/bazel" | sha256sum -c -
-          chmod +x /usr/local/bin/bazel
-          bazel --version
+          echo "a248ae2b2b62b5baebb748f6fba7203bff1a27e5d01b55399a8406744cb539e8  $HOME/.local/bin/bazel" | sha256sum -c -
+          chmod +x "$HOME/.local/bin/bazel"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/bazel" --version
 
       # Restore the Bazel disk cache as a hash-keyed snapshot: a new
       # key on Bazel-layer changes (MODULE.bazel, .bazelrc, BUILD
