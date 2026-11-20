@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+## [0.13.0](https://github.com/mcanevet/bevy_playtest/compare/v0.12.0...v0.13.0) - 2026-11-20
+
+### Added
+
+- *(explorer)* phase 2: prior keys, combos, drags, learned click targets
+- *(sweep)* [**breaking**] seed sweep with fingerprint regression gate
+- *(eval)* re-measure the baseline after the cursor fix and deterministic RNG
+- *(explorer)* explore mode for the chaos bot, on by default in the battery
+- *(battery)* deterministic OS randomness per seed (Linux, LD_PRELOAD)
+- *(eval)* CI-measured baseline; document determinism findings
+- *(eval)* commit the baseline; mark passive targets; measure M2
+- *(takeover)* mute game audio during playtest runs
+- *(eval)* state trace, exploration targets, and evaluator (phase 0)
+- *(discovery)* add informational screen_liveness pHash oracle
+
+### Fixed
+
+- *(ui-surface)* Pickable::IGNORE nodes are not click targets
+- *(fixtures)* pin thetawave with the pause menu's sound stand-in
+- *(oracles)* default bounds oracle flags runaways, not far geometry
+- *(driver)* bot cursor drives bevy_ui Interaction
+
+### Other
+
+- seed sweep findings after the rebase
+- evaluation triggers, quick-run budget, baseline provenance
+- *(eval)* quick evaluation on relevant PRs, full on demand, no schedule
+- drop disk cleanup, pin the toolchain deterministically, pin nextest
+- [**breaking**] remove probe-based input-surface discovery (BEVY_PLAYTEST_DISCOVER) ([#107](https://github.com/mcanevet/bevy_playtest/pull/107))
+- cut CI from ~42 min — parallel jobs, rust-cache, nextest partitions, single test binary ([#105](https://github.com/mcanevet/bevy_playtest/pull/105))
+- ci Update Rust crate wgpu-types to 30.0.2
+
 ## [0.12.0](https://github.com/mcanevet/bevy_playtest/compare/v0.11.0...v0.12.0) - 2026-11-18
 
 ### Added
