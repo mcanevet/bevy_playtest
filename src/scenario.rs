@@ -1021,6 +1021,17 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
     // duplicates would silently shadow each other.
     let mut seen = HashSet::new();
     for rule in &scenario.invariants {
+        // The name is the finding's target, and the target is half of
+        // a seed-sweep fingerprint line: `#` starts a comment there and
+        // a line break splits the line, so such a finding could never
+        // be recorded (or would silently match another invariant).
+        if rule.name.contains(['#', '\n', '\r']) {
+            return Err(ScenarioError::Rejected(format!(
+                "invariant name {:?} may not contain '#' or a line break \
+                 (it is the finding target in seed-sweep regression files)",
+                rule.name
+            )));
+        }
         if !seen.insert(rule.name.as_str()) {
             return Err(ScenarioError::Rejected(format!(
                 "duplicate invariant name '{}' — names must be unique",

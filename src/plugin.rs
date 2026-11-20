@@ -68,10 +68,11 @@ pub const ENV_DISCOVER_SCAN: &str = "BEVY_PLAYTEST_DISCOVER_SCAN";
 /// AFTER loading, so it composes with scan-layered scenario
 /// variants. Set by the battery parent
 /// ([`crate::battery::BatteryConfig::seed_override`], driven by the
-/// seed sweep) and by hand for manual single-run repro:
+/// seed sweep) and by hand for a quick single-run approximation:
 /// `BEVY_PLAYTEST_SCENARIO=battery BEVY_PLAYTEST_SEED=<seed> cargo
-/// run --features playtest --bin <game>` (the seed var alone is
-/// inert — the takeover needs its scenario to take over at all).
+/// run --features playtest --bin <game>` (without the battery's
+/// source-scan key layering and deterministic OS randomness; the seed
+/// var alone is inert — the takeover needs its scenario).
 pub const ENV_SEED: &str = "BEVY_PLAYTEST_SEED";
 pub use crate::sinks::ENV_ALLOW_MISSING_LOG_CAPTURE;
 /// Seed for the deterministic-randomness shim the battery preloads into

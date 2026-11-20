@@ -234,14 +234,15 @@ pub struct BatteryConfig {
     /// Override the scenario's declared seed (`scenario.bot.seed`),
     /// including the built-in battery's. `None` = honor the scenario.
     /// Travels to the child via [`crate::plugin::ENV_SEED`] and is
-    /// honored AFTER scenario loading (so the discovery-inject and
-    /// source-scan layering arms — which key off the builtin literal
-    /// and write scenario VARIANT files — compose with it: the
-    /// override applies to whatever scenario the child actually
-    /// loads). Also the manual-repro story: reproduce any single
-    /// battery run by hand with
+    /// honored AFTER scenario loading (so the source-scan layering arm
+    /// — which keys off the builtin literal and writes a scenario
+    /// VARIANT file — composes with it: the override applies to
+    /// whatever scenario the child actually loads). It also seeds the
+    /// deterministic OS randomness. Reproduce a sweep member exactly
+    /// with one battery run using the same binary, scenario and
+    /// `seed_override`; the by-hand
     /// `BEVY_PLAYTEST_SCENARIO=battery BEVY_PLAYTEST_SEED=<seed> cargo run --features playtest --bin <game>`
-    /// (the seed var alone is inert — the takeover needs its scenario).
+    /// approximates it without the key layering and the randomness.
     pub seed_override: Option<u64>,
 }
 
