@@ -1,5 +1,5 @@
 //! Grandchild-holding-pipe child for the battery's bounded-drain
-//! regression, TIMEOUT path (tests/battery.rs:
+//! regression, TIMEOUT path (tests/it/battery.rs:
 //! bounded_drain_survives_a_held_pipe): prints a startup line,
 //! spawns a GRANDCHILD that inherits its stderr (the battery's tee
 //! pipe) and parks, then parks FOREVER itself. The watchdog kills

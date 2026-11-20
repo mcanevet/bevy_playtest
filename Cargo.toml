@@ -144,22 +144,6 @@ bevy_image = "0.20.1"
 bevy_mesh = "0.20.1"
 bevy_utils = "0.20.1"
 
-# The render_liveness integration test drives the bevy_camera/
-# bevy_render-typed API surface, which only exists under the
-# feature — cargo SKIPS the target (rather than failing to build
-# it) when the feature is off, keeping plain `cargo test` green.
-[[test]]
-name = "render_liveness"
-required-features = ["render-liveness"]
-
-# The screen_liveness integration test drives the capture rig
-# (bevy_asset/bevy_image/bevy_camera/bevy_render API surface) and,
-# for its GPU-positive cases, the real renderer — both only exist
-# under the feature.
-[[test]]
-name = "screen_liveness"
-required-features = ["screen-liveness"]
-
 [[bin]]
 name = "takeover_demo"
 path = "src/bin/takeover_demo.rs"
@@ -192,7 +176,7 @@ required-features = ["takeover"]
 
 # Input-delivery regression demo: world moves only on
 # `just_pressed` under a DefaultPlugins-equivalent graph (see
-# tests/input_delivery.rs).
+# tests/it/input_delivery.rs).
 [[bin]]
 name = "takeover_demo_input"
 path = "src/bin/takeover_demo_input.rs"
@@ -200,7 +184,7 @@ required-features = ["takeover"]
 
 # Picking-delivery regression demo: world moves only on
 # `PointerClick` under a picking-capable graph (see
-# tests/input_delivery.rs).
+# tests/it/input_delivery.rs).
 [[bin]]
 name = "takeover_demo_picking"
 path = "src/bin/takeover_demo_picking.rs"
@@ -211,7 +195,7 @@ required-features = ["takeover"]
 # ~45% of the window (vs. `takeover_demo_picking`'s fullscreen
 # node), so only grid cells overlapping the quadrant diverge —
 # the fixture that catches a grid which finds clicks but cannot
-# tell WHERE (see tests/discovery_flow.rs).
+# tell WHERE (see tests/it/discovery_flow.rs).
 [[bin]]
 name = "takeover_demo_mouse_quadrant"
 path = "src/bin/takeover_demo_mouse_quadrant.rs"
@@ -219,7 +203,7 @@ required-features = ["takeover"]
 
 # Minimal no-op child for probe-pool tests: runs, exits 0, never
 # writes any file — the platform-neutral stand-in for "a game that
-# exits without reporting" (see tests/probe_pool.rs,
+# exits without reporting" (see tests/it/probe_pool.rs,
 # stale_report_cannot_masquerade_as_a_fresh_success).
 [[bin]]
 name = "takeover_demo_noop"
@@ -230,7 +214,7 @@ required-features = ["takeover"]
 # watchdog-kills-a-stuck-game test needs a child GUARANTEED to still
 # be alive at the 1s deadline on every machine (simulated-time demos
 # are CPU-bound and machine-speed dependent; see the bin's module
-# docs). See tests/probe_pool.rs:
+# docs). See tests/it/probe_pool.rs:
 # runaway_child_is_killed_by_the_wall_clock_watchdog.
 [[bin]]
 name = "takeover_demo_hang"
@@ -240,7 +224,7 @@ required-features = ["takeover"]
 # Cwd/HOME-isolation child for probe-pool tests: writes one
 # cwd-relative marker and one HOME-resolved marker, then exits —
 # the regression test asserts both land in the pool's per-job
-# throwaway directory. See tests/probe_pool.rs:
+# throwaway directory. See tests/it/probe_pool.rs:
 # probe_children_get_their_own_cwd_and_home.
 [[bin]]
 name = "takeover_demo_cwd_write"
@@ -252,7 +236,7 @@ required-features = ["takeover"]
 # battery's temp dir is RAII-removed before assertions run — so this
 # child SELF-CHECKS its cwd and HOME (exit 0 = isolated, 2/3 =
 # violation details on stderr) and the test asserts on the exit
-# code. See tests/battery.rs:
+# code. See tests/it/battery.rs:
 # battery_child_runs_in_its_own_cwd_and_home.
 [[bin]]
 name = "takeover_demo_cwd_check"
@@ -262,7 +246,7 @@ required-features = ["takeover"]
 # GPU-panic crash child for the battery's diagnosis regression:
 # prints bevy_render's exact GPU_NOT_FOUND_ERROR_MESSAGE (Linux arm,
 # with the URL suffix) and exits 101 with no report — reproducing a
-# GPU-less-host death WITHOUT a GPU-less host. See tests/battery.rs:
+# GPU-less-host death WITHOUT a GPU-less host. See tests/it/battery.rs:
 # gpu_panic_gets_named_failure_with_remediation.
 [[bin]]
 name = "takeover_demo_gpu_panic"
@@ -272,7 +256,7 @@ required-features = ["takeover"]
 # Negative-control crash child for the battery's diagnosis
 # regression: a GENERIC panic (no GPU marker substring) must keep
 # the plain NoReport verdict — detection must never mask other
-# failures. See tests/battery.rs:
+# failures. See tests/it/battery.rs:
 # generic_panic_keeps_plain_no_report_failure.
 [[bin]]
 name = "takeover_demo_panic_generic"
@@ -285,7 +269,7 @@ required-features = ["takeover"]
 # the watchdog kills the direct child, but the parked grandchild
 # keeps the pipe's write end open, so the tee never observes EOF.
 # The drain must detach after its grace window instead of joining
-# forever. See tests/battery.rs: bounded_drain_survives_a_held_pipe.
+# forever. See tests/it/battery.rs: bounded_drain_survives_a_held_pipe.
 [[bin]]
 name = "takeover_demo_stderr_grandchild"
 path = "src/bin/takeover_demo_stderr_grandchild.rs"
@@ -294,7 +278,7 @@ required-features = ["takeover"]
 # Same shape as takeover_demo_stderr_grandchild, NORMAL path: the
 # direct child exits 101 promptly while the parked grandchild keeps
 # the tee pipe open — the exit-diagnosis verdict must still arrive
-# bounded. See tests/battery.rs:
+# bounded. See tests/it/battery.rs:
 # held_pipe_does_not_block_exit_diagnosis.
 [[bin]]
 name = "takeover_demo_stderr_grandchild_exit"
@@ -310,7 +294,7 @@ required-features = ["takeover"]
 # AccumulatedMouseMotion consumer (camera-pan idiom, signed delta).
 # The motion probes' positive control — discovery MUST report a
 # mouse_motion finding with an effect on this game. See
-# tests/discovery_flow.rs: mouse_motion_finds_effects_on_motion_driven_game.
+# tests/it/discovery_flow.rs: mouse_motion_finds_effects_on_motion_driven_game.
 [[bin]]
 name = "takeover_demo_motion"
 path = "src/bin/takeover_demo_motion.rs"
@@ -321,7 +305,7 @@ required-features = ["takeover"]
 # TabIndexed widgets, digest-visibly reacting to focus movement).
 # The walker's positive control — discovery MUST report a
 # focus_walk finding with an effect on this game. See
-# tests/discovery_flow.rs: focus_walk_finds_effects_on_tab_navigation_game.
+# tests/it/discovery_flow.rs: focus_walk_finds_effects_on_tab_navigation_game.
 [[bin]]
 name = "takeover_demo_focus"
 path = "src/bin/takeover_demo_focus.rs"
@@ -436,3 +420,14 @@ debug = "line-tables-only"
 
 [profile.test]
 debug = "line-tables-only"
+
+# No debuginfo for DEPENDENCIES (Bevy, wgpu, ...). Measured: a test
+# binary was 409 MB of which only 40 MB was code; ~85% was Bevy's
+# debug sections. Our own crate keeps line tables (the settings
+# above), so backtraces through bevy_playtest still have line numbers.
+# Smaller binaries = faster links, smaller target/ and CI cache.
+[profile.dev.package."*"]
+debug = false
+
+[profile.test.package."*"]
+debug = false

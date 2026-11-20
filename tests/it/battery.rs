@@ -12,12 +12,20 @@
 //! The battery runner spawns the game as a REAL subprocess
 //! (`crate::battery::run_with_config`), so these tests exercise
 //! actual OS process spawn/exit — no `run_scenario` exclusivity
-//! involved, no run-slot serialization needed.
+//! involved. Each test still takes the run slot: the battery reads
+//! `BEVY_PLAYTEST_DISCOVER*` from the PARENT environment, and sibling
+//! suites in this binary (discovery_flow, probe_pool, scan_purity)
+//! set those variables while holding the slot. Under plain
+//! `cargo test` they share one process, so an unserialized battery
+//! run could pick up another test's discovery opt-in.
+
+use crate::common;
 
 use bevy_playtest::battery::{run_with_config, BatteryConfig, BatteryError, BUILTIN_BATTERY};
 
 #[test]
 fn battery_child_runs_in_its_own_cwd_and_home() {
+    let _slot = common::run_slot();
     // Isolation regression: battery children used to inherit the
     // PARENT's working directory, so a game writing anything
     // `./`-relative (auto-saves, config, logs) scribbled into
@@ -65,6 +73,7 @@ fn battery_child_runs_in_its_own_cwd_and_home() {
 
 #[test]
 fn gpu_panic_gets_named_failure_with_remediation() {
+    let _slot = common::run_slot();
     // A child dying with bevy_render's GPU_NOT_FOUND_ERROR_MESSAGE
     // on its stderr (exact Linux-arm string, with URL suffix) and
     // no report must yield the NAMED GpuMissing failure whose
@@ -99,6 +108,7 @@ fn gpu_panic_gets_named_failure_with_remediation() {
 
 #[test]
 fn generic_panic_keeps_plain_no_report_failure() {
+    let _slot = common::run_slot();
     // Negative control: a generic panic (no GPU marker substring)
     // with no report must keep the PLAIN NoReport verdict —
     // detection must never mask or rewrite other failures.
@@ -116,6 +126,7 @@ fn generic_panic_keeps_plain_no_report_failure() {
 
 #[test]
 fn bounded_drain_survives_a_held_pipe() {
+    let _slot = common::run_slot();
     // Grandchild-holds-the-pipe regression (timeout path): the child
     // parks forever, so the watchdog trips; its parked GRANDCHILD
     // inherits the stderr pipe and keeps the write end open, so the
@@ -154,6 +165,7 @@ fn bounded_drain_survives_a_held_pipe() {
 
 #[test]
 fn held_pipe_does_not_block_exit_diagnosis() {
+    let _slot = common::run_slot();
     // Grandchild-holds-the-pipe regression (NORMAL path): the child
     // exits promptly (with 101, no report) while its parked
     // grandchild keeps the stderr pipe open — the tee never sees

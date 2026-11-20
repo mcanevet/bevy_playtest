@@ -20,8 +20,7 @@
 //! — they assert structure, not pixels.
 
 // run_scenario is exclusive per process (shared capture state).
-#[path = "common/mod.rs"]
-mod common;
+use crate::common;
 
 use bevy::app::PluginsState;
 use bevy::prelude::*;

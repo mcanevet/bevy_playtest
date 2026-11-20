@@ -1,5 +1,5 @@
 //! Negative-control crash child for the battery's GPU-panic
-//! diagnosis regression (tests/battery.rs:
+//! diagnosis regression (tests/it/battery.rs:
 //! generic_panic_keeps_plain_no_report_failure): prints an ordinary
 //! panic message — one WITHOUT the GPU marker substring — to
 //! stderr and dies with the standard Rust panic exit code (101)

@@ -1,5 +1,5 @@
 //! Grandchild-holding-pipe child for the battery's bounded-drain
-//! regression, NORMAL path (tests/battery.rs:
+//! regression, NORMAL path (tests/it/battery.rs:
 //! held_pipe_does_not_block_exit_diagnosis): spawns a GRANDCHILD
 //! that inherits its stderr (the battery's tee pipe) and parks,
 //! then exits 101 with no report — PROMPTLY, unlike its timeout-

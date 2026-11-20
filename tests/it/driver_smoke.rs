@@ -1,8 +1,7 @@
 //! End-to-end smoke: run_scenario against a minimal headless app.
 
 // Shared test harness (run-slot serialization)
-#[path = "common/mod.rs"]
-mod common;
+use crate::common;
 
 use bevy_app::App;
 use bevy_playtest::run_scenario;

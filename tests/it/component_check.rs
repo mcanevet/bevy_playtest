@@ -10,8 +10,7 @@
 //! must drive the camera forward within 3 seconds") can catch it.
 
 // Shared test harness (run-slot serialization)
-#[path = "common/mod.rs"]
-mod common;
+use crate::common;
 
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
@@ -503,7 +502,7 @@ struct Other;
 /// bounded triangle-wave baseline keeps the transform VALUES evolving
 /// every frame — without it the pair is a pure two-state oscillator, a
 /// churning-but-dead world the frozen-world phantom detector correctly
-/// flags (see tests/progress_liveness.rs) — while staying far from the
+/// flags (see tests/it/progress_liveness.rs) — while staying far from the
 /// 1.0 threshold (high ≥ 2.0, low ≤ 0.6, never together).
 fn alternating_pair(mut q: Query<&mut Transform>, mut frame: bevy_ecs::prelude::Local<u64>) {
     let f = *frame;
