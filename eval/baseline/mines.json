@@ -1,0 +1,106 @@
+{
+  "fixture": "mines",
+  "frames": 5000,
+  "seeds": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "runs": [
+    {
+      "seed": 1,
+      "status": "Fail",
+      "wall_s": 50.2,
+      "violation_rules": [
+        "frozen_world",
+        "progress_surface_empty"
+      ],
+      "error": null
+    },
+    {
+      "seed": 2,
+      "status": "Fail",
+      "wall_s": 51.2,
+      "violation_rules": [
+        "frozen_world",
+        "progress_surface_empty"
+      ],
+      "error": null
+    },
+    {
+      "seed": 3,
+      "status": "Fail",
+      "wall_s": 70.5,
+      "violation_rules": [
+        "frozen_world",
+        "progress_surface_empty"
+      ],
+      "error": null
+    },
+    {
+      "seed": 4,
+      "status": "Fail",
+      "wall_s": 59.5,
+      "violation_rules": [
+        "frozen_world",
+        "progress_surface_empty"
+      ],
+      "error": null
+    },
+    {
+      "seed": 5,
+      "status": "Fail",
+      "wall_s": 64.5,
+      "violation_rules": [
+        "frozen_world",
+        "progress_surface_empty"
+      ],
+      "error": null
+    }
+  ],
+  "targets": [
+    {
+      "id": "M1",
+      "description": "Start a game (Playing)",
+      "hits": 5,
+      "runs": 5,
+      "median_frame": 489,
+      "unmeasurable_reason": null
+    },
+    {
+      "id": "M2",
+      "description": "Reveal ~10 tiles: Game written >= 11 times (1 new-game click + 10 tile reveals; extra new-game clicks also count)",
+      "hits": 2,
+      "runs": 5,
+      "median_frame": 3753,
+      "unmeasurable_reason": null
+    },
+    {
+      "id": "M3",
+      "description": "Reveal at least one tile (Game written again after the new-game click)",
+      "hits": 5,
+      "runs": 5,
+      "median_frame": 495,
+      "unmeasurable_reason": null
+    },
+    {
+      "id": "M4",
+      "description": "Return to the menu after playing",
+      "hits": 3,
+      "runs": 5,
+      "median_frame": 2805,
+      "unmeasurable_reason": null
+    },
+    {
+      "id": "M5",
+      "description": "Start three games (difficulty itself is not visible)",
+      "hits": 0,
+      "runs": 5,
+      "median_frame": null,
+      "unmeasurable_reason": null
+    }
+  ],
+  "note": "Baseline: chaos bot before phase 1 (commit 6995762), measured locally; traces omitted. Re-measure with bevy_playtest_eval."
+}

@@ -4,7 +4,7 @@
   "targets": [
     {
       "id": "L1",
-      "description": "Load levels: LoadingState written at least twice (load start + ready); it is a resource, not bevy_state",
+      "description": "Load levels: LoadingState written >= 2 times (PASSIVE today: the source scan already aims at Digit1/Digit2; regression check)",
       "check": {
         "resource_changed_times": {
           "resource": "LoadingState",

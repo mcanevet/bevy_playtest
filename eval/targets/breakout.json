@@ -4,7 +4,7 @@
   "targets": [
     {
       "id": "B1",
-      "description": "Score at least once (ball hits a brick)",
+      "description": "Score at least once (PASSIVE: the ball scores without paddle input; regression check)",
       "check": {
         "resource_changed_any": [
           "Score"

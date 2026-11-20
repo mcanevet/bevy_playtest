@@ -1,0 +1,93 @@
+{
+  "fixture": "known_answer",
+  "frames": 5000,
+  "seeds": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "runs": [
+    {
+      "seed": 1,
+      "status": "Pass",
+      "wall_s": 51.9,
+      "violation_rules": [
+        "render_liveness"
+      ],
+      "error": null
+    },
+    {
+      "seed": 2,
+      "status": "Pass",
+      "wall_s": 52.8,
+      "violation_rules": [
+        "render_liveness"
+      ],
+      "error": null
+    },
+    {
+      "seed": 3,
+      "status": "Pass",
+      "wall_s": 53.5,
+      "violation_rules": [
+        "render_liveness"
+      ],
+      "error": null
+    },
+    {
+      "seed": 4,
+      "status": "Pass",
+      "wall_s": 53.8,
+      "violation_rules": [
+        "render_liveness"
+      ],
+      "error": null
+    },
+    {
+      "seed": 5,
+      "status": "Pass",
+      "wall_s": 53.4,
+      "violation_rules": [
+        "render_liveness"
+      ],
+      "error": null
+    }
+  ],
+  "targets": [
+    {
+      "id": "K1",
+      "description": "Zero false 'has an effect' claims on inert plants",
+      "hits": null,
+      "runs": 5,
+      "median_frame": null,
+      "unmeasurable_reason": "phase 1: needs the explorer's own report (per-input attribution)"
+    },
+    {
+      "id": "K2",
+      "description": "Recall on positive plants >= 9/12",
+      "hits": null,
+      "runs": 5,
+      "median_frame": null,
+      "unmeasurable_reason": "phase 1: needs the explorer's own report (per-input attribution)"
+    },
+    {
+      "id": "K3",
+      "description": "P7: Secret reported as never entered, KeyV untested",
+      "hits": null,
+      "runs": 5,
+      "median_frame": null,
+      "unmeasurable_reason": "Secret has no OnEnter schedule; needs state enumeration (track_state opt-in) and the phase 1 report"
+    },
+    {
+      "id": "K4",
+      "description": "Find the chord (ShiftLeft+KeyL) or debounce (KeyT) plant (stretch)",
+      "hits": null,
+      "runs": 5,
+      "median_frame": null,
+      "unmeasurable_reason": "phase 1: needs the explorer's own report (per-input attribution)"
+    }
+  ],
+  "note": "Baseline: chaos bot before phase 1 (commit 6995762), measured locally; traces omitted. Re-measure with bevy_playtest_eval."
+}
