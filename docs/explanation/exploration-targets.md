@@ -44,8 +44,10 @@ because it never had such a yardstick.)
 
 ## Baseline (today's chaos bot)
 
-Measured with commit `6995762`, 5,000 frames × 5 seeds, all 45 runs
-completed; results in `eval/baseline/*.json` (raw traces omitted).
+Measured by the `Exploration evaluation` workflow on GitHub runners
+(5,000 frames × 5 seeds, all 45 runs completed); results in
+`eval/baseline/*.json` (raw traces omitted). Compare explorer runs
+against it on the same kind of machine: see "Determinism" below.
 
 | Fixture | Target | Hits | Median frame |
 |---|---|---|---|
@@ -54,15 +56,15 @@ completed; results in `eval/baseline/*.json` (raw traces omitted).
 | | G3 start the game | 5/5 | 259 |
 | | G4 every screen in one run | 3/5 | 3,115 |
 | mines | M1 start a game | 5/5 | 489 |
-| | M2 reveal ~10 tiles | 2/5 | 3,753 |
+| | M2 reveal ~10 tiles | 3/5 | 1,581 |
 | | M3 reveal a tile | 5/5 | 495 |
-| | M4 back to the menu after playing | 3/5 | 2,805 |
+| | M4 back to the menu after playing | 2/5 | 4,521 |
 | | M5 start three games | 0/5 | — |
 | thetawave | T0 main menu (passive) | 5/5 | 7 |
 | | T1 character selection | 0/5 | — |
 | | T2 in game (stretch) | 0/5 | — |
 | | T3 Victory (expected never) | 0/5 | — |
-| loading_screen | L1 load levels (passive) | 5/5 | 91 |
+| loading_screen | L1 load levels (passive) | 5/5 | 144 |
 | alien_cake_addict | A2 game over (passive) | 5/5 | 901 |
 | | A3 restart with Space | 5/5 | 920 |
 | breakout | B1 score (passive) | 5/5 | 112 |
@@ -97,6 +99,28 @@ Two measures per target, both compared against the committed baseline
 
 T2 (thetawave in-game) and K4 (chord/debounce plants) are stretch
 goals.
+
+## Determinism
+
+The same evaluation run locally and on GitHub runners matched exactly on
+7 of 9 fixtures. The two exceptions show the two ways a run can depend
+on more than its seed:
+
+- **OS-seeded randomness** (mines): the minefield is shuffled with
+  `rand::rng()`, seeded from the operating system, so every process
+  gets a different board. mines targets M2 and M4 therefore vary from
+  run to run; judge them with a margin or more seeds.
+  (alien_cake_addict only seeds its RNG when `GITHUB_ACTIONS=true`;
+  its targets are passive, so it matched anyway.)
+- **Background loading** (loading_screen): a level is ready once its
+  assets and GPU pipelines finish loading, which takes wall-clock time.
+  On CI's software renderer that spans more frames (median 144 vs 91
+  locally), so frame-based timings shift with machine speed.
+
+Both must be addressed before replay-based exploration can work:
+deterministic randomness in test builds (e.g. a custom `getrandom`
+backend fed from the scenario seed) and a settle step that does not
+advance frames while assets or pipelines are still loading.
 
 ## Caveats
 

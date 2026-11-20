@@ -12,7 +12,7 @@
     {
       "seed": 1,
       "status": "Fail",
-      "wall_s": 51.4,
+      "wall_s": 57.2,
       "violation_rules": [
         "progress_surface_empty"
       ],
@@ -21,7 +21,7 @@
     {
       "seed": 2,
       "status": "Fail",
-      "wall_s": 51.7,
+      "wall_s": 56.9,
       "violation_rules": [
         "progress_surface_empty"
       ],
@@ -30,7 +30,7 @@
     {
       "seed": 3,
       "status": "Fail",
-      "wall_s": 51.1,
+      "wall_s": 58.1,
       "violation_rules": [
         "progress_surface_empty"
       ],
@@ -39,7 +39,7 @@
     {
       "seed": 4,
       "status": "Fail",
-      "wall_s": 59.4,
+      "wall_s": 59.6,
       "violation_rules": [
         "progress_surface_empty"
       ],
@@ -48,7 +48,7 @@
     {
       "seed": 5,
       "status": "Fail",
-      "wall_s": 54.1,
+      "wall_s": 62.2,
       "violation_rules": [
         "progress_surface_empty"
       ],
@@ -65,5 +65,5 @@
       "unmeasurable_reason": "phase 1: needs the explorer's own report"
     }
   ],
-  "note": "Baseline: chaos bot before phase 1 (commit 6995762), measured locally; traces omitted. Re-measure with bevy_playtest_eval."
+  "note": "Baseline: chaos bot before phase 1, measured by the Exploration evaluation workflow on GitHub runners (run 44752095130, main @ PR #108); traces omitted."
 }
