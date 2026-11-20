@@ -2372,6 +2372,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         #[cfg(feature = "lw-reader")]
         lw_reconciled,
         state_trace: Some(state_trace.into_inner().into_result()),
+        randomness: None,
         capability_census: Some(capability_census),
         #[cfg(feature = "ui-surface")]
         ui_surface: ui_surface_tracker.into_result(),

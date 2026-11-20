@@ -521,6 +521,32 @@ pub fn run_with_overrides(
     cmd.env(ENV_SCENARIO, &scenario_arg)
         .env(ENV_REPORT, &report_path);
 
+    // Deterministic OS randomness (Linux): preload the shim so the
+    // game's `getrandom()` (rand::rng(), the getrandom crate, ahash)
+    // returns a stream seeded from the scenario seed. Decided here,
+    // stamped on the report after the run.
+    let randomness = match detrng_decision(&scenario_arg, overrides) {
+        Ok((so, seed)) => {
+            // APPENDED to an inherited LD_PRELOAD: some preloads (e.g.
+            // sanitizer runtimes) must come first, and interposition still
+            // works from a later position unless an earlier entry also
+            // defines getrandom.
+            let preload = match std::env::var_os("LD_PRELOAD") {
+                Some(existing) if !existing.is_empty() => {
+                    let mut v = existing;
+                    v.push(":");
+                    v.push(so);
+                    v
+                }
+                _ => std::ffi::OsString::from(so),
+            };
+            cmd.env("LD_PRELOAD", preload)
+                .env(crate::plugin::ENV_DETRNG_SEED, seed.to_string());
+            format!("intercepted getrandom() (LD_PRELOAD), seed {seed}")
+        }
+        Err(reason) => format!("not intercepted: {reason}"),
+    };
+
     // cwd/HOME isolation (see the comment at `child_cwd` above) +
     // the stderr tee: stdout still inherited, stderr PIPED so the
     // tee thread can forward it live and buffer a copy for the
@@ -603,6 +629,8 @@ pub fn run_with_overrides(
     let mut report: PlaytestReport =
         serde_json::from_slice(&bytes).map_err(|e| BatteryError::ReportParse(e.to_string()))?;
 
+    // Randomness decision: stamped on every battery report.
+    report.randomness = Some(randomness);
     // Source-scan honesty fields: stamped only when the scan-hit
     // arm REPLACED the WASD/arrows default (the fallback arm runs the
     // unchanged default and leaves both fields None).
@@ -611,6 +639,57 @@ pub fn run_with_overrides(
         report.source_derived_notes = Some(layered.notes);
     }
     Ok(report)
+}
+
+/// Opt-out for the deterministic-randomness shim (re-exported from
+/// [`crate::plugin`], where the takeover's known-variable list uses it).
+pub use crate::plugin::ENV_DETRNG_DISABLE;
+
+/// Path of the deterministic-randomness shim built by `build.rs`
+/// (empty when it could not be built for this target).
+const DETRNG_SO: &str = env!("BEVY_PT_DETRNG_SHIM");
+
+/// Whether to preload the deterministic-randomness shim for this run:
+/// `Ok((shim path, seed))`, or the reason it is not used.
+fn detrng_decision(
+    scenario_arg: &str,
+    overrides: &ScenarioOverrides,
+) -> Result<(&'static str, u64), String> {
+    if std::env::var_os(ENV_DETRNG_DISABLE).is_some() {
+        return Err(format!("disabled by {ENV_DETRNG_DISABLE}"));
+    }
+    if !cfg!(target_os = "linux") {
+        return Err("LD_PRELOAD interception is Linux-only".into());
+    }
+    if DETRNG_SO.is_empty() || !std::path::Path::new(DETRNG_SO).is_file() {
+        return Err("shim not built (see the bevy_playtest build warning)".into());
+    }
+    // ld.so splits LD_PRELOAD on spaces and colons: such a path would
+    // silently not load, so refuse rather than report an interception
+    // that did not happen.
+    if DETRNG_SO.contains([' ', ':']) {
+        return Err(format!(
+            "shim path contains a space or colon, which LD_PRELOAD cannot express: {DETRNG_SO}"
+        ));
+    }
+    let seed = match overrides.seed {
+        Some(seed) => seed,
+        None if scenario_arg == BUILTIN_BATTERY => {
+            crate::plugin::battery_scenario()
+                .map_err(|e| format!("battery scenario: {e}"))?
+                .bot
+                .seed
+        }
+        None => {
+            let text = std::fs::read_to_string(scenario_arg)
+                .map_err(|e| format!("read scenario for its seed: {e}"))?;
+            serde_json::from_str::<crate::scenario::Scenario>(&text)
+                .map_err(|e| format!("parse scenario for its seed: {e}"))?
+                .bot
+                .seed
+        }
+    };
+    Ok((DETRNG_SO, seed))
 }
 
 /// Populate a fresh directory with one symlink per top-level entry
