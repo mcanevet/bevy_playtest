@@ -105,17 +105,31 @@ pub fn compute_digest(world: &mut World) -> u64 {
     let mut hasher = fnv_hasher();
 
     // --- Live entity count (spawns/despawns) ---
+    // Probe entities the harness itself may spawn mid-run (the
+    // screen-liveness capture rig; `HarnessInjected`) are not game
+    // state — subtract them so capture churn cannot masquerade as
+    // simulation activity.
     let entity_count = world.entities().count_spawned();
-    hasher = hash_usize(hasher, entity_count as usize);
+    let injected = crate::injected::injected_count(world) as u32;
+    hasher = hash_usize(hasher, (entity_count - injected) as usize);
 
     // --- Archetype count ---
+    // Same probe hygiene: archetypes occupied ONLY by injected
+    // entities would not exist without the harness rig.
     let archetype_count = world.archetypes().len();
-    hasher = hash_usize(hasher, archetype_count);
+    let archetype_excess = crate::injected::archetype_excess(world);
+    hasher = hash_usize(hasher, archetype_count - archetype_excess);
 
     // --- Transform translations (sorted) ---
     // Collect all transforms, sort by (x_bits, y_bits, z_bits) for canonical order.
+    // Probe entities (HarnessInjected: the screen-liveness rig) are
+    // skipped — their fixed pose is harness bookkeeping, not game
+    // state.
     let mut translations: Vec<(u64, u64, u64)> = world
-        .query::<&bevy_transform::prelude::Transform>()
+        .query_filtered::<
+            &bevy_transform::prelude::Transform,
+            bevy_ecs::query::Without<crate::injected::HarnessInjected>,
+        >()
         .iter(world)
         .map(|t| {
             (
@@ -138,7 +152,10 @@ pub fn compute_digest(world: &mut World) -> u64 {
     {
         use bevy_ui::prelude::*;
         let mut ui_transforms: Vec<(u64, u64)> = world
-            .query::<&UiTransform>()
+            .query_filtered::<
+                &UiTransform,
+                bevy_ecs::query::Without<crate::injected::HarnessInjected>,
+            >()
             .iter(world)
             .filter_map(|ut| {
                 // UiTransform translation uses Val2 (2D) with Val<f32>.
@@ -396,6 +413,17 @@ pub(crate) fn collect_component_type_counts(world: &World) -> BTreeMap<String, u
 
     // Sum entity counts per component type across archetypes. Entities in an
     // archetype all share its component set, so archetype.len() is exact.
+    //
+    // No harness-injected probe hygiene needed HERE (unlike the
+    // entity/archetype/Transform enumerations above): injected
+    // entities carry only engine components (`Camera`, `Transform`
+    // — `bevy_*` prefix) plus the marker itself (`bevy_playtest::`
+    // prefix), and BOTH prefixes are excluded by
+    // [`resource_is_excluded`], so no counted type can ever sit on
+    // an injected entity. A future harness component with a
+    // non-excluded path would need the per-archetype subtraction
+    // walk — the screen-liveness rig deliberately avoids introducing
+    // one.
     for archetype in world.archetypes().iter() {
         for component_id in archetype.components() {
             if id_to_path.contains_key(component_id) {
@@ -820,11 +848,19 @@ const PTAG_STRING: u64 = 0x10f;
 pub fn build_snapshot(world: &mut World) -> DigestSnapshot {
     // Live entity count, matching the digest's spawn/despawn signal
     // (Entities::len() counts allocated indices, including despawned).
-    let entity_count = world.entities().count_spawned() as usize;
-    let archetype_count = world.archetypes().len();
+    // Probe hygiene matches compute_digest EXACTLY: harness-injected
+    // entities (screen-liveness camera/requests/observer) are
+    // subtracted so capture churn cannot masquerade as spawn churn —
+    // a snapshot that disagrees with its own digest defeats its
+    // purpose (explaining a divergence).
+    let entity_count =
+        (world.entities().count_spawned() - crate::injected::injected_count(world) as u32) as usize;
+    let archetype_count = world.archetypes().len() - crate::injected::archetype_excess(world);
 
+    // Same probe hygiene as the digest's Transform walk: skip
+    // HarnessInjected entities.
     let transform_count = world
-        .query::<&bevy_transform::prelude::Transform>()
+        .query_filtered::<&bevy_transform::prelude::Transform, Without<crate::injected::HarnessInjected>>()
         .iter(world)
         .count();
 
@@ -913,9 +949,13 @@ impl StateDigestRecorder {
     /// per-tick comparison instead, which the driver runs every
     /// tick). Updates the caller's bookkeeping on every call.
     ///
-    /// NOTE: single-observer by construction (the render-liveness
-    /// sampler is the only caller, invoked once per driver tick);
-    /// a second observer sharing this field would corrupt both.
+    /// SINGLE CALL PER DRIVER TICK, shared evidence: the driver
+    /// computes this once per tick and feeds the SAME boolean to
+    /// every consumer (the render-liveness sampler AND the
+    /// screen-liveness rig). Two observers each calling this would
+    /// corrupt both — the second call always compares
+    /// current-vs-current and answers `false` (the bookkeeping was
+    /// reset by the first), silently starving its evidence.
     #[cfg_attr(not(feature = "render-liveness"), allow(dead_code))]
     pub(crate) fn changed_since_last_sample(&mut self) -> bool {
         let changed = match (self.last_sampled_hash, self.digests.last()) {

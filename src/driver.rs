@@ -1044,9 +1044,23 @@ fn frozen_world_oracle_system(
     mut state: ResMut<RunState>,
     mut violations: ResMut<RunViolations>,
     digest: Option<Res<crate::digest::StateDigestRecorder>>,
-    q: Query<(), Changed<Transform>>,
-    q_all: Query<(), With<Transform>>,
-    q_values: Query<&Transform>,
+    // Probe hygiene: all three queries exclude harness-injected
+    // entities (the screen-liveness rig's camera). Otherwise the
+    // probe's spawn-tick `Added<Transform>` would reset the frozen
+    // streak, its mere existence would satisfy
+    // `saw_transform_entity`, and its constant pose would join the
+    // phantom value-hash — the rig would blind every frozen-world
+    // signal. `Without` filters compile in feature-off builds too
+    // (the marker type is always defined; no entity carries it).
+    q: Query<
+        (),
+        (
+            Changed<Transform>,
+            Without<crate::injected::HarnessInjected>,
+        ),
+    >,
+    q_all: Query<(), (With<Transform>, Without<crate::injected::HarnessInjected>)>,
+    q_values: Query<&Transform, bevy_ecs::query::Without<crate::injected::HarnessInjected>>,
 ) {
     if !q_all.is_empty() {
         state.saw_transform_entity = true;
@@ -1554,7 +1568,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     // (`KeyboardInput`, `ButtonInput<..>`, `Time`, ...) lives under
     // an engine `bevy_*` path the census's ownership filter
     // already excludes. Structurally neutral (pinned in
-    // tests/census.rs); the one-line summary goes to stderr, full
+    // tests/it/census.rs); the one-line summary goes to stderr, full
     // rows ride in the report artifact.
     let capability_census = {
         let census = crate::discovery::census::run_capability_census(app);
@@ -1699,6 +1713,24 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     #[cfg(feature = "render-liveness")]
     let render_liveness_interval = crate::discovery::render_liveness::sample_interval(tps);
 
+    // Screen-liveness capture rig (`screen-liveness`): identical
+    // construction doctrine to the render-liveness tracker —
+    // RefCell-wrapped so a panicking run still reports partial
+    // captures, gated by render sub-app presence AND the rig's own
+    // world-side prerequisites (the `Assets<Image>` store). The rig
+    // SPAWNS entities mid-run (probe camera, capture requests,
+    // observer) — all marker-tagged, census-invisible — so its
+    // tick hook must stay OUTSIDE the App::update call itself:
+    // between-tick driver-loop placement only, after all schedules.
+    #[cfg(feature = "screen-liveness")]
+    let screen_liveness_attached = crate::discovery::render_liveness::render_sub_app_present(app)
+        && crate::discovery::screen_liveness::ScreenLivenessRig::attachable(app.world());
+    #[cfg(feature = "screen-liveness")]
+    let screen_liveness_rig =
+        std::cell::RefCell::new(crate::discovery::screen_liveness::ScreenLivenessRig::new());
+    #[cfg(feature = "screen-liveness")]
+    let screen_liveness_interval = crate::discovery::screen_liveness::sample_interval(tps);
+
     let loop_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         for i in 0..total_ticks {
             // Defense against a foreign log::set_max_level(Off): the
@@ -1768,22 +1800,54 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             // (`frozen_frames == 0`), OR the opt-in broadened state
             // digest just changed (visually silent but stepping —
             // the same broadened evidence the frozen_world detail
-            // refinement uses).
+            // refinement uses). That digest-step signal is computed
+            // ONCE per tick below (see `changed_since_last_sample`'s
+            // single-call contract: a second call in the same tick
+            // would compare current-vs-current and answer `false`,
+            // starving the second caller's evidence) — the
+            // render-liveness sampler and the screen-liveness rig
+            // both consume the shared boolean.
+            #[cfg(feature = "render-liveness")]
+            let digest_stepped_this_tick = app
+                .world_mut()
+                .get_resource_mut::<crate::digest::StateDigestRecorder>()
+                .is_some_and(|mut r| r.changed_since_last_sample());
+            // Sim-active evidence, shared by both liveness rigs
+            // (frozen_frames cannot move between here and the frame
+            // increment below, so a single read serves both).
+            #[cfg(feature = "render-liveness")]
+            let sim_active_this_tick = app
+                .world()
+                .get_resource::<RunState>()
+                .is_some_and(|s| s.frozen_frames == 0)
+                || digest_stepped_this_tick;
             #[cfg(feature = "render-liveness")]
             if render_liveness_attached {
-                let sim_active = app
-                    .world()
-                    .get_resource::<RunState>()
-                    .is_some_and(|s| s.frozen_frames == 0)
-                    || app
-                        .world_mut()
-                        .get_resource_mut::<crate::digest::StateDigestRecorder>()
-                        .is_some_and(|mut r| r.changed_since_last_sample());
                 render_liveness_tracker.borrow_mut().observe(
                     app.world(),
                     i,
                     render_liveness_interval,
-                    sim_active,
+                    sim_active_this_tick,
+                );
+            }
+            // Screen-liveness tick (`screen-liveness`): same
+            // driver-loop recorder doctrine, same `sim_active`
+            // evidence signal as render-liveness. Placement: AFTER
+            // the render-liveness observe (the two evidence
+            // timelines align tick-for-tick) and BEFORE the frame
+            // counter increments. Spawns (probe camera at the first
+            // eligible tick, request entities at cadence ticks) land
+            // here, between `app.update()` calls — the extraction of
+            // the NEXT frame picks them up; captures land 1–2 ticks
+            // later via the game's own ScreenshotPlugin schedule
+            // and the rig's global observer.
+            #[cfg(feature = "screen-liveness")]
+            if screen_liveness_attached {
+                screen_liveness_rig.borrow_mut().tick(
+                    app.world_mut(),
+                    i,
+                    screen_liveness_interval,
+                    sim_active_this_tick,
                 );
             }
             // component_check evaluation: a driver-loop recorder (NOT
@@ -1832,6 +1896,16 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     #[cfg(feature = "render-liveness")]
     let render_liveness_tracker_result = render_liveness_attached
         .then(|| std::cell::RefCell::into_inner(render_liveness_tracker).into_result());
+
+    // Screen-liveness verdict: same partial-evidence doctrine
+    // (captures that landed before a crash are kept). The finish
+    // hook runs the GPU wait-poll + direct channel drain (escape
+    // hatch for slow readbacks) and derives the tier. The ATTACHMENT
+    // gate stays the sub-app + asset-store gate from construction:
+    // never attached ⇒ `None` ⇒ "not evaluated".
+    #[cfg(feature = "screen-liveness")]
+    let screen_liveness_result = screen_liveness_attached
+        .then(|| std::cell::RefCell::into_inner(screen_liveness_rig).finish(app.world_mut()));
 
     let state = app
         .world_mut()
@@ -2150,6 +2224,68 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         }
     }
 
+    // screen_liveness (informational, `screen-liveness` feature):
+    // the pixel-observed verdict as a violation entry — same
+    // ride-the-violations-list doctrine as render_liveness. The
+    // "live" tier emits NOTHING (refusal over silence). The other
+    // non-trivial tiers are reported as evidence, never findings
+    // that gate status: `not_evaluated_3d` states the 2D-only
+    // boundary plainly, and `insufficient_captures` refuses the
+    // change-detection question rather than guessing.
+    #[cfg(feature = "screen-liveness")]
+    if let Some(sl) = screen_liveness_result.as_ref() {
+        let (detail, last_detail) = match sl.tier {
+            crate::discovery::screen_liveness::ScreenLivenessTier::Live => {
+                // Pixels drifted (or nothing judgeable happened):
+                // no finding, no noise.
+                (String::new(), String::new())
+            }
+            crate::discovery::screen_liveness::ScreenLivenessTier::FrozenWhileSimActive => (
+                format!(
+                    "the captured 2D screen never changed across all \
+                     {} capture(s) (hamming distance 0 between every \
+                     consecutive pair) while the simulation was \
+                     observed active in the same span: pixels did not \
+                     flow despite a stepping world (may be \
+                     intentional: menus, dialogue, level-load art)",
+                    sl.captures.max(1)
+                ),
+                "captured screen frozen while sim active".to_string(),
+            ),
+            crate::discovery::screen_liveness::ScreenLivenessTier::InsufficientCaptures => (
+                format!(
+                    "only {} usable capture(s) landed before the run \
+                     ended: the did-the-screen-ever-change question is \
+                     refused, not guessed (ultra-short run, or the GPU \
+                     readback wire failed under this adapter)",
+                    sl.captures
+                ),
+                "fewer than two usable captures".to_string(),
+            ),
+            crate::discovery::screen_liveness::ScreenLivenessTier::NotEvaluated3D => (
+                "no 2D game camera was observed at any capture \
+                 cadence tick: a harness Camera2d cannot faithfully \
+                 mirror a purely-3D view, so this run was not \
+                 evaluated for screen liveness (the structural \
+                 render_liveness rule still judges camera wiring)"
+                    .to_string(),
+                "not evaluated (no 2D camera)".to_string(),
+            ),
+        };
+        if !detail.is_empty() {
+            snap.push(crate::state::ViolationEntry {
+                rule: Rule::ScreenLiveness.name().to_string(),
+                target: "world".to_string(),
+                first_frame: 0,
+                last_frame: state.frame,
+                count: 1,
+                detail,
+                last_detail,
+                meta: None,
+            });
+        }
+    }
+
     Ok(PlaytestReport {
         schema_version: 1,
         status,
@@ -2193,6 +2329,8 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         ui_surface: ui_surface_tracker.into_result(),
         #[cfg(feature = "render-liveness")]
         render_liveness: render_liveness_tracker_result,
+        #[cfg(feature = "screen-liveness")]
+        screen_liveness: screen_liveness_result,
     })
 }
 

@@ -113,6 +113,20 @@ these oracles watch:
   reads main-world `Camera` components, never the rendered pixels —
   a camera that renders black still passes; see
   [headless CI without a GPU](docs/how-to/headless-ci-gpu.md))
+- **Screen liveness** — with the `screen-liveness` feature, the
+  harness captures what the renderer actually produced (a
+  harness-owned `Camera2d` taking periodic screenshots) and hashes
+  the pixels. A sim-active 2D run whose captured screen never
+  changed across every capture pair gains an informational
+  `screen_liveness` entry; purely-3D scenes (no 2D camera) are
+  honestly labeled `not_evaluated_3d` instead of guessed, and fewer
+  than two captures refuse the question (`insufficient_captures`).
+  Informational, never gating: a frozen screen may be intentional
+  (menus, dialogue, level-load art). Evidence (tier, request/capture
+  counts, max Hamming drift, notes) rides the report's
+  `screen_liveness` field, which stays absent when the feature is
+  off or the game has no render pipeline — absence means "not
+  evaluated", never "healthy"
 - **Vacuity guard** — if no entity with a `Transform` (or, under
   `ui-liveness`, a `UiTransform`) existed at any point during the run, a
   Pass proves nothing; it fails loudly instead (the criterion is

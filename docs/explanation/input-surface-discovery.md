@@ -334,7 +334,7 @@ file, a non-UTF-8 source — each degrades to fewer hits, never an
 error: the scan with no hits falls back to the backbone, which is
 exactly what existed before the scan.
 
-**The headline claim, tested e2e** (`tests/discovery_flow.rs`):
+**The headline claim, tested e2e** (`tests/it/discovery_flow.rs`):
 the loading_screen-shaped demo (world moves only on `Digit1`)
 runs the built-in battery with no discovery variables set — the
 scan finds `KeyCode::Digit1` in its source, the bot presses it,
@@ -1488,7 +1488,7 @@ fixture). They refine the design above.
 ### Phase 2: Subprocess Probe Runner
 - [x] ~~Extend `battery::run_with_config` to accept scenario JSON inline~~ (superseded: the
   pool writes generated scenario JSON to a per-run workspace and passes paths — same
-  capability, cleaner lifecycle; `tests/probe_pool.rs` pins the contract)
+  capability, cleaner lifecycle; `tests/it/probe_pool.rs` pins the contract)
 - [x] Create probe scenario generator in `src/discovery/probe_scenarios.rs`
 - [x] Implement pool executor in `src/discovery/probe_pool.rs` (6-8 parallel subprocesses)
 

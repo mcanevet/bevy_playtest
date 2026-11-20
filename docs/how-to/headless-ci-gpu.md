@@ -76,9 +76,21 @@ see the
 `Camera` components, never the render world or the GPU. A camera can
 be present, enabled, and writing — and still produce a black image
 (bad clear color, broken pipeline, empty scene); `render_liveness`
-cannot tell. Pixel-level liveness ("did anything non-black actually
-appear") would need reading back render targets, which is a separate,
-future oracle; nothing on this page should be read as promising it.
+cannot tell. Pixel-level liveness NOW EXISTS: with the
+`screen-liveness` feature the harness captures its own `Camera2d`'s
+frames and hashes the pixels (see
+[screen liveness](../reference/README.md#oracles)) — but note that
+rule's own honest boundary: it is 2D-only (purely-3D scenes are
+labeled `not_evaluated_3d`, not guessed), informational-only (a
+frozen screen never gates a run), and needs a working GPU readback
+under the adapter this page configures. Treat the verdict with the
+adapter's fidelity in mind: on the software-rasterizer hosts
+described below, readback CONTENT is not faithful (a moving scene
+can hash identical; a static one can drift), so treat
+`insufficient_captures` as "readback wire unavailable here" and any
+tier as adapter-limited — not as a game finding. bevy_playtest's
+own content-pinning tests self-skip on `DeviceType::Cpu` adapters
+for the same reason.
 
 [`PlaytestDefaultPlugins`]: ../reference/README.md#plugins
 [`initialize_renderer`]: https://github.com/bevyengine/bevy/blob/v0.20.1/crates/bevy_render/src/renderer/mod.rs

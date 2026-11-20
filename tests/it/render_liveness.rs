@@ -15,8 +15,7 @@
 //! the same). Camera findings need no functioning GPU.
 
 // Shared test harness (run-slot serialization)
-#[path = "common/mod.rs"]
-mod common;
+use crate::common;
 
 use bevy_app::prelude::*;
 use bevy_camera::{Camera, CameraOutputMode};

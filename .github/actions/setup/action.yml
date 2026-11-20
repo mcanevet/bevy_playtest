@@ -1,0 +1,70 @@
+name: Setup Bevy CI runner
+description: >
+  Shared runner preparation for every CI job: reclaim disk, install the
+  pinned toolchain components, and install Bevy's Linux build/runtime
+  dependencies (plus software Vulkan for headless rendering).
+
+inputs:
+  free-disk:
+    description: Remove pre-installed SDKs we never use (needed for full Bevy debug builds).
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    # The stock image ships ~12 GB of Android SDK, ~6 GB of Haskell
+    # (.ghcup), ~3 GB of Swift, and other pre-installed tooling we never
+    # touch. Removing these leaves headroom for Bevy's debug artifacts.
+    - name: Free disk space
+      if: inputs.free-disk == 'true'
+      shell: bash
+      run: |
+        sudo rm -rf \
+          /usr/local/lib/android \
+          /usr/share/dotnet \
+          /opt/hostedtoolcache/CodeQL \
+          /usr/local/.ghcup \
+          /opt/ghc \
+          /usr/share/swift \
+          /usr/lib/jvm \
+          /usr/local/share/powershell \
+          /usr/lib/google-cloud-sdk || true
+        df -h /
+
+    # Single source of truth for the toolchain version: rust-toolchain.toml.
+    # GitHub runners ship rustup, which auto-installs the pinned toolchain
+    # (plus components) on the first cargo invocation. This avoids a
+    # second version source (dtolnay/rust-toolchain tags historically
+    # desynchronized from rust-toolchain.toml).
+    - name: Install Rust toolchain components
+      shell: bash
+      run: rustup component add clippy rustfmt
+
+    # azure.archive.ubuntu.com periodically serves archives at ~60kB/s
+    # (actions/runner-images#14823, #15040); apt has no
+    # minimum-throughput failover, so a trickling transfer hangs for
+    # 10-20 min. Prefer the public archive and bound each attempt so
+    # a slow node fails fast and retries.
+    - name: Install Linux dependencies (bevy backends + software Vulkan)
+      shell: bash
+      run: |
+        sudo sed -i 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g' \
+          /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null || true
+        if [ -f /etc/apt/apt-mirrors.txt ]; then
+          sudo sed -i 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g' /etc/apt/apt-mirrors.txt
+          # Deduplicate, keeping the first occurrence of each mirror.
+          sudo awk '!seen[$0]++' /etc/apt/apt-mirrors.txt \
+            | sudo tee /etc/apt/apt-mirrors.txt.tmp >/dev/null
+          sudo mv /etc/apt/apt-mirrors.txt.tmp /etc/apt/apt-mirrors.txt
+        fi
+        APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+        for i in 1 2 3; do
+          if sudo timeout 180 apt-get $APT_OPTS update -yq && \
+             sudo timeout 180 apt-get $APT_OPTS install -yq --no-install-recommends \
+               libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev \
+               mesa-vulkan-drivers; then
+            exit 0
+          fi
+          echo "apt attempt $i failed or timed out; retrying" >&2
+        done
+        exit 1

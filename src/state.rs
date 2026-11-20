@@ -250,6 +250,22 @@ pub struct PlaytestReport {
     #[cfg(feature = "render-liveness")]
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub render_liveness: Option<crate::discovery::render_liveness::RenderLivenessResult>,
+
+    /// Pixel-observed screen-health evidence from the harness-owned
+    /// capture rig: hashes of what the renderer actually produced,
+    /// greatest inter-capture Hamming drift, and the verdict tier
+    /// (`screen-liveness` feature; `None` when the feature is off,
+    /// the game has no render sub-app, or the asset store is
+    /// missing — "not evaluated", never "healthy"). Same
+    /// additive-honesty contract as
+    /// [`Self::render_liveness`]: absence never means "fine". The
+    /// finding ALSO rides `violations` as an informational
+    /// `screen_liveness` entry; this field carries the evidence
+    /// (tier, request/capture counts, Hamming drift, notes). See
+    /// [`crate::discovery::screen_liveness`].
+    #[cfg(feature = "screen-liveness")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub screen_liveness: Option<crate::discovery::screen_liveness::ScreenLivenessResult>,
 }
 
 impl PlaytestReport {
@@ -294,6 +310,8 @@ impl PlaytestReport {
             // verdict exists, and absence never means "healthy".
             #[cfg(feature = "render-liveness")]
             render_liveness: None,
+            #[cfg(feature = "screen-liveness")]
+            screen_liveness: None,
         }
     }
 

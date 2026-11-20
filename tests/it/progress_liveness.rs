@@ -8,8 +8,7 @@
 //!
 //! All runs hold `common::run_slot()` (process-global capture state).
 
-#[path = "common/mod.rs"]
-mod common;
+use crate::common;
 
 use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
