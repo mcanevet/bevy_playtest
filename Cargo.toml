@@ -190,17 +190,6 @@ name = "takeover_demo_picking"
 path = "src/bin/takeover_demo_picking.rs"
 required-features = ["takeover"]
 
-# Quadrant-clickable child for the mouse-GRID
-# position-discrimination test: a UI node covering the top-left
-# ~45% of the window (vs. `takeover_demo_picking`'s fullscreen
-# node), so only grid cells overlapping the quadrant diverge —
-# the fixture that catches a grid which finds clicks but cannot
-# tell WHERE (see tests/it/discovery_flow.rs).
-[[bin]]
-name = "takeover_demo_mouse_quadrant"
-path = "src/bin/takeover_demo_mouse_quadrant.rs"
-required-features = ["takeover"]
-
 # Minimal no-op child for probe-pool tests: runs, exits 0, never
 # writes any file — the platform-neutral stand-in for "a game that
 # exits without reporting" (see tests/it/probe_pool.rs,
@@ -292,9 +281,9 @@ required-features = ["takeover"]
 
 # Demo "game" for the mouse-MOTION probe tests: the canonical
 # AccumulatedMouseMotion consumer (camera-pan idiom, signed delta).
-# The motion probes' positive control — discovery MUST report a
-# mouse_motion finding with an effect on this game. See
-# tests/it/discovery_flow.rs: mouse_motion_finds_effects_on_motion_driven_game.
+# The motion probe's positive control — the probe MUST diverge on
+# this game. See
+# tests/it/probe_pool.rs: motion_probe_diverges_on_a_raw_motion_game.
 [[bin]]
 name = "takeover_demo_motion"
 path = "src/bin/takeover_demo_motion.rs"
@@ -303,9 +292,9 @@ required-features = ["takeover"]
 # Demo "game" for the FOCUS-WALK probe tests: the canonical
 # tab-navigation consumer (TabNavigationPlugin + a TabGroup of
 # TabIndexed widgets, digest-visibly reacting to focus movement).
-# The walker's positive control — discovery MUST report a
-# focus_walk finding with an effect on this game. See
-# tests/it/discovery_flow.rs: focus_walk_finds_effects_on_tab_navigation_game.
+# The walker's positive control — the probe MUST diverge on this
+# game. See
+# tests/it/probe_pool.rs: focus_walk_diverges_on_a_tab_navigation_game.
 [[bin]]
 name = "takeover_demo_focus"
 path = "src/bin/takeover_demo_focus.rs"
@@ -319,14 +308,6 @@ required-features = ["takeover"]
 [[bin]]
 name = "takeover_demo_empty"
 path = "src/bin/takeover_demo_empty.rs"
-required-features = ["takeover"]
-
-# Discover a game's input surface: the authoring-time tier-0 sweep
-# (see docs/how-to/discover-input-surface.md). Required-features
-# gates match the other bins: takeover drives probe subprocesses.
-[[bin]]
-name = "bevy_playtest_discover"
-path = "src/bin/bevy_playtest_discover.rs"
 required-features = ["takeover"]
 
 [features]

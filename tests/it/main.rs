@@ -17,8 +17,8 @@
 //! global default) irreversibly, which would poison every other test
 //! sharing their process under plain `cargo test`.
 //!
-//! Run one suite with e.g. `cargo test --test it discovery_flow::` or
-//! `cargo nextest run -E 'test(/^discovery_flow::/)'`.
+//! Run one suite with e.g. `cargo test --test it probe_pool::` or
+//! `cargo nextest run -E 'test(/^probe_pool::/)'`.
 
 #[path = "../common/mod.rs"]
 mod common;
@@ -26,7 +26,6 @@ mod common;
 mod battery;
 mod census;
 mod component_check;
-mod discovery_flow;
 mod driver_smoke;
 mod fault_injection;
 mod frozen_world_detail;
@@ -47,7 +46,6 @@ mod scenario_schema;
 #[cfg(feature = "screen-liveness")]
 mod screen_liveness;
 mod state_digest;
-mod suggestions;
 mod takeover_e2e;
 mod ui_liveness;
 mod ui_surface;

@@ -1153,10 +1153,7 @@ fn frozen_world_oracle_system(
                 .get_mut(&(Rule::FrozenWorld.name().to_string(), "world".to_string()))
             {
                 if entry.meta.is_none() {
-                    entry.meta = Some(crate::discovery::surface::ViolationMeta {
-                        stepping,
-                        ..Default::default()
-                    });
+                    entry.meta = Some(crate::discovery::surface::ViolationMeta { stepping });
                 }
             }
         }
@@ -2286,6 +2283,33 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         }
     }
 
+    // Deterministic ordering: stats accumulate in registry-walk order,
+    // which is registration-stable within a run but sort anyway so
+    // byte-stability holds across the double run.
+    #[cfg(feature = "lw-reader")]
+    let lw_tap_stats = {
+        let mut s = lw_tap_stats;
+        s.sort_by(|a, b| (&a.action_map, &a.action).cmp(&(&b.action_map, &b.action)));
+        s.dedup();
+        s
+    };
+    // Leafwing reconcile on EVERY run (lw-reader): declared bindings
+    // joined with this run's intent-tap evidence. The alarm channel
+    // (`declared_but_dead`: proven-dead wiring) needs no probe data.
+    // No independent liveness evidence exists, so no
+    // `context_unverified` grade is emitted (it would otherwise flag
+    // every working binding).
+    #[cfg(feature = "lw-reader")]
+    let lw_reconciled = if lw_declared.is_empty() && lw_tap_stats.is_empty() {
+        None
+    } else {
+        Some(crate::discovery::lw::reconcile_without_liveness(
+            &crate::discovery::lw::LwRunEvidence {
+                declared: lw_declared.clone(),
+                stats: lw_tap_stats.clone(),
+            },
+        ))
+    };
     Ok(PlaytestReport {
         schema_version: 1,
         status,
@@ -2308,22 +2332,14 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         game_build_profile: Some(crate::discovery::surface::BuildProfile::current()),
         state_digest,
         progress_samples: progress_audit.map(|a| a.samples).unwrap_or_default(),
-        discovered_surface: None,
-        injected_surface_keys: None,
         source_derived_keys: None,
         source_derived_notes: None,
         #[cfg(feature = "lw-reader")]
         lw_declared,
         #[cfg(feature = "lw-reader")]
-        // Deterministic ordering: stats accumulate in registry-walk
-        // order, which is registration-stable within a run but sort
-        // anyway so byte-stability holds across the double run.
-        lw_tap_stats: {
-            let mut s = lw_tap_stats;
-            s.sort_by(|a, b| (&a.action_map, &a.action).cmp(&(&b.action_map, &b.action)));
-            s.dedup();
-            s
-        },
+        lw_tap_stats,
+        #[cfg(feature = "lw-reader")]
+        lw_reconciled,
         capability_census: Some(capability_census),
         #[cfg(feature = "ui-surface")]
         ui_surface: ui_surface_tracker.into_result(),

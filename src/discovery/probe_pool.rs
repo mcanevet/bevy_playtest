@@ -460,10 +460,8 @@ pub fn build_job_list(plan: &ProbePlan) -> Result<Vec<ProbeJob>, ProbeError> {
     // own determinism gate; first copy is the motion diff baseline).
     // A disabled probe (`mouse_motion_enable: false`) contributes
     // nothing. Motion is NEVER pruned on scan data (same doctrine as
-    // the mouse grid — see docs/explanation/input-surface-discovery.md,
-    // Motion Probing section): the jobs are built whenever the plan
-    // enables the motion matrix, and an inert result is handled by
-    // the flow's loud untrusted-inert ledger, not by skipping runs.
+    // the mouse grid): the jobs are built whenever the plan enables
+    // the motion matrix.
     if plan.mouse_motion_enable {
         let readiness = plan
             .points()

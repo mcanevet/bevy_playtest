@@ -1,52 +1,25 @@
-//! Input-surface discovery: automatically determine which inputs a
-//! game actually consumes, without requiring authors to declare them.
+//! What the harness can learn about a game's input surface and world.
 //!
-//! The four-slice implementation is COMPLETE, each layer feeding the
-//! next: the TYPE layer ([`surface`], [`diff`],
-//! [`group_completion`]) plus [`static_scan`] (the schedule walk
-//! that classifies systems by input-signal ComponentIds, never
-//! names); [`probe_scenarios`] (normalized control/probe pair
-//! generation, deterministic validated probe points) and [`cache`]
-//! (the on-disk surface cache); the takeover-gated [`probe_pool`]
-//! (subprocess worker pool on the plugin env contract); and
-//! [`flow`] — the orchestrator that ties them together
-//! (cache lookup → probe pool → determinism gate → diff aggregation
-//! → group completion → cache persist). See
-//! `docs/explanation/input-surface-discovery.md` for the design and
-//! [`flow::discover`] for the one-call entry point.
-//!
-//! Feature split: `flow`, `probe_pool`, and `draft` drive TAKEOVER
-//! SUBPROCESSES (they build on `crate::plugin`'s env contract, which
-//! only exists with the `takeover` feature) and are gated behind it,
-//! exactly like their only crate consumer, `crate::battery`. The pure
-//! layers — `cache`, `diff`, `group_completion`, `probe_scenarios`,
-//! `provenance`, `static_scan`, `surface` — compile everywhere so
-//! report types like `DiscoveredSurface`/`ViolationMeta` stay
-//! available to in-process-only builds. `lw` — the Leafwing
-//! declared-tier reader — sits behind the separate `lw-reader`
-//! opt-in: it is a pure-reflection consumer of these layers (no
-//! Leafwing dependency), but its live-world walk only has anything
-//! to find when the game itself uses Leafwing. `ui_surface` — the
-//! declared UI/interactable enumeration — sits behind `ui-surface`
-//! for the same reason: it links the bevy_ui/picking/widgets stack
-//! that the enumeration mirrors. `render_liveness` — the structural
-//! camera-health probe — sits behind `render-liveness`: it reads
-//! main-world `Camera` components and probes for `bevy_render`'s
-//! sub-app, so its deps are `bevy_camera` + `bevy_render` (both
-//! already in the takeover graph via the `bevy` meta-crate).
-//! `screen_liveness` — the pixel-observed successor (harness probe
-//! camera + screenshot readback + perceptual hash) — sits behind
-//! `screen-liveness`, which chains `render-liveness` plus
-//! `bevy_asset`/`bevy_image` for the offscreen `Image` target.
+//! - [`source_scan`]: milliseconds-cost text scan of the game's sources
+//!   for `KeyCode::` variants; aims the battery's default chaos surface.
+//! - [`census`]: load-time capability census, default-on.
+//! - [`static_scan`]: schedule walk classifying systems by the input
+//!   signals they read (by ComponentId, never by name).
+//! - `lw` (`lw-reader`): Leafwing declared tier — reader, intent-tap,
+//!   and reconcile, stamped on every report as `lw_reconciled`.
+//! - `ui_surface` (`ui-surface`): declared UI/interactable enumeration.
+//! - `render_liveness` / `screen_liveness`: camera-health and
+//!   pixel-observed liveness probes.
+//! - [`surface`], [`provenance`], [`diff`]: shared report/IR types and
+//!   digest-trace diffing.
+//! - `probe_pool` (`takeover`) + [`probe_scenarios`]: subprocess worker
+//!   pool and paired probe scenarios — kept as the substrate for
+//!   state-frontier exploration (to be reworked into an episode
+//!   runner); the probe-vs-control discovery flow built on them was
+//!   removed.
 
-pub mod cache;
 pub mod census;
 pub mod diff;
-#[cfg(feature = "takeover")]
-pub mod draft;
-#[cfg(feature = "takeover")]
-pub mod flow;
-pub mod group_completion;
 #[cfg(feature = "lw-reader")]
 pub mod lw;
 #[cfg(feature = "takeover")]
@@ -59,7 +32,6 @@ pub mod render_liveness;
 pub mod screen_liveness;
 pub mod source_scan;
 pub mod static_scan;
-pub mod suggestions;
 pub mod surface;
 #[cfg(feature = "ui-surface")]
 pub mod ui_surface;

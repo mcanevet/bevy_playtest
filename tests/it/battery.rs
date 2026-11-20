@@ -13,11 +13,11 @@
 //! (`crate::battery::run_with_config`), so these tests exercise
 //! actual OS process spawn/exit — no `run_scenario` exclusivity
 //! involved. Each test still takes the run slot: the battery reads
-//! `BEVY_PLAYTEST_DISCOVER*` from the PARENT environment, and sibling
-//! suites in this binary (discovery_flow, probe_pool, scan_purity)
-//! set those variables while holding the slot. Under plain
-//! `cargo test` they share one process, so an unserialized battery
-//! run could pick up another test's discovery opt-in.
+//! `BEVY_PLAYTEST_*` source-scan knobs from the PARENT environment
+//! and walks the whole environment to strip `BEVY_PLAYTEST_*` from
+//! its child, while sibling suites in this binary (probe_pool,
+//! scan_purity) mutate the environment while holding the slot. Under
+//! plain `cargo test` they share one process.
 
 use crate::common;
 

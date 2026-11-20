@@ -124,7 +124,7 @@ The strongest evidence tier: seven Bevy showcase games (`alien_cake_addict`,
 `scripts/fetch_bevy_examples.sh` (not committed; only `tests/playtest.rs`
 and `Cargo.lock` are); `thetawave` (a real-world Leafwing game port,
 fetched wholesale from a pinned commit of our fork — see
-[input-surface discovery](input-surface-discovery.md#real-world-corroboration-the-thetawave-fixture));
+[the thetawave fixture reference](../reference/thetawave-fixture.md));
 plus one committed hand-maintained fixture:
 `known_answer` (planted ground truth for measurement grading).
 

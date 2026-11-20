@@ -235,25 +235,11 @@ pub const REQUIRED_MARKERS: &[&str] = &[
     "L5",
 ];
 
-/// Candidate keys the plant catalog adds on top of the harness's
-/// default probe set (measure/mutation harnesses both probe the
-/// default set UNION these). Single-sourced here so the two test
-/// binaries cannot drift apart. The control key `KeyQ` is never
-/// bound and never a candidate.
-///
-/// `KeyJ` (PLANT L5): the healthy LW `Live` binding whose sweep-
-/// verified liveness reconcile must supersede — without probing it,
-/// the draft would never emit the DiscoveredButUndeclared row for
-/// KeyJ that the retraction case consumes.
-pub const EXTRA_CANDIDATE_KEYS: &[&str] = &[
-    "KeyU", "KeyL", "KeyT", "KeyG", "KeyV", "KeyX", "KeyM", "KeyJ",
-];
-
 // ---------------------------------------------------------------------------
 // D1-d declared-tier lens (Leafwing reader + intent-tap + reconcile)
 // shared machinery: the deterministic scenario and its battery runner
 // live HERE so the measure and mutation test binaries cannot drift
-// apart (same discipline as EXTRA_CANDIDATE_KEYS above).
+// apart.
 //
 // Gated behind `measure`: these reference `bevy_playtest` (present
 // only under the self-dev-dependency's `playtest` activation) and
@@ -326,20 +312,4 @@ pub fn run_lw_lens(tag: &str) -> bevy_playtest::state::PlaytestReport {
     };
     bevy_playtest::battery::run_with_config(&config)
         .expect("LW-lens run completes and reports (it is not a discovery run)")
-}
-
-/// Reconcile the report's LW evidence against a draft's live input
-/// set — the composition measure and mutation tests both need.
-#[cfg(feature = "measure")]
-pub fn reconcile_report(
-    report: &bevy_playtest::state::PlaytestReport,
-    draft_live: &std::collections::BTreeSet<String>,
-) -> bevy_playtest::discovery::lw::ReconciledLw {
-    bevy_playtest::discovery::lw::reconcile(
-        &bevy_playtest::discovery::lw::LwRunEvidence {
-            declared: report.lw_declared.clone(),
-            stats: report.lw_tap_stats.clone(),
-        },
-        draft_live,
-    )
 }

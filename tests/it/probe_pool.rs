@@ -310,9 +310,8 @@ fn mouse_matrix_reaches_pointer_games_and_gates_determinism() {
     //    writes, so the oscillation perturbs hover/picking state —
     //    digest-visible, a genuine motion effect. This makes the
     //    picking game the motion probe's WRAPPED-form positive
-    //    control, complementing `takeover_demo_motion` (the RAW
-    //    AccumulatedMouseMotion consumer) in the discovery-flow
-    //    tests. Asserting inertness here would be factually wrong
+    //    control (`takeover_demo_motion`, the RAW
+    //    AccumulatedMouseMotion consumer, is the other form's). Asserting inertness here would be factually wrong
     //    AND would weaken the matrix: a probe that cannot see
     //    wrapped-form motion readers is blind to a whole class.
     assert_eq!(split.motion_controls.len(), 2);
@@ -339,9 +338,8 @@ fn mouse_matrix_reaches_pointer_games_and_gates_determinism() {
     //    scripted Tab press must leave the world byte-identical to
     //    the focus-walk control. Asserting divergence here would be
     //    factually wrong; asserting equality pins the honest-inert
-    //    verdict at the pool layer. The POSITIVE walker control
-    //    lives in tests/it/discovery_flow.rs against
-    //    `takeover_demo_focus` (the tab-navigation consumer).
+    //    verdict at the pool layer. The POSITIVE walker control is
+    //    `focus_walk_diverges_on_a_tab_navigation_game` below.
     // 3. Presence: the walker ran at all (default-on knob).
     assert_eq!(split.focus_walk_controls.len(), 2);
     assert_eq!(
@@ -357,8 +355,7 @@ fn mouse_matrix_reaches_pointer_games_and_gates_determinism() {
         digest_series(walk_probe),
         digest_series(&split.focus_walk_controls[0]),
         "the picking game binds no tab navigation — the walker must \
-         read honestly INERT (Tab produced no observable change), and \
-         the discovery_flow focus-walk tests carry the positive control"
+         read honestly INERT (Tab produced no observable change)"
     );
 
     // Every cell probe on this game is BOUND (fullscreen node): it
@@ -373,6 +370,76 @@ fn mouse_matrix_reaches_pointer_games_and_gates_determinism() {
             "cell {id} must diverge from the mouse control on the picking game"
         );
     }
+}
+
+#[test]
+fn focus_walk_diverges_on_a_tab_navigation_game() {
+    let _slot = common::run_slot();
+    // POSITIVE walker control: `takeover_demo_focus` adds
+    // `TabNavigationPlugin` and a `TabGroup` of `TabIndex`ed widgets
+    // with a digest-visible focus marker, so a scripted Tab press
+    // MUST diverge from the focus-walk control. Pairs with the
+    // honest-inert pin on the picking game above.
+    let mut plan = keyboard_only(&["Digit1"]);
+    plan.focus_walk_enable = true;
+    let jobs = build_job_list(&plan).expect("job list");
+    // 1 key × 2 points + 4 key controls, then 1 walk probe + 2 controls.
+    assert_eq!(jobs.len(), 2 + 4 + 1 + 2);
+
+    let bin = std::path::PathBuf::from(env!("CARGO_BIN_EXE_takeover_demo_focus"));
+    let results = run_jobs(&ProbePoolConfig::new(bin), &jobs);
+    for r in &results {
+        r.as_ref()
+            .expect("every focus-walk job must produce a report");
+    }
+    let split = split_kinds(&results);
+    assert_eq!(split.focus_walk_controls.len(), 2);
+    assert_eq!(
+        digest_series(&split.focus_walk_controls[0]),
+        digest_series(&split.focus_walk_controls[1]),
+        "focus-walk double-control determinism gate FAILED"
+    );
+    let walk_probe = split.focus_walk_probe.as_ref().expect("walk probe ran");
+    assert_ne!(
+        digest_series(walk_probe),
+        digest_series(&split.focus_walk_controls[0]),
+        "Tab must move focus on a tab-navigation game: the walker has \
+         to see the divergence"
+    );
+}
+
+#[test]
+fn motion_probe_diverges_on_a_raw_motion_game() {
+    let _slot = common::run_slot();
+    // POSITIVE motion control, RAW form: `takeover_demo_motion` reads
+    // `AccumulatedMouseMotion` (the camera-pan idiom), so the zero-net
+    // oscillation MUST diverge from the motion control. The picking
+    // game above covers the WRAPPED `CursorMoved` form.
+    let mut plan = keyboard_only(&["Digit1"]);
+    plan.mouse_motion_enable = true;
+    let jobs = build_job_list(&plan).expect("job list");
+    // 1 key × 2 points + 4 key controls, then 1 motion probe + 2 controls.
+    assert_eq!(jobs.len(), 2 + 4 + 1 + 2);
+
+    let bin = std::path::PathBuf::from(env!("CARGO_BIN_EXE_takeover_demo_motion"));
+    let results = run_jobs(&ProbePoolConfig::new(bin), &jobs);
+    for r in &results {
+        r.as_ref().expect("every motion job must produce a report");
+    }
+    let split = split_kinds(&results);
+    assert_eq!(split.motion_controls.len(), 2);
+    assert_eq!(
+        digest_series(&split.motion_controls[0]),
+        digest_series(&split.motion_controls[1]),
+        "motion double-control determinism gate FAILED"
+    );
+    let motion_probe = split.motion_probe.as_ref().expect("motion probe ran");
+    assert_ne!(
+        digest_series(motion_probe),
+        digest_series(&split.motion_controls[0]),
+        "a raw AccumulatedMouseMotion reader must diverge under the \
+         motion probe"
+    );
 }
 
 #[test]

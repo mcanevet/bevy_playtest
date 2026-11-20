@@ -70,6 +70,11 @@ one. Two `Actionlike` types coexist (multi-map enumeration), and no
 handler consumes `MenuAction2`, so `KeyH` shares L2's
 `context_unverified` grade.
 
+The `context_unverified` grades above are the ground truth for a
+reconcile that HAS independent liveness evidence (formerly the probe
+sweep; next, exploration). The per-run reconcile has none, so it
+emits only the L1 alarm.
+
 Supporting testbeds (structure-only in D1, consumed by later
 slices): a bespoke `Keymap` resource routing the REAL WASD bindings
 (shape and behavior), a `MenuFocus` witness, and a
@@ -113,44 +118,32 @@ IS asserted today: liveness in the probed context follows
 `probe_visible`, and `boot_live`/negative grades hold against the
 game's actual behavior.
 
-## Measured coverage (D0 sweep lens, as asserted by `tests/measure.rs`)
+## Measurement (`tests/measure.rs`)
 
-Measured honestly against the full catalog (dev-profile binary,
-candidate list = defaults ∪ {KeyU, KeyL, KeyT, KeyG, KeyV, KeyX,
-KeyM, KeyJ}, control key `KeyQ` never bound, never a candidate):
+The probe-sweep lens that graded input-surface discovery against the
+plant catalog went away with discovery itself. What remains asserted:
 
-- **True positives (9)**: KeyU, KeyW, KeyA, KeyS, KeyD, KeyR,
-  Digit1, Digit2, KeyG — every probe-visible plant is found.
-- **False negatives (3, exactly the documented ones)**: KeyL,
-  ShiftLeft (P4 chord), KeyT (P5 debounce). These are measured,
-  documented limitations of single-key probing — asserted as exact
-  counts, never tuned away.
-- **False positives (0)**: every adversarial negative — the eight
-  dead hotbar slots, the preview/display shapes, the logger, the
-  raw read, the dormant rebind target — grades inert.
-- **True negatives (12)**: the rest.
-- Determinism gate: `SurfaceConfidence::Exact` (controls never
-  diverge), otherwise all negatives are untrusted.
-- P7 (KeyV): not-discovered at boot, as committed — a
-  context-gated miss with an entry in `findings_expected`, not a
-  silent absence.
+- the Leafwing declared tier (`lw_reconcile_lens_known_answer_commitments`):
+  reader completeness across both maps (RON-loaded binding included),
+  intent-tap press/fire correlation row by row, exactly one pristine
+  `DeclaredButDead` alarm (L1 KeyN) and no other finding (the per-run
+  reconcile has no liveness evidence, so it emits no
+  `ContextUnverified`), chord members carrying notes only, and
+  byte-identical reconcile output across two runs — all read from the
+  report's `lw_reconciled`;
+- the ground truth's closed vocabularies.
 
-Chords and debounce-misses are BY DESIGN here: they mark precisely
-where a future chord/debounce lens must add coverage, with rows
-already waiting in the truth file.
+The catalog's per-row probe expectations stay in `ground_truth.json`:
+they describe the game's real behavior and are the yardstick a future
+exploration lens will be measured against.
 
 ## Mutations (`tests/mutation.rs`)
 
 The game accepts `KNOWN_ANSWER_MUTATION` (see the fixture README
-for why the var is deliberately not `BEVY_PLAYTEST_`-prefixed):
+for why the var is deliberately not `BEVY_PLAYTEST_`-prefixed).
+`P1_dead` and `N1_hotbar_full` remain available in the game but have
+no harness test today (they were graded by the removed sweep).
 
-- `P1_dead` — P1's system early-outs while ground truth still
-  declares KeyU live: the **declared-but-dead** drift direction.
-  The sweep must report KeyU inert — as a pinned `probe_run_inert`
-  entry with no `discoveredButUndeclared` finding claiming it live
-  (the sweep-lens half of the alarm story; the declared-tier alarm
-  itself is asserted on the L plants, where a declared binding is
-  involved).
 - `LW_dead` — the healthy Live action (L5, KeyJ) is disabled at
   frame 35, after the reader's declared snapshot but before the
   scenario's frame-40 press: the declared-tier **alarm** direction.
@@ -161,22 +154,13 @@ for why the var is deliberately not `BEVY_PLAYTEST_`-prefixed):
   with the static L1 plant this proves the alarm channel both ways:
   a binding healthy-then-killed in the same run alarms, and the
   pristine run stays false-tap-free.
-- `N1_hotbar_full` — all ten hotbar slots go live while ground
-  truth declares eight inert: the **inert-but-live** direction
-  (negative flipped positive). The sweep must find all ten live.
-
-Each mutated run uses a distinct `fixture_name` tag and a fresh
-temp cache: `CacheKey::for_binary` hashes binary + features +
-fixture name + plan fingerprint but not env vars, so sharing the
-pristine tag would serve a poisoned cache entry. Mutation runs must
-never reuse the pristine run's cache.
 
 ## Harness tiers
 
 | Tier | Enabled by | Contents |
 |------|-----------|----------|
 | Battery | `--features playtest` | standard playtest battery + ground-truth round-trip + marker↔row cross-check (fast, no probes) |
-| Measure | `--features playtest,measure` | everything above plus the sweep-lens measurement and the two mutation runs (slow: dozens of subprocess runs; opt-in only, never in the plain battery) |
+| Measure | `--features playtest,measure` | everything above plus the Leafwing reconcile lens and the `LW_dead` mutation (opt-in only, never in the plain battery) |
 
 Both tiers require `--test-threads=1` (`run_scenario` is exclusive
 per process).
