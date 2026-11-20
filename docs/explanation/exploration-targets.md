@@ -31,8 +31,12 @@ because it never had such a yardstick.)
 ## Protocol
 
 - **Evaluation:** 5,000 frames (~83 s of game time at 60 tps) × 5
-  seeds per fixture, in the `Exploration evaluation` workflow (nightly
-  and on demand; it measures, it never gates a PR).
+  seeds per fixture, run on demand with the `Exploration evaluation`
+  workflow (Actions → Run workflow) before claiming an improvement.
+  PRs that touch the harness, targets or dependencies get a quick run
+  automatically (2 seeds × 3,000 frames). It never gates a PR, and has
+  no schedule: every input is pinned, so results only change with the
+  code.
 - **Hit:** a target counts as reached when ≥ 4 of 5 seeds reach it.
 - **Locally:** build the fixtures with `--features playtest`, then
   `bevy_playtest_eval --targets eval/targets/<fixture>.json

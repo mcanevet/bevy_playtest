@@ -6,10 +6,25 @@ name: Exploration evaluation
 # from each report's independent state trace. Measures, never gates:
 # results land in the run summary and as JSON artifacts.
 # See docs/explanation/exploration-targets.md.
+#
+# No schedule: every input is pinned (seeds, fixtures, Bevy revision), so
+# results only change when the code does. PRs that can change
+# exploration get a QUICK evaluation (2 seeds x 3,000 frames); the full
+# one (5 x 5,000) is run on demand before claiming an improvement. It is
+# never a required check, so it does not delay CI's merge gate.
 
 on:
-  schedule:
-    - cron: "17 3 * * *"
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "eval/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "fixtures/Cargo.lock"
+      - "scripts/fetch_bevy_examples.sh"
+      - ".github/workflows/evaluate.yml"
+      - ".github/actions/setup/**"
   workflow_dispatch:
     inputs:
       seeds:
@@ -83,8 +98,9 @@ jobs:
       - name: Evaluate
         env:
           FIXTURE: ${{ matrix.fixture }}
-          SEEDS: ${{ inputs.seeds || '5' }}
-          FRAMES: ${{ inputs.frames || '5000' }}
+          # Quick on PRs; full (or the inputs) when run by hand.
+          SEEDS: ${{ inputs.seeds || (github.event_name == 'pull_request' && '2' || '5') }}
+          FRAMES: ${{ inputs.frames || (github.event_name == 'pull_request' && '3000' || '5000') }}
         run: |
           ./target/debug/bevy_playtest_eval \
             --targets "eval/targets/$FIXTURE.json" \
