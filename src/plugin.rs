@@ -388,7 +388,7 @@ pub fn smoke_scenario() -> Result<crate::scenario::Scenario, String> {
 /// verification needs process-clean state).
 pub fn battery_scenario() -> Result<crate::scenario::Scenario, String> {
     let scenario: crate::scenario::Scenario = serde_json::from_str(
-        r#"{"name":"battery","bot":{"type":"chaos","seed":42},"duration_s":20.0,"liveness":{"timeout_s":15.0,"progress":{"require_surface":true}}}"#,
+        r#"{"name":"battery","bot":{"type":"chaos","seed":42,"explore":true},"duration_s":20.0,"liveness":{"timeout_s":15.0,"progress":{"require_surface":true}}}"#,
     )
     .map_err(|err| format!("built-in battery scenario failed to parse: {err}"))?;
     crate::scenario::validate_scenario(&scenario)

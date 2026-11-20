@@ -328,7 +328,7 @@ pub fn enumerate_ui(world: &World) -> UiSurfaceResult {
     // returns `None` when a queried component is not registered in
     // this world — in that case no entity can possibly carry it, so an
     // empty set is both correct and complete (not an incompleteness).
-    let widget_entities: HashSet<Entity> = QueryState::<
+    let mut widget_entities: HashSet<Entity> = QueryState::<
         Entity,
         Or<(
             With<Button>,
@@ -345,6 +345,16 @@ pub fn enumerate_ui(world: &World) -> UiSurfaceResult {
     >::try_new(world)
     .map(|mut state| state.iter(world).collect())
     .unwrap_or_default();
+    // bevy_ui's own `Interaction` (the hover/press state of the older
+    // `Button` path, deprecated in 0.20 but common): a node carrying it
+    // reacts to clicks, so it is a widget too. Without this, games built
+    // that way (thetawave's menus) showed no clickable surface at all.
+    #[allow(deprecated)]
+    let interaction_entities: HashSet<Entity> =
+        QueryState::<Entity, With<bevy_ui::Interaction>>::try_new(world)
+            .map(|mut state| state.iter(world).collect())
+            .unwrap_or_default();
+    widget_entities.extend(interaction_entities);
     let pickable_entities: HashSet<Entity> = QueryState::<Entity, With<Pickable>>::try_new(world)
         .map(|mut state| state.iter(world).collect())
         .unwrap_or_default();
@@ -627,6 +637,68 @@ impl UiSurfaceTracker {
         self.snapshot = Some(result);
     }
 
+    /// Stable action names for the current click targets, in the same
+    /// order as the `click_targets` filled by [`Self::observe`], each
+    /// with its disabled flag. A widget is named by its label (trimmed,
+    /// whitespace collapsed), else `<role>#n` (angle brackets, so no
+    /// label can collide with it). When several widgets share a name,
+    /// they are numbered `name`, `name#2`, ... in on-screen order (top to
+    /// bottom, then left to right), so the numbering survives a menu
+    /// being rebuilt with different entities.
+    pub(crate) fn target_ids(&self) -> Vec<(String, bool)> {
+        let Some(snapshot) = &self.snapshot else {
+            return Vec::new();
+        };
+        let targets: Vec<&Interactable> = snapshot
+            .interactables
+            .iter()
+            .filter(|e| e.center.is_some())
+            .collect();
+        let base: Vec<String> = targets
+            .iter()
+            .map(|e| {
+                let label = e
+                    .label
+                    .as_deref()
+                    .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+                    .unwrap_or_default();
+                if label.is_empty() {
+                    let role = serde_json::to_string(&e.role).unwrap_or_default();
+                    format!("<{}>", role.trim_matches('"'))
+                } else {
+                    label
+                }
+            })
+            .collect();
+        // Number same-named widgets by position, not entity order.
+        let mut order: Vec<usize> = (0..targets.len()).collect();
+        order.sort_by(|&i, &j| {
+            let (a, b) = (
+                targets[i].center.unwrap_or_default(),
+                targets[j].center.unwrap_or_default(),
+            );
+            base[i]
+                .cmp(&base[j])
+                .then(a.y.total_cmp(&b.y))
+                .then(a.x.total_cmp(&b.x))
+        });
+        let mut names = base.clone();
+        let mut seen: std::collections::HashMap<&str, usize> = Default::default();
+        for &i in &order {
+            let n = seen.entry(base[i].as_str()).or_default();
+            *n += 1;
+            let unlabeled = base[i].starts_with('<');
+            names[i] = match (*n, unlabeled) {
+                (1, false) => base[i].clone(),
+                (n, _) => format!("{}#{n}", base[i]),
+            };
+        }
+        names
+            .into_iter()
+            .zip(targets.iter().map(|e| e.disabled))
+            .collect()
+    }
+
     /// Turn one recapture diff into notes (bounded, disclosed).
     /// Entities render by their full generational id (`Entity`'s
     /// `Display`, e.g. `42v3`): a bare index would conflate
@@ -740,6 +812,60 @@ mod tracker_tests {
     //! mid-"run") because the contract is about entity sets, not
     //! mockable inputs.
     use super::*;
+
+    #[test]
+    fn target_ids_are_unambiguous_and_positional() {
+        let widget = |label: Option<&str>, x: f32, y: f32, disabled: bool| Interactable {
+            entity: Entity::PLACEHOLDER,
+            kinds: vec![InteractableKind::Widget],
+            role: WidgetRole::Button,
+            center: Some(Vec2::new(x, y)),
+            rect: None,
+            disabled,
+            label: label.map(str::to_string),
+            focused: false,
+        };
+        let tracker = |items: Vec<Interactable>| UiSurfaceTracker {
+            snapshot: Some(UiSurfaceResult {
+                interactables: items,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        // Labels keep their digits; same labels and unlabeled widgets are
+        // numbered top to bottom; a label equal to the role name cannot
+        // collide with an unlabeled widget's name.
+        let ids = tracker(vec![
+            widget(Some("+"), 0.0, 200.0, false),
+            widget(Some("Level 11"), 0.0, 50.0, false),
+            widget(Some("+"), 0.0, 100.0, true),
+            widget(None, 0.0, 300.0, false),
+            widget(Some("button"), 0.0, 10.0, false),
+            widget(None, 0.0, 20.0, false),
+        ])
+        .target_ids();
+        assert_eq!(
+            ids,
+            vec![
+                ("+#2".to_string(), false),
+                ("Level 11".to_string(), false),
+                ("+".to_string(), true),
+                ("<button>#2".to_string(), false),
+                ("button".to_string(), false),
+                ("<button>#1".to_string(), false),
+            ]
+        );
+        // Same widgets in a different entity order: same names.
+        let reordered = tracker(vec![
+            widget(Some("+"), 0.0, 100.0, true),
+            widget(Some("+"), 0.0, 200.0, false),
+        ])
+        .target_ids();
+        assert_eq!(
+            reordered,
+            vec![("+".to_string(), true), ("+#2".to_string(), false)]
+        );
+    }
 
     fn test_world() -> World {
         // Minimal resources `enumerate_ui` tolerates absent (all its

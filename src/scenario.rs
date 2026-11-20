@@ -115,6 +115,15 @@ pub struct BotConfig {
     /// Input surface for the chaos bot: which keys it may press.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_surface: Option<RawSurface>,
+    /// Chaos bot only: explore instead of picking uniformly at random.
+    /// Remembers what it tried on each screen (the set of enabled
+    /// widgets) and prefers the least-tried key / widget there, presses
+    /// Escape to back out after a few seconds without anything new, and
+    /// adds an `exploration` section (screens seen, widgets never
+    /// activated, saturation verdict) to the report. Still seeded and
+    /// replay-faithful: ties are broken by the recorded random draws.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub explore: bool,
 }
 
 /// A scripted mouse click: position + button + hold, frame-indexed.

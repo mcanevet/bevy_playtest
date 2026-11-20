@@ -333,10 +333,13 @@ required-features = ["takeover"]
 default = ["in-process", "takeover"]
 in-process = []
 takeover = ["in-process", "takeover-winit"]
-takeover-winit = ["takeover", "dep:bevy_winit", "dep:bevy", "ui-liveness"]
+takeover-winit = ["takeover", "dep:bevy_winit", "dep:bevy", "ui-liveness", "ui-surface"]
 # UI liveness oracle: extends frozen_world to Changed<UiTransform>. Free
 # under takeover (bevy meta-crate already unifies bevy_ui), so default-on
-# there; in-process-only consumers opt in explicitly.
+# there; in-process-only consumers opt in explicitly. `ui-surface` is
+# default-on under takeover for the same reason (the bevy meta-crate's
+# default `ui` feature already brings its crates): without it the bot
+# cannot see a game's widgets and clicks purely at random.
 ui-liveness = ["dep:bevy_ui"]
 
 # Enumerate the declared UI/interactable surface (Pickable markers,
