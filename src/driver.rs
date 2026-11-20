@@ -274,6 +274,7 @@ fn chaos_bot_system(
     scenario: Res<ScenarioResource>,
     mut choices: ResMut<RunChoices>,
     mut hold_state: ResMut<ChaosHoldState>,
+    mut explorer: ResMut<crate::explorer::Explorer>,
     primary_window: Query<Entity, With<bevy_window::PrimaryWindow>>,
     mut keyboard: BotKeyboardWriters,
 ) {
@@ -345,11 +346,41 @@ fn chaos_bot_system(
     if candidates.is_empty() {
         return; // every surface key is held (slots >= surface size)
     }
-    let idx = choices.0.below_kind(
+    // Explore mode, stuck: nothing new for a few seconds, so back out
+    // with Escape (a deliberate press, unlike the blind chaos surface
+    // which never contains Escape). Recorded as a one-way Key draw so
+    // the action log names it.
+    if explorer.enabled && explorer.stuck(state.frame, state.tps) {
+        if let Some(escape) = keycode_from_canonical("Escape") {
+            if !hold_state.is_held(escape) {
+                choices
+                    .0
+                    .below_kind(state.frame, 1, crate::choice::ChoiceKind::Key);
+                choices.0.label_last("Escape".to_string());
+                keyboard.key_event(escape, ButtonState::Pressed, primary_window.single().ok());
+                state.metrics.input_count += 1;
+                hold_state.press(escape, state.frame + CHAOS_HOLD_MIN_FRAMES);
+                explorer.backed_out(state.frame);
+                return;
+            }
+        }
+    }
+    // Explore mode: draw among the least-tried keys on this screen
+    // (uniform draw over the tied set, recorded like any key draw).
+    let pool: Vec<usize> = if explorer.enabled {
+        explorer.offer_keys(&candidates);
+        explorer.least_tried("key", &candidates)
+    } else {
+        (0..candidates.len()).collect()
+    };
+    let idx = pool[choices.0.below_kind(
         state.frame,
-        candidates.len() as u64,
+        pool.len() as u64,
         crate::choice::ChoiceKind::Key,
-    ) as usize;
+    ) as usize];
+    if explorer.enabled {
+        explorer.record("key", candidates[idx]);
+    }
     // Resolve the index NOW and label the draw this frame: `value`
     // indexes the unheld-candidate list at draw time, which the report
     // does not contain — the label is what lets the action log name a
@@ -711,6 +742,8 @@ pub(crate) struct UiClickTargets {
     /// deterministically ordered (entity index — `enumerate_ui`'s
     /// order).
     pub(crate) centers: Vec<Vec2>,
+    /// Name and disabled flag of each center, same order (explorer).
+    pub(crate) ids: Vec<(String, bool)>,
 }
 
 /// Chaos mouse bot: on input-rate ticks, picks a random surface button,
@@ -743,6 +776,7 @@ fn chaos_mouse_system(
     mut hold_state: ResMut<MouseHoldState>,
     mut cursor: ResMut<CursorInputResource>,
     ui_targets: Res<UiClickTargets>,
+    mut explorer: ResMut<crate::explorer::Explorer>,
     // Entity only: the Window itself is read through `writers.primary`
     // (a second `&Window` query would conflict with its `&mut Window`).
     primary_window: Query<Entity, With<bevy_window::PrimaryWindow>>,
@@ -844,7 +878,32 @@ fn chaos_mouse_system(
     let extent = window
         .map(|(_, size, _)| size)
         .unwrap_or(Vec2::splat(HEADLESS_CLICK_EXTENT));
-    let pos = if pos_draw % 2 == 1 && !ui_targets.centers.is_empty() {
+    // Explore mode: 3 of 4 clicks go to the least-tried ENABLED widget
+    // on this screen (tie broken by the draw's upper bits), 1 of 4 keep
+    // the random position so undeclared regions are still probed.
+    let explore_target = if explorer.enabled && !pos_draw.is_multiple_of(4) {
+        let enabled: Vec<usize> = (0..ui_targets.centers.len())
+            .filter(|&i| ui_targets.ids.get(i).is_some_and(|(_, disabled)| !disabled))
+            .collect();
+        let names: Vec<&str> = enabled
+            .iter()
+            .map(|&i| ui_targets.ids[i].0.as_str())
+            .collect();
+        if names.is_empty() {
+            None
+        } else {
+            let tied = explorer.least_tried("click", &names);
+            let pick = tied[((pos_draw >> 2) as usize) % tied.len()];
+            explorer.record("click", names[pick]);
+            Some(ui_targets.centers[enabled[pick]])
+        }
+    } else {
+        None
+    };
+    let pos = if let Some(center_physical) = explore_target {
+        let scale = window.map(|(_, _, scale)| scale).unwrap_or(1.0);
+        center_physical / scale
+    } else if !explorer.enabled && pos_draw % 2 == 1 && !ui_targets.centers.is_empty() {
         // Select the widget by the remaining bits, deterministically:
         // the list is entity-index-ordered (see UiClickTargets).
         let index = ((pos_draw >> 1) as usize) % ui_targets.centers.len();
@@ -1607,6 +1666,9 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     // driver loop after the first update; empty until then, which
     // routes every click through the legacy targeting path.
     app.insert_resource(UiClickTargets::default());
+    app.insert_resource(crate::explorer::Explorer::new(
+        scenario.bot.explore && scenario.bot.bot_type == BotType::Chaos,
+    ));
 
     app.insert_resource(crate::invariant_eval::ScenarioInvariants(
         scenario.invariants.clone(),
@@ -1768,7 +1830,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             sinks::assert_log_bridge_level();
             sinks::set_current_frame(i);
             app.update();
-            state_trace.borrow_mut().after_frame(app.world(), i);
+            let ran_states = state_trace.borrow_mut().after_frame(app.world(), i);
             // Detection half of the defense: a level still lowered
             // after app.update() means a game system re-blinds every
             // tick — repaired next tick, but each tick's tail was
@@ -1804,8 +1866,24 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
                     ui_surface_tracker.observe(world, i, ui_recapture_interval, &mut targets_taken);
                     targets_taken
                 };
+                let ids = ui_surface_tracker.target_ids();
                 if let Some(mut res) = app.world_mut().get_resource_mut::<UiClickTargets>() {
                     res.centers = filled;
+                    res.ids = ids;
+                }
+            }
+            // Explorer novelty for this frame: state schedules that ran,
+            // and the current screen (enabled click targets).
+            {
+                let world = app.world_mut();
+                let targets = world
+                    .get_resource::<UiClickTargets>()
+                    .map(|t| t.ids.clone())
+                    .unwrap_or_default();
+                if let Some(mut explorer) = world.get_resource_mut::<crate::explorer::Explorer>() {
+                    if explorer.enabled {
+                        explorer.observe(i, &ran_states, &targets);
+                    }
                 }
             }
             // Guaranteed end-of-frame recording (see comment above): after
@@ -2373,6 +2451,11 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         lw_reconciled,
         state_trace: Some(state_trace.into_inner().into_result()),
         randomness: None,
+        exploration: app
+            .world()
+            .get_resource::<crate::explorer::Explorer>()
+            .filter(|e| e.enabled)
+            .map(|e| e.summary()),
         capability_census: Some(capability_census),
         #[cfg(feature = "ui-surface")]
         ui_surface: ui_surface_tracker.into_result(),

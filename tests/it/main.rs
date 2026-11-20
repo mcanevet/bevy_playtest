@@ -27,6 +27,7 @@ mod battery;
 mod census;
 mod component_check;
 mod driver_smoke;
+mod explorer;
 mod fault_injection;
 mod frozen_world_detail;
 mod input_delivery;

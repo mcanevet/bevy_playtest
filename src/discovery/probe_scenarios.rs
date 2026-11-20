@@ -797,6 +797,7 @@ impl ProbePlan {
                 mouse_clicks: vec![],
                 mouse_motion: vec![],
                 raw_surface: None,
+                explore: false,
             },
             tps: self.tps,
             simulated_time: true,
