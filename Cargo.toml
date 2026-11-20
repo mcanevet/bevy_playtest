@@ -420,3 +420,14 @@ debug = "line-tables-only"
 
 [profile.test]
 debug = "line-tables-only"
+
+# No debuginfo for DEPENDENCIES (Bevy, wgpu, ...). Measured: a test
+# binary was 409 MB of which only 40 MB was code; ~85% was Bevy's
+# debug sections. Our own crate keeps line tables (the settings
+# above), so backtraces through bevy_playtest still have line numbers.
+# Smaller binaries = faster links, smaller target/ and CI cache.
+[profile.dev.package."*"]
+debug = false
+
+[profile.test.package."*"]
+debug = false
