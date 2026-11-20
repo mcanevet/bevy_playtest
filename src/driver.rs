@@ -612,7 +612,9 @@ impl BotMouseWriters<'_, '_> {
         // this (`Window::physical_cursor_position`) to compute
         // `Interaction`, so without it no `Interaction`-driven button
         // (bevy_ui `Button`, common despite the 0.20 deprecation) could
-        // ever be hovered or pressed under the takeover.
+        // ever be hovered or pressed under the takeover. This marks the
+        // Window `Changed` on every move, exactly as winit does (it sets
+        // the position through `&mut Window` on each real cursor move).
         if let Ok(mut window) = self.primary.single_mut() {
             window.set_cursor_position(Some(pos));
         }
