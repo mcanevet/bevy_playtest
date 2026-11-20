@@ -1,0 +1,69 @@
+{
+  "fixture": "contributors",
+  "frames": 5000,
+  "seeds": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "runs": [
+    {
+      "seed": 1,
+      "status": "Fail",
+      "wall_s": 51.4,
+      "violation_rules": [
+        "progress_surface_empty"
+      ],
+      "error": null
+    },
+    {
+      "seed": 2,
+      "status": "Fail",
+      "wall_s": 51.7,
+      "violation_rules": [
+        "progress_surface_empty"
+      ],
+      "error": null
+    },
+    {
+      "seed": 3,
+      "status": "Fail",
+      "wall_s": 51.1,
+      "violation_rules": [
+        "progress_surface_empty"
+      ],
+      "error": null
+    },
+    {
+      "seed": 4,
+      "status": "Fail",
+      "wall_s": 59.4,
+      "violation_rules": [
+        "progress_surface_empty"
+      ],
+      "error": null
+    },
+    {
+      "seed": 5,
+      "status": "Fail",
+      "wall_s": 54.1,
+      "violation_rules": [
+        "progress_surface_empty"
+      ],
+      "error": null
+    }
+  ],
+  "targets": [
+    {
+      "id": "C1",
+      "description": "Report 'no input consumed, nothing to explore' and saturate quickly",
+      "hits": null,
+      "runs": 5,
+      "median_frame": null,
+      "unmeasurable_reason": "phase 1: needs the explorer's own report"
+    }
+  ],
+  "note": "Baseline: chaos bot before phase 1 (commit 6995762), measured locally; traces omitted. Re-measure with bevy_playtest_eval."
+}

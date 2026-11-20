@@ -11,7 +11,7 @@
     },
     {
       "id": "A2",
-      "description": "Reach game over",
+      "description": "Reach game over (PASSIVE: missed bonuses end the game without input; regression check)",
       "check": {
         "entered": [
           "OnEnter(GameOver)"
@@ -20,7 +20,7 @@
     },
     {
       "id": "A3",
-      "description": "Restart after game over (Playing entered again)",
+      "description": "Restart after game over with Space (Playing entered again)",
       "check": {
         "entered_times": {
           "label": "OnEnter(Playing)",

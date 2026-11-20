@@ -13,14 +13,17 @@
     },
     {
       "id": "M2",
-      "description": "Reveal at least 10 tiles",
+      "description": "Reveal ~10 tiles: Game written >= 11 times (1 new-game click + 10 tile reveals; extra new-game clicks also count)",
       "check": {
-        "unmeasurable": "tile state lives in components; component-change tracing is not in phase 0"
+        "resource_changed_times": {
+          "resource": "Game",
+          "at_least": 11
+        }
       }
     },
     {
       "id": "M3",
-      "description": "Change the game resource during play (reveal/flag/game over)",
+      "description": "Reveal at least one tile (Game written again after the new-game click)",
       "check": {
         "resource_changed_times": {
           "resource": "Game",
