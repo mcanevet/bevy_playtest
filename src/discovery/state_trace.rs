@@ -89,6 +89,14 @@ pub struct StateTraceRecorder {
     resources: BTreeMap<String, ResourceChange>,
     last_tick: Tick,
     names_masked: bool,
+    /// Last frame each non-engine resource changed (by id, so masked
+    /// names still count).
+    last_change: BTreeMap<bevy_ecs::component::ComponentId, u64>,
+    /// Whether a state schedule ran during the last recorded frame.
+    ran_this_frame: bool,
+    /// Game resources changed during the last recorded frame, each with
+    /// the frame it had changed before (None: first change).
+    changed_this_frame: Vec<Option<u64>>,
 }
 
 impl StateTraceRecorder {
@@ -124,6 +132,9 @@ impl StateTraceRecorder {
             resources: BTreeMap::new(),
             last_tick,
             names_masked: false,
+            last_change: BTreeMap::new(),
+            ran_this_frame: false,
+            changed_this_frame: Vec::new(),
         }
     }
 
@@ -142,11 +153,15 @@ impl StateTraceRecorder {
         }));
 
         let now = world.read_change_tick();
+        self.ran_this_frame = !ran.is_empty();
+        self.changed_this_frame.clear();
         if frame > 0 {
             for (id, info, _) in world.iter_resources() {
                 let name = info.name().to_string();
                 if name.starts_with('<') {
                     // DebugName placeholder: bevy's `debug` feature is off.
+                    // Engine, harness and game resources look alike then,
+                    // so none of them counts as a reaction either.
                     self.names_masked = true;
                     continue;
                 }
@@ -159,6 +174,8 @@ impl StateTraceRecorder {
                 if !ticks.is_changed(self.last_tick, now) {
                     continue;
                 }
+                let previous = self.last_change.insert(id, frame);
+                self.changed_this_frame.push(previous);
                 self.resources
                     .entry(name.clone())
                     .and_modify(|r| {
@@ -179,6 +196,22 @@ impl StateTraceRecorder {
         }
         self.last_tick = now;
         ran
+    }
+
+    /// Whether the last recorded frame shows the game reacting to an
+    /// input made at frame `press`: a state schedule ran, or a game
+    /// resource changed that had been quiet for `quiet` frames before
+    /// the press. That filters out resources written every few frames;
+    /// a timer firing less often can still coincide with a press, which
+    /// is why learning needs two credits. Resources only count when their names are readable
+    /// (bevy `debug` feature): masked names cannot be told apart from
+    /// the engine's and the harness's own.
+    pub fn reacted_after(&self, press: u64, quiet: u64) -> bool {
+        self.ran_this_frame
+            || self
+                .changed_this_frame
+                .iter()
+                .any(|previous| previous.is_none_or(|p| p + quiet < press))
     }
 
     /// Finish the trace.
