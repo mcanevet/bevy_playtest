@@ -47,8 +47,9 @@ because it never had such a yardstick.)
 ## Baseline (today's chaos bot)
 
 Measured by the `Exploration evaluation` workflow on GitHub runners
-(run 44752095130, commit `0722110`; 5,000 frames × 5 seeds, all 45 runs
-completed); results in
+(run 44776521936, commit `85ed12e`: after the cursor fix and
+deterministic randomness, explore mode off; 5,000 frames × 5 seeds, all
+45 runs completed); results in
 `eval/baseline/*.json` (raw traces omitted). Compare explorer runs
 against it on the same kind of machine: see "Determinism" below.
 
@@ -59,24 +60,24 @@ against it on the same kind of machine: see "Determinism" below.
 | | G3 start the game | 5/5 | 259 |
 | | G4 every screen in one run | 3/5 | 3,115 |
 | mines | M1 start a game | 5/5 | 489 |
-| | M2 reveal ~10 tiles | 3/5 | 1,581 |
+| | M2 reveal ~10 tiles | 3/5 | 3,459 |
 | | M3 reveal a tile | 5/5 | 495 |
-| | M4 back to the menu after playing | 2/5 | 4,521 |
+| | M4 back to the menu after playing | 4/5 | 2,979 |
 | | M5 start three games | 0/5 | — |
 | thetawave | T0 main menu (passive) | 5/5 | 7 |
-| | T1 character selection | 0/5 | — |
-| | T2 in game (stretch) | 0/5 | — |
+| | T1 character selection | 5/5 | 1,017 |
+| | T2 in game (stretch) | 5/5 | 2,052 |
 | | T3 Victory (expected never) | 0/5 | — |
-| loading_screen | L1 load levels (passive) | 5/5 | 144 |
+| loading_screen | L1 load levels (passive) | 5/5 | 114 |
 | alien_cake_addict | A2 game over (passive) | 5/5 | 901 |
 | | A3 restart with Space | 5/5 | 920 |
 | breakout | B1 score (passive) | 5/5 | 112 |
 
 Passive targets are reached without meaningful input (a timer, the
 ball, or the source scan already aiming the bot); they are regression
-checks, not exploration goals. On every run thetawave's trace shows the
-bot never leaving the main menu: `CharacterSelection`, `InitializeRun`,
-`Game`, `GameOver`, `Paused` and `Victory` are all never entered.
+checks, not exploration goals. Before the cursor fix the random bot never
+left thetawave's main menu; it now reaches the game on every seed, so T1
+and T2 move to the speed criterion.
 
 ## Success criteria for the explorer (phase 1)
 
@@ -89,7 +90,7 @@ Two measures per target, both compared against the committed baseline
   not required); no target may be reached less often, passive ones
   included.
 - **Speed:** on every target the baseline already reaches on ≥ 4/5
-  seeds (G2, G3, M1, M3), the median frame of first reach must be at
+  seeds (G2, G3, M1, M3, M4, T1, T2), the median frame of first reach must be at
   most **half** the baseline's. Random input already clears much of a
   simple menu given enough frames, so reach alone is too low a bar;
   frames not spent wandering menus are frames spent deeper in the game.
