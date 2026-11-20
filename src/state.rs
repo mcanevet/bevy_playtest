@@ -21,8 +21,8 @@ pub struct ViolationEntry {
     /// Detail at the most recent occurrence (trend/debug).
     pub last_detail: String,
     /// Structured annotation (serialized as `_meta`), present when
-    /// discovery ran and has context for this finding (e.g.
-    /// frozen-world probe statistics). Sits NEXT TO the verbatim
+    /// the oracle has machine-readable evidence for this finding (e.g.
+    /// frozen-world `stepping`). Sits NEXT TO the verbatim
     /// `detail` — never inside it — so consumers parsing details as
     /// raw text are unaffected.
     #[serde(rename = "_meta", skip_serializing_if = "Option::is_none", default)]
@@ -142,62 +142,24 @@ pub struct PlaytestReport {
     /// In-process and takeover runs alike stamp the reporting
     /// process's own `cfg!(debug_assertions)` — the report-writing
     /// code lives in the game's binary in both modes, so this is
-    /// the game's profile, not the harness library's. Discovery
-    /// promotes it to `DiscoveredSurface.build_profile` (cfg-gated
-    /// keys make dev-profile surfaces strictly larger than release
-    /// ones; comparing surfaces across profiles misleads).
+    /// the game's profile, not the harness library's (cfg-gated
+    /// code makes dev-profile behavior differ from release).
     /// Additive, default `None` (absent on stubs and pre-field
     /// reports).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub game_build_profile: Option<crate::discovery::surface::BuildProfile>,
-    /// Discovered input surface (present only when discovery ran for
-    /// this report). Structured data for renderers and dashboards;
-    /// kept separate from violation details, which consumers parse
-    /// as raw text.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub discovered_surface: Option<crate::discovery::surface::DiscoveredSurface>,
-    /// Keys the battery parent injected into the run's chaos bot
-    /// `raw_surface` (present only when discovery-driven injection
-    /// happened: `BEVY_PLAYTEST_DISCOVER_INJECT=1` on a battery run
-    /// whose scenario declared no surface of its own). The
-    /// probe-verified keys UNIONED with source-scan extras, poison
-    /// keys withheld (a probe-VERIFIED Escape/Tab never reaches the
-    /// blind bot; the withholding is reported in
-    /// [`Self::source_derived_notes`]). Honesty field: the child ran
-    /// an injected scenario file, and the report must say so rather
-    /// than let `scenario_source: "file"` imply an authored one.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub injected_surface_keys: Option<Vec<String>>,
-    /// Source-derived chaos keys the parent put into this run's
-    /// surface via the source scan (`BEVY_PLAYTEST_SOURCE_ROOT`, or
-    /// the game crate's runtime `CARGO_MANIFEST_DIR`). For a default
-    /// battery run this is the scan-derived surface that REPLACED
-    /// the WASD/arrows default: the scan's full poison-filtered
-    /// unique-key set, present only when a scan applied AND found
-    /// at least one usable key — a scan that is empty, failed, or
-    /// backbone-equal leaves the declared default surface untouched
-    /// and the field `None`. For
-    /// an INJECTED run it is exactly the scan keys unioned into the
-    /// probe-verified surface (the full bot surface lives in
-    /// [`Self::injected_surface_keys`]; the two channels stay
-    /// distinct so provenance is never coalesced). `None` means "no
-    /// scan keys entered the run's surface" rather than "scan found
-    /// nothing". Honesty field mirroring
-    /// [`Self::injected_surface_keys`]: lets a consumer distinguish
-    /// "the default surface" from "the scan-aimed surface" — the
-    /// out-of-the-box surface-concentration tier (discovery stays
-    /// the verification layer on top).
+    /// Source-derived chaos keys the battery parent put into this
+    /// run's surface via the source scan (`BEVY_PLAYTEST_SOURCE_ROOT`,
+    /// or the game crate's runtime `CARGO_MANIFEST_DIR`): the scan's
+    /// poison-filtered unique-key set that REPLACED the WASD/arrows
+    /// default. `None` means no replacement happened (no scan, a
+    /// failed or empty scan, or a backbone-equal scan), not "the scan
+    /// found nothing".
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub source_derived_keys: Option<Vec<String>>,
-    /// Provenance notes from the parent's source scan (why the
-    /// layered surface looks like it does: poison filtering, cap
-    /// drops, unreadable files, unsupported variants). Present
-    /// exactly when [`Self::source_derived_keys`] is for a DEFAULT
-    /// run; an INJECTED run may carry notes alone (withheld
-    /// probe-verified poison keys, a scan that ran but added
-    /// nothing) — refusal over silence: every filtering decision
-    /// the parent made when aiming the bot is reported rather than
-    /// dropped.
+    /// Provenance notes from the parent's source scan (poison
+    /// filtering, cap drops, unreadable files, unsupported variants).
+    /// Present exactly when [`Self::source_derived_keys`] is.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub source_derived_notes: Option<Vec<String>>,
     /// Leafwing declared bindings read from the game's `InputMap`s
@@ -214,6 +176,14 @@ pub struct PlaytestReport {
     #[cfg(feature = "lw-reader")]
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub lw_tap_stats: Vec<crate::discovery::lw::LwTapStats>,
+    /// Leafwing reconcile of [`Self::lw_declared`] against
+    /// [`Self::lw_tap_stats`] (`lw-reader` feature): declared entries
+    /// graded `Declared` / `ManagerPipelineOk`, plus `declared_but_dead`
+    /// alarms for proven-dead wiring and `context_unverified` notes.
+    /// `None` when the game has no Leafwing state or the feature is off.
+    #[cfg(feature = "lw-reader")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub lw_reconciled: Option<crate::discovery::lw::ReconciledLw>,
     /// Load-time capability census rows captured during
     /// `run_scenario` startup, before bot/oracle registration
     /// (present whenever
@@ -291,14 +261,14 @@ impl PlaytestReport {
             game_build_profile: None,
             state_digest: vec![],
             progress_samples: vec![],
-            discovered_surface: None,
-            injected_surface_keys: None,
             source_derived_keys: None,
             source_derived_notes: None,
             #[cfg(feature = "lw-reader")]
             lw_declared: vec![],
             #[cfg(feature = "lw-reader")]
             lw_tap_stats: vec![],
+            #[cfg(feature = "lw-reader")]
+            lw_reconciled: None,
             // Crash stub: the run never reached the census attach
             // point, so no census exists.
             capability_census: None,
@@ -312,50 +282,6 @@ impl PlaytestReport {
             render_liveness: None,
             #[cfg(feature = "screen-liveness")]
             screen_liveness: None,
-        }
-    }
-
-    /// Attach discovery context (`_meta`) to this report's
-    /// `frozen_world` findings, using the report's own
-    /// `discovered_surface`. Idempotent and a no-op when no surface
-    /// is attached — the annotation must never invent data.
-    ///
-    /// MERGES, never overwrites: fields already present (e.g. the
-    /// frozen_world oracle's `stepping` evidence, set when the run
-    /// recorded a state digest) are kept; only absent probe-stat
-    /// fields are filled. This keeps the oracle's evidence and the
-    /// discovery stats side by side in one `_meta` block.
-    ///
-    /// Called by the battery after discovery ran (Phase 7 wires the
-    /// flow; the annotation is report-local so cache-loaded surfaces
-    /// work identically to freshly-probed ones).
-    pub fn annotate_frozen_world_with_surface(&mut self) {
-        let Some(surface) = &self.discovered_surface else {
-            return;
-        };
-        let meta = surface.frozen_world_meta();
-        for v in &mut self.violations {
-            if v.rule != "frozen_world" {
-                continue;
-            }
-            let Some(existing) = v.meta.as_mut() else {
-                v.meta = Some(meta.clone());
-                continue;
-            };
-            // Merge: fill only the fields the oracle's evidence left
-            // absent, so nothing already reported is overwritten.
-            if existing.probed_keys_effective.is_none() {
-                existing.probed_keys_effective = meta.probed_keys_effective;
-            }
-            if existing.probed_keys_total.is_none() {
-                existing.probed_keys_total = meta.probed_keys_total;
-            }
-            if existing.pruned_devices.is_none() {
-                existing.pruned_devices = meta.pruned_devices.clone();
-            }
-            if existing.note.is_none() {
-                existing.note = meta.note.clone();
-            }
         }
     }
 

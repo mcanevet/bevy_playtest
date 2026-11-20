@@ -21,11 +21,8 @@ layers must write `Transform`/UI every frame to be observable), because
 a "soft-lock?" there sends you hunting for a deadlock that does not
 exist. The machine-readable verdict rides in `_meta.stepping`
 (`true`/`false`); without a recorded digest the detail keeps the
-legacy "soft-lock?" wording and `_meta` carries no `stepping` value
-(the oracle attaches no `_meta` at all — though a discovery-annotated
-report may still show `"stepping": null`, the key present with a null
-value, when the battery's annotation added its own `_meta` block) —
-the oracle cannot know, and says so honestly.
+legacy "soft-lock?" wording and the oracle attaches no `_meta` at
+all — the oracle cannot know, and says so honestly.
 
 A flat digest does NOT rewrite the detail: the digest sees Transforms,
 UI transforms, spawns/despawns and reflected resources, but is blind to

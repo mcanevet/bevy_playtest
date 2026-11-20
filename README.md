@@ -172,49 +172,22 @@ game's actual `MenuAction` bindings, and driven actions grading
 `manager_pipeline_ok` — the reference point for what the declared
 tier observes on a production-shaped game.
 
-## Discovering the input surface
+## Aiming the bot at the game's real input surface
 
-Declared-nothing cuts both ways: sometimes you want to know what the
-game actually consumes. Set `BEVY_PLAYTEST_DISCOVER=1` when running
-the battery and the harness probes a candidate key set itself — a
-pool of subprocess runs taps each key once and diffs the resulting
-state-digest traces against control runs. The report then carries a
-`discovered_surface` (effective keys, probed-but-inert keys, per-key
-and whole-surface confidence, plus a bounded grid of mouse click
-positions — `mouse_cells` — reporting where a click moves the game,
-probed the same differential way against a click-only control, and
-two whole-surface probes — mouse motion and a single scripted
-`Tab` focus walk — each answering its own "does this input class
-matter at all" question), and
-frozen-world findings gain a
-`_meta` block with the probe statistics ("probed 30 keys, 1
-effective"). The first run costs ~56s (the default matrix adds a
-20-cell mouse grid); the result is cached in
-`.bevy_playtest/cache/` and reused until the binary, harness, or
-scenario changes (the cache key covers the game binary hash, the
-harness version, the active features, the fixture/scenario identity,
-and the probe plan). See [discover your input
-surface](docs/how-to/how-to-discover-your-input-surface.md).
-
-For an authoring-time standing artifact instead of a battery-run
-annotation, the `bevy_playtest_discover` CLI writes
-`surface.draft.json` in one command — live entries (each flagged
-`discoveredButUndeclared`), pinned inert entries
-(`probe_run_inert`: probed and ruled out at boot), the coverage
-counts, and the named limitation classes the method cannot see
-(chords, debounces, context gating). The draft is deterministic
-(no timestamps; two sweeps are byte-identical) and wears
-`"draft": true` — a curation input, not a contract. See
-[draft your input surface](docs/how-to/discover-input-surface.md).
-
-Games using Leafwing Input Manager get a declared tier on top: with
-the `lw-reader` feature the harness reads `InputMap` bindings by
-pure reflection (RON-loaded maps included), taps wiring liveness
-during the run, and reconciles the two — the result rides the
-surface and the `surface.draft.json` artifact as an additive `lw`
-section, declared-but-dead wiring alarms, everything honest stays a
-note. See [declare your actions with Leafwing Input
-Manager](docs/how-to/declare-actions-leafwing.md).
+With no flags at all, the battery parent runs a milliseconds-cost
+source scan: it collects every `KeyCode::` variant the game's own
+sources mention and — when it finds any — REPLACES the default
+WASD+arrows chaos surface with that scan-derived key set (poison
+keys like `Escape`/`Tab` filtered, capped, all decisions
+reported), concentrating the chaos presses on keys the game
+actually reads. A game whose bindings sit outside WASD+arrows
+therefore plays correctly out of the box; the scan-aimed run
+records `source_derived_keys` and `source_derived_notes` on its
+report. An empty or failed scan keeps the WASD+arrows fallback.
+`BEVY_PLAYTEST_SOURCE_SCAN_DISABLE=1` restores the blind default,
+and `BEVY_PLAYTEST_SOURCE_ROOT` points the scan at a non-standard
+source root. An authored scenario file always wins (declaration
+beats inference).
 
 Games with menus get a UI tier too: with the `ui-surface` feature
 the harness enumerates the declared UI/interactable surface
@@ -230,43 +203,14 @@ clicks target the widget centers from the latest recapture
 most one recapture interval, ~0.5s), half keep sweeping the whole
 window (undeclared regions stay probed).
 
-With no flags at all, the battery parent runs a milliseconds-cost
-source scan: it collects every `KeyCode::` variant the game's own
-sources mention and — when it finds any — REPLACES the default
-WASD+arrows chaos surface with that scan-derived key set (poison
-keys like `Escape`/`Tab` filtered, capped, all decisions
-reported), concentrating the chaos presses on keys the game
-actually reads. A game whose bindings sit outside WASD+arrows
-therefore plays correctly out of the box — the scan-aimed run
-records `source_derived_keys` on its report, and the frozen-bot
-false positive the injection flag existed to fix no longer
-happens by default. An empty or failed scan keeps the
-WASD+arrows fallback.
-`BEVY_PLAYTEST_SOURCE_SCAN_DISABLE=1` restores the blind
-default, and `BEVY_PLAYTEST_SOURCE_ROOT` points the scan at a
-non-standard source root. See [input-surface
-discovery](docs/explanation/input-surface-discovery.md).
-
-Discovery can also aim the battery itself: with
-`BEVY_PLAYTEST_DISCOVER_INJECT=1` the parent discovers the surface
-first and — when the scenario declares no key surface of its own
-(the zero-config battery run) — drives the game with an injected
-scenario whose chaos bot samples the discovered effective keys
-unioned with the source-scan candidates, so enabling injection
-never loses a scan-derived key (when the source scan applies).
-The sampled surface is recorded as `injected_surface_keys` on the
-report; any scan-contributed keys are stamped separately on
-`source_derived_keys` with notes explaining every filtering
-decision (withheld poison keys, cap drops, a scan that ran but
-added nothing). An
-authored scenario file always wins (declaration beats inference),
-and the injected surface keeps the scan in its UNION role — the
-probe-verified evidence leads; the scan fills the probe prior's
-gaps (a key mentioned in code but never probed still reaches the
-bot). Injection is the escalation path when the scan's candidates
-are wrong or insufficient: keys mentioned in
-code but inert in practice, or pointer-only surfaces a keyboard
-scan cannot see.
+Games using Leafwing Input Manager get a declared tier: with the
+`lw-reader` feature the harness reads `InputMap` bindings by pure
+reflection (RON-loaded maps included), taps wiring liveness during
+the run, and reconciles the two on every run — the report carries
+`lw_declared`, `lw_tap_stats` and `lw_reconciled`, where
+declared-but-dead wiring raises a `declared_but_dead` finding and
+everything unproven stays a note. See [declare your actions with
+Leafwing Input Manager](docs/how-to/declare-actions-leafwing.md).
 
 ## How in-process takeover works
 

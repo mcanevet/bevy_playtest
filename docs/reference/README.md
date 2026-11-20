@@ -390,9 +390,8 @@ Report helpers on `PlaytestReport`:
   (rule, target) pairs
 - `has_violation(rule, target) -> bool`
 
-Discovery-annotated reports also carry `discovered_surface` (and, on
-injection runs, `injected_surface_keys`); the discovery IR that
-fills them is specified in
+Reports from `lw-reader` builds also carry `lw_reconciled`, whose
+entries and findings use the IR specified in
 [the SurfaceEntry schema page](surface-entry-schema.md).
 
 ## Entry points
@@ -482,13 +481,13 @@ The takeover runner exits the game process with:
 
 [`fixtures/known_answer/`](known-answer-fixture.md) — the planted-truth
 fixture: hand-authored input surface, committed ground truth, and the
-measurement/mutation harnesses that grade discovery against it.
+measurement/mutation harnesses that grade the declared tier against it.
 
 ## Thetawave fixture
 
 [`fixtures/thetawave/`](thetawave-fixture.md) — the real-world fixture:
-a ported third-party game (Theta Wave, MIT) proving the declared-tier
-discovery machinery against actual Leafwing usage, with an honest
+a ported third-party game (Theta Wave, MIT) proving the declared
+tier against actual Leafwing usage, with an honest
 NOTICE covering attribution and stand-in assets.
 
 ## Deterministic boot

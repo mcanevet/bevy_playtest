@@ -7,51 +7,21 @@
 //! surface is `Digit1`/`Digit2` level selection, which the blind
 //! chaos-bot key set (WASD+arrows) never presses — undecorated and
 //! undiscovered, every battery run pins a `frozen_world` finding at
-//! frame ~521, a false verdict about the GAME. Two tests pin the two
-//! tiers that fix this, in precedence order:
+//! frame ~521, a false verdict about the GAME.
 //!
-//! - `playtest_battery`: ZERO flags. The battery parent's source scan
-//!   (milliseconds; this test binary's runtime `CARGO_MANIFEST_DIR`
-//!   IS the fixture crate, so the scan walks this game's `src/`)
-//!   finds `KeyCode::Digit1`/`Digit2` and REPLACES the WASD/arrows
-//!   default with them — the ~200 chaos presses concentrate on the
-//!   keys this game actually reads, and the input-layer verdicts go
-//!   clean out of the box (the progress-surface verdict is pinned
-//!   separately, see below).
-//! - `playtest_battery_injected`: `BEVY_PLAYTEST_DISCOVER_INJECT=1`
-//!   (implies discovery). The parent probes the input surface first
-//!   (cache-first; the cache lives in `.bevy_playtest/cache/`,
-//!   gitignored) and feeds the verified keys to the chaos bot. Kept
-//!   for the cases the scan cannot solve: keys whose mention is
-//!   guarded away (inert in practice) and pointer-only surfaces a
-//!   text scan cannot see at all.
+//! `playtest_battery` runs with ZERO flags: the battery parent's
+//! source scan (milliseconds; this test binary's runtime
+//! `CARGO_MANIFEST_DIR` IS the fixture crate, so the scan walks this
+//! game's `src/`) finds `KeyCode::Digit1`/`Digit2` and REPLACES the
+//! WASD/arrows default with them — the ~200 chaos presses concentrate
+//! on the keys this game actually reads, and the input-layer verdicts
+//! go clean out of the box (the progress-surface verdict is pinned
+//! separately, see below).
 //!
 //! `--test-threads=1` is mandatory for the fixture battery
-//! (`run_scenario` is exclusive per process); `set_var` below relies
-//! on it to be race-free.
+//! (`run_scenario` is exclusive per process).
 #[cfg(feature = "playtest")]
 mod playtests {
-    /// Restore/remove `BEVY_PLAYTEST_DISCOVER_INJECT` on drop so the
-    /// injected test cannot contaminate the zero-config one (same
-    /// test binary, sequential execution).
-    struct InjectVarGuard;
-    impl InjectVarGuard {
-        fn set() -> Self {
-            // Parent-side discovery opt-in (implies
-            // `BEVY_PLAYTEST_DISCOVER`; the game child never sees it
-            // — the battery strips every `BEVY_PLAYTEST_*` variable
-            // from spawned children). Edition 2024: set_var is
-            // unsafe; `--test-threads=1` makes it race-free.
-            unsafe { std::env::set_var("BEVY_PLAYTEST_DISCOVER_INJECT", "1") };
-            InjectVarGuard
-        }
-    }
-    impl Drop for InjectVarGuard {
-        fn drop(&mut self) {
-            unsafe { std::env::remove_var("BEVY_PLAYTEST_DISCOVER_INJECT") };
-        }
-    }
-
     #[test]
     fn playtest_battery() {
         // ZERO config: no env vars, no scenario file. If this test
@@ -85,23 +55,6 @@ mod playtests {
             "the scan-derived surface must be exactly the game's bound keys"
         );
     }
-
-    #[test]
-    fn playtest_battery_injected() {
-        let _inject = InjectVarGuard::set();
-        // Same golden verdict as the zero-config run (see there);
-        // the discovery layer changes the key surface, not the
-        // progress surface.
-        bevy_playtest::battery::run_and_expect_findings(
-            env!("CARGO_BIN_EXE_fixture_loading_screen"),
-            bevy_playtest::battery::BUILTIN_BATTERY,
-            &[(
-                "progress_surface_empty",
-                "run",
-                "no verifiable progress surface",
-            )],
-        );
-    }
 }
 
 // `cargo package` strips `[dev-dependencies]`, so the self-dev-dependency
@@ -112,8 +65,3 @@ mod playtests {
 #[test]
 #[ignore = "playtest feature inactive: self-dev-dependency stripped (e.g. cargo package). Run `cargo test --features playtest`."]
 fn playtest_battery() {}
-
-#[cfg(not(feature = "playtest"))]
-#[test]
-#[ignore = "playtest feature inactive: self-dev-dependency stripped (e.g. cargo package). Run `cargo test --features playtest`."]
-fn playtest_battery_injected() {}

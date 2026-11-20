@@ -10,11 +10,8 @@
 //! Meaning stays discovery's behavioral job; this layer attaches
 //! zero semantics to any key. That division is the design rule the
 //! adversarial reviews froze: source candidates → runtime
-//! verification is the funnel. The scan's candidates feed TWO
-//! consumers: the default battery's scan-derived surface
-//! (`layered_chaos_keys`) and the DISCOVER_INJECT union
-//! (`scan_extras`, which closes the gap where the probe matrix's
-//! candidate prior cannot see a textually-present key). Emitting
+//! verification is the funnel. The scan's candidates feed the
+//! default battery's scan-derived surface (`layered_chaos_keys`). Emitting
 //! them as schema entries (`Evidence::SourceRef` for
 //! [`crate::discovery::provenance::ProvenanceGrade::SourceCited`])
 //! is the planned next stage of the funnel.
@@ -67,10 +64,6 @@ pub const POISON_KEYS: &[&str] = &["Escape", "Tab"];
 /// Beyond this many keys the per-key depth stops paying for the
 /// breadth. Most-referenced keys win (then alphabetical), and the
 /// drop is recorded as a note.
-///
-/// The inject-union path ([`scan_extras`]) shares this constant as
-/// its cap on EXTRAS beyond the injected surface — frozen P2
-/// semantics, unchanged here.
 pub const MAX_SCAN_KEYS: usize = 24;
 
 /// One `KeyCode::X` mention in the game's sources.
@@ -129,38 +122,9 @@ pub struct LayeredKeys {
     pub notes: Vec<String>,
 }
 
-/// The scan's selection for the INJECT-UNION consumer: the extras
-/// beyond the backbone plus every filtering decision behind them
-/// (refusal over silence). Frozen P2 semantics — the union exists
-/// because the probe matrix's candidate prior cannot see a
-/// textually-present key: the scan fills the prior's gaps, so
-/// enabling inject never loses a SCAN-derived key (when the scan
-/// applies — disabled/empty-root parents keep the probe-only
-/// surface). The default layering builds a DIFFERENT surface (the
-/// full scan-derived replacement) from the same substrate
-/// (the shared `usable_key_freq` substrate), so the two consumers
-/// share what the scan SAW but never what they
-/// SELECT — backbone keys ride in the union's counterpart surface,
-/// extras go into it.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ScanExtras {
-    /// Extras beyond the backbone, poison-filtered and capped at
-    /// [`MAX_SCAN_KEYS`]: most-referenced first, then alphabetical —
-    /// deterministic SELECTION; canonical alphabetical EMIT order.
-    pub keys: Vec<String>,
-    /// Every filtering decision the scan made: unsupported
-    /// variants, unreadable files, poison drops, cap drops. The
-    /// header summary is NOT included (consumers that owe the user
-    /// context prepend their own line — see
-    /// [`layered_chaos_keys`]); a scan with no decisions produces
-    /// empty notes and a consumer may legitimately stay silent.
-    pub notes: Vec<String>,
-}
-
 /// Poison-filtered unique keys with reference counts, in
-/// deterministic alphabetical order — the shared substrate for
-/// BOTH surface consumers, so the default layering and the
-/// inject-union can never disagree about what the scan saw.
+/// deterministic alphabetical order — the substrate the default
+/// layering selects from.
 /// Poison keys are excluded here (their drop is a note, made by
 /// the callers).
 fn usable_key_freq(
@@ -179,11 +143,9 @@ fn usable_key_freq(
     (freq, poisoned)
 }
 
-/// Decision notes shared by both surface consumers: unsupported
-/// variants, unreadable files, poison drops. Cap notes are NOT
-/// here — the two consumers cap DIFFERENT sets (extras beyond the
-/// injected/backbone surface vs the whole scan-derived surface),
-/// so each reports its own cap decision.
+/// Decision notes for the scan: unsupported variants, unreadable
+/// files, poison drops. Cap notes are reported by the caller that
+/// applies the cap.
 fn shared_decision_notes(result: &SourceScanResult, poisoned: &[String]) -> Vec<String> {
     let mut notes = Vec::new();
     if !result.unsupported.is_empty() {
@@ -208,42 +170,6 @@ fn shared_decision_notes(result: &SourceScanResult, poisoned: &[String]) -> Vec<
         ));
     }
     notes
-}
-
-/// Select the scan extras beyond the backbone, poison-filtered and
-/// capped, plus the drop-decision notes. See [`ScanExtras`]. Frozen
-/// P2 inject-union semantics — the default layering's fallback-tier
-/// change does NOT alter what the union adds to an injected surface.
-pub fn scan_extras(result: &SourceScanResult) -> ScanExtras {
-    let (freq, poisoned) = usable_key_freq(result);
-    let mut notes = shared_decision_notes(result, &poisoned);
-
-    let mut extras: Vec<(String, usize)> = freq
-        .into_iter()
-        .filter(|(k, _)| !BACKBONE_KEYS.contains(&k.as_str()))
-        .collect();
-    if extras.len() > MAX_SCAN_KEYS {
-        // Most-referenced first, then alphabetical: deterministic
-        // SELECTION (who survives the cap)...
-        let dropped: Vec<String> = extras.iter().map(|(k, _)| k.clone()).collect();
-        extras.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        extras.truncate(MAX_SCAN_KEYS);
-        // ...and the drop is a reported decision, in the same
-        // alphabetical order the pre-cap list held.
-        let dropped: Vec<String> = dropped
-            .into_iter()
-            .filter(|k| !extras.iter().any(|(kept, _)| kept == k))
-            .collect();
-        notes.push(format!(
-            "capped at {MAX_SCAN_KEYS} scan keys (dropped, least-referenced: {})",
-            dropped.join(", ")
-        ));
-    }
-    // Canonical EMIT order: alphabetical, so layered surfaces and
-    // injected unions stay comparable across runs and tiers.
-    let mut keys: Vec<String> = extras.into_iter().map(|(k, _)| k).collect();
-    keys.sort();
-    ScanExtras { keys, notes }
 }
 
 /// Build the default battery's chaos surface from a source scan —
@@ -275,8 +201,7 @@ pub fn layered_chaos_keys(result: &SourceScanResult) -> LayeredKeys {
         result.hits.len(),
         result.unique_keys().len()
     ));
-    // Shared substrate with the inject-union path (see
-    // [`usable_key_freq`]/[`shared_decision_notes`]): unsupported,
+    // Shared substrate ([`usable_key_freq`]/[`shared_decision_notes`]): unsupported,
     // unreadable, and poison decisions read identically whichever
     // consumer reports them.
     let (freq, poisoned) = usable_key_freq(result);
@@ -311,7 +236,7 @@ pub fn layered_chaos_keys(result: &SourceScanResult) -> LayeredKeys {
         ));
     }
     // Canonical EMIT order: alphabetical, so scan-derived surfaces
-    // and injected unions stay comparable across runs and tiers.
+    // stay comparable across runs.
     let mut keys: Vec<String> = keys.into_iter().map(|(k, _)| k).collect();
     keys.sort();
     notes.push(format!(
@@ -1096,59 +1021,6 @@ mod tests {
             .notes
             .iter()
             .any(|n| n.contains("capped at") && n.contains("total scan-derived keys")));
-    }
-
-    #[test]
-    fn scan_extras_selects_poison_backbone_and_cap_for_the_inject_union() {
-        // `scan_extras` is the INJECT-UNION's selection (frozen P2
-        // semantics): poison dropped, backbone excluded (those ride
-        // in the probe-verified surface or the injected keys), cap
-        // most-referenced-first, emit order alphabetical. The
-        // default layering builds its own surface from the shared
-        // substrate (`usable_key_freq`) — pinning this separately
-        // guards against divergence between the two consumers.
-        let mut r = SourceScanResult::default();
-        for key in ["KeyE", "KeyF", "Space"] {
-            for _ in 0..3 {
-                r.hits.push(SourceScanHit {
-                    key: key.into(),
-                    file: "t.rs".into(),
-                    line: 1,
-                    enclosing: None,
-                });
-            }
-        }
-        // Poison and backbone: present in the scan, absent from extras.
-        for key in ["Escape", "KeyW"] {
-            r.hits.push(SourceScanHit {
-                key: key.into(),
-                file: "t.rs".into(),
-                line: 1,
-                enclosing: None,
-            });
-        }
-        let extras = scan_extras(&r);
-        assert_eq!(
-            extras.keys,
-            vec!["KeyE".to_string(), "KeyF".to_string(), "Space".to_string()]
-        );
-        // Refusal over silence: the poison drop is a reported
-        // decision (the inject path threads these notes into
-        // `source_derived_notes`).
-        assert!(
-            extras
-                .notes
-                .iter()
-                .any(|n| n.contains("poison-filtered") && n.contains("Escape")),
-            "poison drop must be reported: {:?}",
-            extras.notes
-        );
-        // Empty scan: no extras (the inject union degenerates to the
-        // probe surface alone — the probe tier is never REPLACED,
-        // only widened), and no decisions to report.
-        let empty = scan_extras(&SourceScanResult::default());
-        assert!(empty.keys.is_empty());
-        assert!(empty.notes.is_empty());
     }
 
     #[test]

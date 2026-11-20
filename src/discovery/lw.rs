@@ -695,18 +695,37 @@ pub fn aggregate_lw_evidence(reports: &[&crate::state::PlaytestReport]) -> Optio
 ///   a disabled-then-re-enabled action that FIRED (the firing
 ///   overrides the sticky disabled evidence).
 /// - **`ContextUnverified`** finding: declared ∧ tap-ok (wiring
-///   live) ∧ never verified outside the boot context — the honest
-///   coverage grade for context-gated actions; NOT alarm-grade.
+///   live) ∧ liveness evidence exists but never verified this input
+///   — the honest coverage grade for context-gated actions; NOT
+///   alarm-grade. Emitted ONLY when `live_inputs` is `Some`: with no
+///   liveness evidence at all there is nothing to be unverified
+///   against, so the grade would fire on every working binding.
 /// - **Retraction**: draft `DiscoveredButUndeclared` findings on
 ///   inputs the reader declared are duplicated residue — listed in
 ///   `retracted_residue` for the caller to remove.
 ///
-/// `draft_inputs_live`: inputs the sweep measured LIVE (effect
+/// `live_inputs`: inputs independently measured LIVE (effect
 /// signature observed). Chord awareness comes from the declaration
-/// rows themselves (`LwDeclaration::chord`).
+/// rows themselves (`LwDeclaration::chord`). With no liveness
+/// evidence at all, use [`reconcile_without_liveness`].
 pub fn reconcile(
     evidence: &LwRunEvidence,
-    draft_inputs_live: &std::collections::BTreeSet<String>,
+    live_inputs: &std::collections::BTreeSet<String>,
+) -> ReconciledLw {
+    reconcile_impl(evidence, Some(live_inputs))
+}
+
+/// [`reconcile`] for runs with NO independent liveness evidence (the
+/// per-run report path): identical, except no `ContextUnverified`
+/// grade is emitted — with nothing to verify against it would flag
+/// every working binding.
+pub fn reconcile_without_liveness(evidence: &LwRunEvidence) -> ReconciledLw {
+    reconcile_impl(evidence, None)
+}
+
+fn reconcile_impl(
+    evidence: &LwRunEvidence,
+    live_inputs: Option<&std::collections::BTreeSet<String>>,
 ) -> ReconciledLw {
     use super::provenance::ProvenanceGrade;
     use super::surface::{DiscoveryFinding, DiscoveryFindingKind, Evidence};
@@ -810,9 +829,12 @@ pub fn reconcile(
                 input: decl.input.clone(),
                 detail,
             });
-        } else if wiring_live && !decl.chord && !draft_inputs_live.contains(&decl.input) {
-            // Wiring live but the sweep never verified game liveness
-            // outside boot context: the honest coverage finding.
+        } else if wiring_live
+            && !decl.chord
+            && live_inputs.is_some_and(|live| !live.contains(&decl.input))
+        {
+            // Wiring live, liveness evidence exists, but none verified
+            // this input's game effect: the honest coverage finding.
             // NEVER for chord members: a satisfied chord under a
             // driver-synchronized multi-press is still an
             // acknowledged probe limitation (single-key taps miss
