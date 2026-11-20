@@ -2474,10 +2474,6 @@ fn is_synthetic_keyboard_bot(scenario: Option<Res<ScenarioResource>>) -> bool {
     scenario.is_some_and(|s| s.0.bot.bot_type == BotType::SyntheticKeyboard)
 }
 
-/// Whether a rule is informational (non-gating). When the scenario sets
-/// `strict_warnings`, log warnings AND progress_surface_empty escalate
-/// to gating failures (strict_warnings is the generic "everything you
-/// report, I mean it" knob).
 /// Public re-export of the child-side informational classifier for
 /// the parent-side sweep gate: the gate must replicate WHICH
 /// violations the child treated as gating (contextual: escalated
@@ -2491,6 +2487,10 @@ pub fn is_progress_informational_public(
     is_progress_informational(rule, strict_warnings, require_surface)
 }
 
+/// Whether a rule is informational (non-gating). When the scenario sets
+/// `strict_warnings`, log warnings AND progress_surface_empty escalate
+/// to gating failures (strict_warnings is the generic "everything you
+/// report, I mean it" knob).
 fn is_informational(rule: &str, strict_warnings: bool) -> bool {
     if strict_warnings && (rule == "log_warn" || rule == "progress_surface_empty") {
         return false;

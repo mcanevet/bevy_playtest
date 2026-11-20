@@ -9,15 +9,18 @@
 //! findings — giving CI memory across runs instead of a stateless
 //! per-seed coin flip.
 //!
-//! # Manual repro
+//! # Reproducing a member
 //!
-//! Every sweep member is reproducible by hand: the sweep drives the
-//! child through [`crate::battery::BatteryConfig::seed_override`],
-//! which the takeover honors over `scenario.bot.seed` via
-//! `BEVY_PLAYTEST_SEED`. A finding at seed 43 is reproduced with
-//! `BEVY_PLAYTEST_SCENARIO=battery BEVY_PLAYTEST_SEED=43 cargo run
-//! --features playtest --bin <game>` (the seed var alone is inert —
-//! the takeover needs its scenario to take over at all).
+//! The sweep drives each child through
+//! [`crate::battery::BatteryConfig::seed_override`], which the takeover
+//! honors over `scenario.bot.seed` via `BEVY_PLAYTEST_SEED` and which
+//! also seeds the deterministic OS randomness. Exact reproduction is
+//! one battery run with the same binary, scenario and
+//! `seed_override: Some(43)`: the battery applies the same source-scan
+//! key layering and randomness. `BEVY_PLAYTEST_SCENARIO=battery
+//! BEVY_PLAYTEST_SEED=43 cargo run --features playtest --bin <game>`
+//! is only an approximation: it skips both (the seed var alone is
+//! inert — the takeover needs its scenario to take over at all).
 
 use crate::battery::{self, BatteryConfig, BatteryError, DEFAULT_TIMEOUT_SECS};
 use crate::driver::is_progress_informational_public;
@@ -59,9 +62,14 @@ impl FindingFingerprint {
     /// Fingerprint a blocking violation. Informational rules never
     /// gate and never fingerprint — a `log_warn` storm is noise, not
     /// a known-bug ledger entry.
+    ///
+    /// Panics are never fingerprinted: every panic is reported with
+    /// the target `world`, so one recorded `panic:world` would mute
+    /// every later, different panic. A member that panics is therefore
+    /// an unrecordable failure and always gates.
     pub fn of_blocking(v: &ViolationEntry) -> Option<Self> {
         let rule = Rule::from_name(&v.rule)?;
-        if rule.is_informational() {
+        if rule.is_informational() || v.rule == "panic" {
             return None;
         }
         Some(Self {
@@ -246,6 +254,11 @@ impl RegressionDb {
         let Some(fp) = FindingFingerprint::from_key(&key) else {
             return false;
         };
+        // A line break in the note would write a second line, which
+        // the next load would read as an entry of its own.
+        if note.contains(['\n', '\r']) {
+            return false;
+        }
         self.entries.insert(fp.key(), note);
         true
     }
@@ -504,8 +517,16 @@ impl SweepReport {
                 s.push_str(&format!("  {}  # TODO note\n", f.fingerprint_key));
             }
         }
+        // Exact reproduction goes through the battery (same source-scan
+        // layering, same deterministic OS randomness); the env-var
+        // command is the quick approximation.
+        s.push_str(
+            "  reproduce a member exactly: battery::run_with_config with seed_override: Some(<seed>) \
+             and the same binary and scenario\n",
+        );
         s.push_str(&format!(
-            "  reproduce any member: BEVY_PLAYTEST_SCENARIO={scenario} BEVY_PLAYTEST_SEED=<seed> {bin}\n",
+            "  approximate by hand (no source-scan key layering, real OS randomness): \
+             BEVY_PLAYTEST_SCENARIO={scenario} BEVY_PLAYTEST_SEED=<seed> {bin}\n",
             scenario = config.scenario,
             // Works for both shapes: a bare game binary name
             // ("cargo run --bin <name>") and an absolute path (the
@@ -804,11 +825,16 @@ pub fn run_sweep(config: &SweepConfig) -> Result<SweepReport, BatteryError> {
                     new = true;
                 }
             }
-            let healed: Vec<String> = db
-                .keys()
-                .filter(|k| !findings.iter().any(|f| &f.fingerprint_key == *k))
-                .cloned()
-                .collect();
+            // A crashed or unrecordable member proves nothing about the
+            // findings it never reached: no "delete this line" advice then.
+            let healed: Vec<String> = if red_members {
+                Vec::new()
+            } else {
+                db.keys()
+                    .filter(|k| !findings.iter().any(|f| &f.fingerprint_key == *k))
+                    .cloned()
+                    .collect()
+            };
             let verdict = if red_members || new {
                 SweepVerdict::NewOrRegressed
             } else if findings.is_empty() {
@@ -854,11 +880,11 @@ pub fn run_sweep_and_gate(config: &SweepConfig) -> SweepReport {
     match &report.verdict {
         Some(SweepVerdict::NewOrRegressed) => panic!("{}", report.summary(config)),
         _ => {
-            // Silent only when there is nothing to say: healed keys
-            // or unrecordable failed members both warrant a print,
-            // even on a passing gate (the developer should know the
-            // gate is passing on borrowed evidence).
-            if !report.healed.is_empty() || !report.unfingerprinted_failures.is_empty() {
+            // Silent only when there is nothing to say: known (or,
+            // without a regression file, ungated) findings and healed
+            // keys warrant a print even on a passing gate. Unrecordable
+            // failures never get here: they force NewOrRegressed.
+            if !report.findings.is_empty() || !report.healed.is_empty() {
                 println!("{}", report.summary(config));
             }
             report
@@ -973,6 +999,14 @@ mod tests {
             ..Default::default()
         };
         assert!(FindingFingerprint::of_blocking(&entry).is_none());
+        // Panics all share the target `world`: never recordable, so one
+        // known panic can never mute a different one.
+        let entry = ViolationEntry {
+            rule: "panic".into(),
+            target: "world".into(),
+            ..Default::default()
+        };
+        assert!(FindingFingerprint::of_blocking(&entry).is_none());
     }
 
     #[test]
@@ -1054,9 +1088,9 @@ mod tests {
             })
         };
         assert_eq!(
-            entry("panic", "3v1").map(|f| f.target),
+            entry("component_check", "3v1").map(|f| f.target),
             Some("3v1".into()),
-            "panic targets are not entity-shaped for the canonicalizer"
+            "authored invariant targets are never canonicalized"
         );
         // Second collapsing rule.
         assert_eq!(
@@ -1134,6 +1168,9 @@ mod tests {
         }
         assert_eq!(db.keys().count(), 2, "valid keys stored, malformed refused");
         assert!(db.contains("frozen_world:world"));
+        // A line break in the note would write a second entry line.
+        assert!(!db.insert("finite_transforms:entity".into(), "x\npanic:world".into()));
+        assert!(!db.contains("finite_transforms:entity"));
     }
 
     #[test]
