@@ -22,7 +22,6 @@
 # No lib.rs, no build_app(), no wrapper module, no fixture-runner.
 #
 # Run from the bevy_playtest repo root.
-
 set -euo pipefail
 
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -515,3 +514,40 @@ WORKSPACE
 
 echo "Done. Fixtures generated under ${FIXTURES_DIR}/."
 echo "Test:  cargo test --manifest-path fixtures/<name>/Cargo.toml"
+
+# 7. Hermetic git history for the contributors fixture. Upstream's
+#    showcase reads `git log` in CARGO_MANIFEST_DIR at startup for
+#    its contributor list. That only "worked" under cargo because
+#    the fixture dir sat inside the host git worktree — the log it
+#    read was the HOST repo's, leaking unrelated names, and it
+#    broke entirely under Bazel (no .git in runfiles). Seed a
+#    tiny fixture-local history with pinned dates/authors so both
+#    build tiers see the same, stable contributor list.
+seed_fixture_git() {
+    local dir="${FIXTURES_DIR}/contributors"
+    rm -rf "${dir:?}/.git"
+    git -C "$dir" init -q
+    git -C "$dir" config user.email "fixture@example.invalid"
+    git -C "$dir" config user.name "Bevy Upstream"
+    local -A authors=(
+        [1]="Alice Author"
+        [2]="Bob Builder"
+        [3]="Carol Contributor"
+    )
+    local marker="${dir}/.fixture_repo_marker"
+    : > "$marker"
+    git -C "$dir" add -f "$marker"
+    local i
+    for i in 1 2 3; do
+        echo "v$i" >> "$marker"
+        GIT_AUTHOR_DATE="2024-01-01T00:00:00Z" \
+        GIT_COMMITTER_DATE="2024-01-01T00:00:00Z" \
+        GIT_AUTHOR_NAME="${authors[$i]}" \
+        GIT_AUTHOR_EMAIL="author$i@example.invalid" \
+        GIT_COMMITTER_NAME="${authors[$i]}" \
+        GIT_COMMITTER_EMAIL="author$i@example.invalid" \
+        git -C "$dir" commit -qm "fixture commit $i"
+    done
+    echo "  Seeded: ${dir}/.git (3 pinned-author commits)"
+}
+seed_fixture_git

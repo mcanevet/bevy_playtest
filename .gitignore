@@ -10,15 +10,33 @@
 # regeneration; the fetch script seeds it only if missing.
 /fixtures/*
 !/fixtures/Cargo.lock
+!/fixtures/BUILD.bazel
 !/fixtures/*/
 /fixtures/*/*
 !/fixtures/*/tests/
 !/fixtures/*/tests/playtest.rs
+# Per-fixture Bazel build files are committed alongside the tests
+# (same rationale: they carry hand-written adapter logic and must
+# survive regeneration).
+!/fixtures/*/BUILD.bazel
 # The known_answer fixture is hand-authored, committed wholesale
 # (source + tests + ground truth) — NOT fetch-script-managed like
 # the showcase games. Later-match-wins over the patterns above.
 !/fixtures/known_answer/**
+# Seeded by scripts/fetch_bevy_examples.sh step 7 (hermetic git
+# history for the contributors fixture): generated, never committed.
+/fixtures/contributors/.git/
+/fixtures/contributors/.fixture_repo_marker
 bevy_playtest-smoke.report.json
+
+# Bazel: version/config/module files ARE committed (that's the
+# port); everything here is derived or machine-local. NOTE the
+# explicit bazel-support negation: the `bazel-*` pattern would
+# otherwise swallow the committed closure manifest — bazel-support
+# is source, not a Bazel symlink.
+bazel-*
+!bazel-support/
+MODULE.bazel.lock
 
 # Discovery cache (bevy_playtest::discovery): re-probing after
 # `rm -rf` is always safe.

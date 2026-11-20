@@ -1,0 +1,43 @@
+# Bazel pilot for the fixtures battery tier (CI speedup experiment).
+#
+# Scope: Bazel builds the playtest ENABLED binaries for the 8 single-crate
+# fixtures (thetawave stays cargo-native: multi-crate fork port with heavy
+# extra deps — see fixtures/BUILD.bazel). The bevy_playtest harness crate
+# itself stays cargo-native by doctrine; Bazel consumes it through
+# crate_universe ingesting the fixtures' existing Cargo.toml/Cargo.lock.
+#
+# If this experiment is abandoned: delete .bazelversion, MODULE.bazel,
+# .bazelrc and revert the CI workflow change. Fixtures stay pure cargo.
+
+module(name = "bevy_playtest_fixtures")
+
+bazel_dep(name = "rules_rust", version = "0.75.0")
+
+# --- Rust toolchain ---------------------------------------------------------
+# Matches the fixture fixtures' edition. The toolchain VERSION still comes
+# from rust-toolchain.toml via the rustup proxy on dev machines and CI
+# installs it via rustup before invoking bazel.
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(
+    edition = "2024",
+)
+use_repo(rust, "rust_toolchains")
+
+# --- Third-party crates via crate_universe -----------------------------------
+# Ingest the fixtures workspace manifest + lockfile as-is. This includes
+# the harness via its path dep (bevy_playtest = { path = "../.." }), so the
+# Bazel build compiles the SAME harness code the cargo build does.
+# NOTE: crate_universe resolves the fixtures workspace manifest root
+# (fixtures/Cargo.toml), whose members are the fixture packages.
+crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+crate.from_cargo(
+    name = "crates",
+    # Synthetic third-party closure — see bazel-support/Cargo.toml's
+    # header for why the real fixtures workspace cannot be spliced
+    # (upward path deps break the crate_universe splicer) and why the
+    # harness is NOT here (it is a local rust_library so the battery
+    # always tests the working tree).
+    manifests = ["//bazel-support:Cargo.toml"],
+    cargo_lockfile = "//bazel-support:Cargo.lock",
+)
+use_repo(crate, "crates")

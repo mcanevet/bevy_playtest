@@ -1,0 +1,16 @@
+"""Closure manifest support package (Bazel battery pilot).
+
+See Cargo.toml's header comment for the synthetic-closure rationale
+(the crate_universe splicer cannot handle the fixtures' upward
+`bevy_playtest = { path = "../.." }` path deps). Nothing is built
+here; the manifest + generated lockfile are exported for
+crate.from_cargo in MODULE.bazel.
+"""
+
+exports_files(
+    [
+        "Cargo.toml",
+        "Cargo.lock",
+    ],
+    visibility = ["//visibility:public"],
+)

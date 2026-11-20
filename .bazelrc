@@ -1,0 +1,17 @@
+# Bazel pilot for the fixtures battery tier.
+
+# Shared disk cache: content-addressed artifacts reusable across checkouts
+# and machines. Locally it is warmed by the four game pilots (camelback,
+# doom_clone_playtest, onze, kickflip); in CI a GitHub Actions cache of
+# this directory seeds each run.
+build --disk_cache=~/.local/share/bazel-disk-cache
+
+# Don't traverse cargo's target dir from repo root globs.
+build --deleted_packages=target
+
+# Fixtures' sources are GENERATED (scripts/fetch_bevy_examples.sh) and the
+# fixtures workspace declares path deps that point OUTSIDE this package
+# tree (../../bevy_playtest) — resolved by crate_universe, but the
+# bazel query globs must not choke on the repo-root Cargo.toml declaring
+# the harness as a member. Delete the root package from globs; the root
+# BUILD.bazel declares the filegroups the tests need.

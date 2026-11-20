@@ -1,0 +1,161 @@
+"""breakout fixture — Bazel battery-tier port (pilot).
+
+Proven pattern from the game pilots (camelback/doom/onze/kickflip),
+with the battery-specific additions:
+  - TWO binary forms: `breakout` is the plain binary (zero bevy_playtest
+    code — the release-purity doctrine), `breakout_playtest` compiles
+    the SAME sources with the `playtest` feature so the battery sees the
+    takeover-capable build (cargo gets this via the self-dev-dependency;
+    Bazel has no feature-activation magic, so the feature is explicit).
+  - The battery test reads env!("CARGO_BIN_EXE_fixture_breakout") at
+    COMPILE time; rustc_env + $(location) bakes the runfiles path of
+    the playtest binary into the test binary. The committed
+    tests/playtest.rs is untouched.
+  - data = assets: the battery's cwd isolation (bevy_playtest
+    populate_symlink_tree) links it into the child cwd, so the game's
+    `asset_server.load("sounds/breakout_collision.ogg")` resolves as
+    under cargo.
+"""
+
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+load("@crates//:defs.bzl", "crate_deps")
+
+# The playtest-enabled binary and the battery test depend on the
+# harness: LOCAL working-tree library (//:bevy_playtest_harness), not
+# the registry crate — the battery must test this PR's harness code.
+HARNESS = "//:bevy_playtest_harness"
+
+# Third-party deps resolved through the closure hub
+# (@crates, package "bazel-support"): bevy unified at 0.20.1 for all
+# fixtures (see bazel-support/Cargo.toml's bevy-unification note).
+TP_DEPS = crate_deps(
+    [
+        "bevy",
+    ],
+    package_name = "bazel-support",
+)
+
+# Fixture-specific extras (alien_cake_addict adds chacha20+rand, etc.);
+# breakout is bevy-only.
+
+rust_binary(
+    name = "fixture_breakout",
+    srcs = glob(["src/**/*.rs"]),
+    edition = "2024",
+    crate_name = "fixture_breakout",
+    # bevy 0.20 derive macros read the calling crate's Cargo.toml at
+    # expansion time; without compile_data this fails with 1000+
+    # phantom E0599/E0277 errors (see camelback pilot notes).
+    compile_data = [
+        "Cargo.toml",
+        "//fixtures:Cargo.lock",
+    ],
+    deps = TP_DEPS,
+    rustc_env = {
+        "CARGO_PKG_VERSION": "0.1.0",
+        "CARGO_PKG_NAME": "fixture_breakout",
+    },
+    visibility = ["//visibility:private"],
+)
+
+rust_binary(
+    name = "fixture_breakout_playtest",
+    srcs = glob(["src/**/*.rs"]),
+    edition = "2024",
+    crate_name = "fixture_breakout",
+    crate_features = ["playtest"],
+    compile_data = [
+        "Cargo.toml",
+        "//fixtures:Cargo.lock",
+    ],
+    deps = TP_DEPS + [HARNESS],
+    rustc_env = {
+        "CARGO_PKG_VERSION": "0.1.0",
+        "CARGO_PKG_NAME": "fixture_breakout",
+    },
+    data = [":assets"],
+    visibility = ["//visibility:private"],
+)
+
+rust_test(
+    name = "playtest_battery",
+    # medium's 300s deadline is too tight for CI runners on software
+    # Vulkan (llvmpipe): locally alien_cake_addict already runs ~105s
+    # on a real GPU. large grants 900s.
+    size = "large",
+    srcs = ["tests/playtest.rs"],
+    edition = "2024",
+    crate_name = "playtest_test_breakout",
+    # tests/playtest.rs gates the real battery behind
+    # #[cfg(feature = "playtest")] and otherwise compiles a vacuous
+    # #[ignore]d stub (the cargo-package stripping guard). Under cargo
+    # the self-dev-dependency activates the feature for test builds;
+    # Bazel has no such magic, so pass the cfg explicitly or the test
+    # passes without exercising anything.
+    crate_features = ["playtest"],
+    # The harness's zero-config source scan (discovery/source_scan.rs
+    # scan_root_from_env) keys off runtime CARGO_MANIFEST_DIR under
+    # cargo; under Bazel that env var points at the execroot sandbox,
+    # so we use the harness's OWN override (ENV_SOURCE_ROOT —
+    # checked at battery-parent scope, so the BEVY_PLAYTEST_* strip
+    # the battery applies to spawned children doesn't affect it).
+    # Value: package-relative path, resolved against the test cwd
+    # (the runfiles workspace root). Sources arrive in runfiles via
+    # the :fixture_sources data dep below.
+    env = {
+        "BEVY_PLAYTEST_SOURCE_ROOT": "fixtures/breakout",
+    },
+    compile_data = [
+        "Cargo.toml",
+        "//fixtures:Cargo.lock",
+    ],
+    # The battery test crate: the committed tests/playtest.rs is
+    # compiled as its own crate depending on the working-tree harness.
+    deps = [HARNESS],
+    rustc_env = {
+        # Satisfies env!("CARGO_BIN_EXE_fixture_breakout") in the
+        # UNMODIFIED committed test. Path-shape notes (empirically
+        # pinned down in this pilot):
+        #   $(location)      -> "bazel-out/.../bin/..." (execroot-
+        #                       relative): dangles at test runtime.
+        #   $(rlocationpath) -> "_main/fixtures/..." (runfiles path
+        #                       INCLUDING workspace dir): dangles —
+        #                       the test cwd (and the battery's
+        #                       child_cwd symlink tree, which is what
+        #                       Command::new(...).current_dir(child_cwd)
+        #                       resolves against) is already INSIDE
+        #                       the workspace dir of the runfiles tree.
+        #   $(rootpath)      -> "fixtures/breakout/..." (workspace-
+        #                       relative): resolves through the
+        #                       `fixtures` symlink that the battery's
+        #                       populate_symlink_tree creates in
+        #                       child_cwd. This is the one that works.
+        "CARGO_BIN_EXE_fixture_breakout": "$(rootpath :fixture_breakout_playtest)",
+    },
+    data = [
+        ":fixture_breakout_playtest",
+        # Game sources in runfiles: the harness's zero-config source
+        # scan reads them via BEVY_PLAYTEST_SOURCE_ROOT (see the env
+        # block above).
+        ":fixture_sources",
+        ":assets",
+    ],
+    # Builtin battery vs gameplay scenario — see tests/playtest.rs.
+    # Serial by nature: one sandboxed GPU-ish run at a time is fine,
+    # but keep default parallelism off because the battery child
+    # spawns a real game process.
+    tags = ["requires-display"],
+    visibility = ["//visibility:private"],
+)
+
+filegroup(
+    name = "assets",
+    srcs = glob(["assets/**"]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "fixture_sources",
+    srcs = glob(["src/**"]),
+    visibility = ["//visibility:public"],
+)

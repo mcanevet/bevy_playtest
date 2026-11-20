@@ -1,0 +1,80 @@
+# Synthetic third-party closure for crate_universe (Bazel battery pilot).
+#
+# NOT a real workspace: this manifest exists ONLY so crate_universe
+# (crate.from_cargo) can splice a dependency graph with ZERO path
+# deps. The real fixtures workspace (fixtures/Cargo.toml) cannot be
+# spliced directly because every fixture path-depends on the harness
+# via `bevy_playtest = { path = "../.." }` — the crate_universe
+# splicer copies member manifests into a flattened temp workspace and
+# upward-escaping path deps (`../..`) dangle there (hit + verified
+# during the pilot).
+#
+# The dependency graph is split in two:
+#   1. THIS manifest: every REGISTRY dep needed by (a) the harness
+#      compiled with the feature set the fixtures activate —
+#      takeover, takeover-winit, render-liveness, lw-reader; NOT
+#      ui-surface, so its dep set is omitted — and (b) the 8
+#      Bazel-built fixtures (thetawave stays cargo-native). Versions
+#      and features mirror /Cargo.toml and fixtures/*/Cargo.toml.
+#      KEEP IN SYNC with those manifests when they change.
+#   2. The harness itself: compiled as a LOCAL rust_library from the
+#      working tree (//:bevy_playtest_harness in BUILD.bazel), so the
+#      battery always tests the PR's own harness code, never a stale
+#      registry copy.
+#
+# bevy unification: the cargo world builds bevy TWICE here (0.20.0
+# from the showcase fixtures' manifests, 0.20.1 from known_answer and
+# the harness). The Bazel world deliberately builds ONE bevy (0.20.1)
+# for all fixtures — semver-compatible with the 0.20.0-tag showcase
+# sources (they were fetched for 0.20.0, but patch releases are
+# API-compatible by policy), halving the heaviest graph on disk.
+[workspace]
+resolver = "2"
+members = []
+
+[package]
+name = "bazel_support_closure"
+version = "0.0.0"
+publish = false
+
+# The manifest is splice-material for crate_universe, not a buildable
+# crate; an empty lib target silences cargo's no-targets complaint so
+# `cargo generate-lockfile` works.
+[lib]
+path = "empty-lib.rs"
+
+[dependencies]
+# --- harness (bevy_playtest) deps: mandatory set (/Cargo.toml) ---
+bevy_app = { version = "0.20.1", default-features = false, features = ["std"] }
+bevy_reflect = { version = "0.20.1", default-features = false, features = ["std"] }
+bevy_ecs = { version = "0.20.1", default-features = false, features = ["std", "bevy_reflect"] }
+bevy_transform = { version = "0.20.1", default-features = false, features = ["std", "bevy-support", "bevy_reflect"] }
+bevy_tasks = { version = "0.20.1", default-features = false }
+bevy_time = { version = "0.20.1", default-features = false, features = ["std"] }
+tracing = "0.1.44"
+tracing-log = "0.2"
+bevy_input = { version = "0.20.1", default-features = false, features = ["std", "keyboard", "mouse", "gamepad"] }
+bevy_math = { version = "0.20.1", default-features = false }
+bevy_window = { version = "0.20.1", default-features = false }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["std", "registry", "fmt", "env-filter"] }
+log = "0.4.35"
+
+# --- harness deps activated by the fixtures' feature wiring ---
+# takeover-winit: dep:bevy_winit, dep:bevy (meta-crate, full defaults
+# — every fixture is a full showcase game), ui-liveness: dep:bevy_ui.
+bevy = "0.20.1"
+bevy_winit = { version = "0.20.1", default-features = false }
+bevy_ui = { version = "0.20.1", default-features = false }
+# render-liveness (known_answer activates it): dep:bevy_camera,
+# dep:bevy_render.
+bevy_camera = { version = "0.20.1", default-features = false }
+bevy_render = { version = "0.20.1", default-features = false }
+
+# --- fixture deps (mirror of fixtures/*/Cargo.toml, thetawave excluded) ---
+chacha20 = { version = "0.10.0", default-features = false, features = ["rng"] }
+rand = "0.10.0"
+thiserror = "2.0"
+leafwing-input-manager = "0.22"
+ron = "0.12.3"

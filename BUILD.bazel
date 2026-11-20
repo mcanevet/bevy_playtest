@@ -1,0 +1,105 @@
+"""bevy_playtest harness — Bazel-local library form (battery pilot).
+
+The fixtures' cargo world consumes the harness through their
+`bevy_playtest = { path = "../.." }` path dep, activating features via
+their own `playtest` feature wiring (takeover, takeover-winit,
+render-liveness for known_answer, lw-reader). Bazel has no implicit
+feature propagation, so the same feature set is compiled EXPLICITLY
+here via crate_features — the battery tests always exercise the
+working-tree harness, never a stale registry copy.
+
+Feature set rationale (mirror of the fixtures' wiring):
+  - takeover + takeover-winit: every fixture's `playtest` feature
+    chains bevy_playtest/takeover-winit (dep:bevy_winit, dep:bevy,
+    ui-liveness).
+  - render-liveness: known_answer's wiring adds it.
+  - lw-reader: known_answer's wiring adds it.
+  - NOT compiled: in-process only? no — `in-process` is in the
+    harness's default features and takeover implies in-process via
+    `takeover = ["in-process", "takeover-winit"]`. We pass the
+    transitive closure explicitly so the default set (["in-process",
+    "takeover"]) is irrelevant.
+  - NOT compiled: ui-surface (no fixture activates it; its dep set is
+    deliberately absent from bazel-support/Cargo.toml).
+
+NOTE: crate_features does NOT evaluate cargo's feature-implied
+dependency activation. rules_rust compiles the crate with
+--cfg feature="..." flags, and the DEPS below must therefore be the
+union the features imply: mandatory set + takeover-winit's
+(dep:bevy_winit, dep:bevy) + ui-liveness (dep:bevy_ui) +
+render-liveness (dep:bevy_camera, dep:bevy_render). lw-reader pulls
+no deps (pure reflection, see /Cargo.toml).
+"""
+
+load("@rules_rust//rust:defs.bzl", "rust_library")
+load("@crates//:defs.bzl", "crate_deps")
+
+rust_library(
+    name = "bevy_playtest_harness",
+    srcs = glob(
+        ["src/**/*.rs"],
+        # Binaries (takeover demos, the discover tool): cargo builds
+        # them as separate bins; the Bazel battery needs only the lib.
+        exclude = ["src/bin/**"],
+    ),
+    crate_name = "bevy_playtest",
+    edition = "2021",
+    crate_features = [
+        "in-process",
+        "takeover",
+        "takeover-winit",
+        "render-liveness",
+        "lw-reader",
+        # ui-liveness is implied by takeover-winit in /Cargo.toml;
+        # crate_features are raw cfg flags, so pass it explicitly.
+        "ui-liveness",
+    ],
+    # bevy 0.20 derive macros read the calling crate's Cargo.toml at
+    # expansion time; the harness's own Cargo.toml must sit beside
+    # the sources in the sandbox.
+    compile_data = [
+        "//:Cargo.toml",
+        "//:Cargo.lock",
+    ],
+    deps = crate_deps(
+        [
+            # mandatory set (/Cargo.toml [dependencies])
+            "bevy_app",
+            "bevy_reflect",
+            "bevy_ecs",
+            "bevy_transform",
+            "bevy_tasks",
+            "bevy_time",
+            "tracing",
+            "tracing-log",
+            "bevy_input",
+            "bevy_math",
+            "bevy_window",
+            "serde",
+            "serde_json",
+            "tracing-subscriber",
+            "log",
+            # takeover-winit + ui-liveness
+            "bevy",
+            "bevy_winit",
+            "bevy_ui",
+            # render-liveness
+            "bevy_camera",
+            "bevy_render",
+        ],
+        # The hub's dependency maps are keyed by the manifest's Bazel
+        # PACKAGE (the bazel-support directory, dash-normalized);
+        # crate_deps defaults to the calling Bazel package name, which
+        # has no entry.
+        package_name = "bazel-support",
+    ),
+    rustc_env = {
+        "CARGO_PKG_VERSION": "0.12.0",
+        "CARGO_PKG_NAME": "bevy_playtest",
+        # Under cargo the harness's own build reads its manifest dir
+        # for CARGO_MANIFEST_DIR-dependent behavior; none observed,
+        # but record the assumption.
+        "CARGO_PKG_DESCRIPTION": "Playtesting harness for Bevy games",
+    },
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,133 @@
+"""known_answer fixture — Bazel battery-tier port (pilot).
+
+Same base shape as fixtures/breakout (playtest binary + battery test,
+$(rootpath)-baked CARGO_BIN_EXE_*), with two fixture-specific facts:
+
+  - The test crate is MULTI-FILE: tests/playtest.rs does
+    `mod support;` (tests/support/mod.rs) and runs THREE ungated
+    ground-truth integrity tests alongside the battery — reading
+    ground_truth.json and src/main.rs at RUNTIME via
+    CARGO_MANIFEST_DIR. Bazel supplies that env var via rustc_env
+    (baked at compile time, correct because the test runs from the
+    runfiles tree where src/main.rs and ground_truth.json are data
+    deps).
+  - Extra deps vs the other fixtures: leafwing-input-manager (the
+    declared-binding reader this fixture demonstrates), serde/ron.
+    serde_json is needed by tests/support (dev-dep in cargo terms).
+
+CI's battery tier runs `--test playtest` only, so measure.rs /
+mutation.rs / lw_reflection_contracts.rs stay cargo-native (they are
+feature-gated on `measure` anyway).
+"""
+
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+load("@crates//:defs.bzl", "crate_deps")
+
+HARNESS = "//:bevy_playtest_harness"
+
+DEPS = crate_deps(
+    [
+        "bevy",
+        "leafwing-input-manager",
+        "serde",
+        "ron",
+    ],
+    package_name = "bazel-support",
+)
+
+TEST_DEPS = crate_deps(
+    [
+        "serde",
+        "serde_json",
+        "ron",
+    ],
+    package_name = "bazel-support",
+) + [HARNESS]
+
+rust_binary(
+    name = "fixture_known_answer_playtest",
+    srcs = glob(["src/**/*.rs"]),
+    edition = "2024",
+    crate_name = "fixture_known_answer",
+    crate_features = ["playtest"],
+    compile_data = [
+        "Cargo.toml",
+        "//fixtures:Cargo.lock",
+    ],
+    deps = DEPS + [HARNESS],
+    rustc_env = {
+        "CARGO_PKG_VERSION": "0.1.0",
+        "CARGO_PKG_NAME": "fixture_known_answer",
+    },
+    # No assets dir; ground truth + sources ride along via the test.
+    visibility = ["//visibility:private"],
+)
+
+rust_test(
+    name = "playtest_battery",
+    # medium's 300s deadline is too tight for CI runners on software
+    # Vulkan (llvmpipe): locally alien_cake_addict already runs ~105s
+    # on a real GPU. large grants 900s.
+    size = "large",
+    srcs = [
+        "tests/playtest.rs",
+        "tests/support/mod.rs",
+    ],
+    # Explicit crate root: with multiple srcs rules_rust must not
+    # guess (no lib.rs/main.rs present). `mod support;` then resolves
+    # relative to tests/, matching cargo's integration-test layout.
+    crate_root = "tests/playtest.rs",
+    edition = "2024",
+    crate_name = "playtest_test_known_answer",
+    crate_features = ["playtest"],
+    # The harness's zero-config source scan (discovery/source_scan.rs
+    # scan_root_from_env) keys off runtime CARGO_MANIFEST_DIR under
+    # cargo; under Bazel that env var points at the execroot sandbox,
+    # so we use the harness's OWN override (ENV_SOURCE_ROOT —
+    # checked at battery-parent scope, so the BEVY_PLAYTEST_* strip
+    # the battery applies to spawned children doesn't affect it).
+    # Value: package-relative path, resolved against the test cwd
+    # (the runfiles workspace root). Sources arrive in runfiles via
+    # the :fixture_sources data dep below.
+    env = {
+        "BEVY_PLAYTEST_SOURCE_ROOT": "fixtures/known_answer",
+    },
+    compile_data = [
+        "Cargo.toml",
+        "//fixtures:Cargo.lock",
+    ],
+    deps = TEST_DEPS,
+    rustc_env = {
+        # $(rootpath), NOT $(location)/$(rlocationpath): see
+        # fixtures/breakout/BUILD.bazel for the empirical path-shape
+        # notes.
+        "CARGO_BIN_EXE_fixture_known_answer": "$(rootpath :fixture_known_answer_playtest)",
+        # tests/support reads ground_truth.json + src/main.rs through
+        # this at RUNTIME (Path::join, not include_str!). Baked at
+        # compile time; resolves because the test's cwd is the
+        # runfiles WORKSPACE root (_main/), and both files are data
+        # deps at their package-relative runfiles paths.
+        "CARGO_MANIFEST_DIR": "fixtures/known_answer",
+    },
+    data = [
+        ":fixture_known_answer_playtest",
+        # Game sources in runfiles: the harness's zero-config source
+        # scan reads them via BEVY_PLAYTEST_SOURCE_ROOT (see the env
+        # block above).
+        ":fixture_sources",
+        "ground_truth.json",
+    ],
+    visibility = ["//visibility:private"],
+)
+
+filegroup(
+    name = "fixture_sources",
+    srcs = glob(["src/**"]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "assets",
+    srcs = [],
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,100 @@
+"""desk_toy fixture — Bazel battery-tier port (pilot).
+
+Same proven shape as fixtures/breakout (see that BUILD file for the
+full rationale): playtest-enabled binary + battery test, unmodified
+committed tests/playtest.rs, $(rootpath)-baked CARGO_BIN_EXE_*,
+assets via runfiles + the harness's cwd symlink-tree isolation.
+"""
+
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+load("@crates//:defs.bzl", "crate_deps")
+
+HARNESS = "//:bevy_playtest_harness"
+
+DEPS = crate_deps(
+    [
+        "bevy",
+    ],
+    package_name = "bazel-support",
+)
+
+rust_binary(
+    name = "fixture_desk_toy_playtest",
+    srcs = glob(["src/**/*.rs"]),
+    edition = "2024",
+    crate_name = "fixture_desk_toy",
+    # The feature-gated playtest transform (fetch_bevy_examples.sh):
+    # playtest builds swap in PlaytestDefaultPlugins + PlaytestPlugin;
+    # plain builds carry ZERO bevy_playtest code.
+    crate_features = ["playtest"],
+    compile_data = [
+        "Cargo.toml",
+        "//fixtures:Cargo.lock",
+    ],
+    deps = DEPS + [HARNESS],
+    rustc_env = {
+        "CARGO_PKG_VERSION": "0.1.0",
+        "CARGO_PKG_NAME": "fixture_desk_toy",
+    },
+    data = [":assets"],
+    visibility = ["//visibility:private"],
+)
+
+rust_test(
+    name = "playtest_battery",
+    # medium's 300s deadline is too tight for CI runners on software
+    # Vulkan (llvmpipe): locally alien_cake_addict already runs ~105s
+    # on a real GPU. large grants 900s.
+    size = "large",
+    srcs = ["tests/playtest.rs"],
+    edition = "2024",
+    crate_name = "playtest_test_fixture_desk_toy",
+    # #[cfg(feature = "playtest")] gates the real battery in the
+    # committed test; without this the vacuous #[ignore] stub compiles
+    # instead and the target passes without testing anything.
+        crate_features = ["playtest"],
+    # The harness's zero-config source scan (discovery/source_scan.rs
+    # scan_root_from_env) keys off runtime CARGO_MANIFEST_DIR under
+    # cargo; under Bazel that env var points at the execroot sandbox,
+    # so we use the harness's OWN override (ENV_SOURCE_ROOT —
+    # checked at battery-parent scope, so the BEVY_PLAYTEST_* strip
+    # the battery applies to spawned children doesn't affect it).
+    # Value: package-relative path, resolved against the test cwd
+    # (the runfiles workspace root). Sources arrive in runfiles via
+    # the :fixture_sources data dep below.
+    env = {
+        "BEVY_PLAYTEST_SOURCE_ROOT": "fixtures/desk_toy",
+    },
+    compile_data = [
+        "Cargo.toml",
+        "//fixtures:Cargo.lock",
+    ],
+    deps = [HARNESS],
+    rustc_env = {
+        # $(rootpath), NOT $(location)/$(rlocationpath): see
+        # fixtures/breakout/BUILD.bazel for the empirical path-shape
+        # notes.
+        "CARGO_BIN_EXE_fixture_desk_toy": "$(rootpath :fixture_desk_toy_playtest)",
+    },
+    data = [
+        ":fixture_desk_toy_playtest",
+        ":assets",
+        # Game sources in runfiles: the harness's zero-config source
+        # scan reads them via BEVY_PLAYTEST_SOURCE_ROOT (see the env
+        # block above).
+        ":fixture_sources",
+    ],
+    visibility = ["//visibility:private"],
+)
+
+filegroup(
+    name = "assets",
+    srcs = glob(["assets/**"]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "fixture_sources",
+    srcs = glob(["src/**"]),
+    visibility = ["//visibility:public"],
+)
