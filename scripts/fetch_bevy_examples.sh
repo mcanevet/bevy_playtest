@@ -529,24 +529,28 @@ seed_fixture_git() {
     git -C "$dir" init -q
     git -C "$dir" config user.email "fixture@example.invalid"
     git -C "$dir" config user.name "Bevy Upstream"
-    local -A authors=(
-        [1]="Alice Author"
-        [2]="Bob Builder"
-        [3]="Carol Contributor"
-    )
-    local marker="${dir}/.fixture_repo_marker"
-    : > "$marker"
-    git -C "$dir" add -f "$marker"
+    # Plain indexed arrays, NOT `local -A`: macOS still ships bash 3.2,
+    # where associative arrays abort the script mid-seeding and the
+    # commits silently land with empty authors.
+    local authors=("Alice Author" "Bob Builder" "Carol Contributor")
+    local marker=".fixture_repo_marker"
+    : > "${dir}/${marker}"
     local i
-    for i in 1 2 3; do
-        echo "v$i" >> "$marker"
+    for i in 0 1 2; do
+        local n=$((i + 1))
+        echo "v$n" >> "${dir}/${marker}"
+        # Pathspecs must be DIR-relative (`git -C "$dir"` resolves them
+        # against $dir, not the CWD — the bug that failed the first CI
+        # run), and the add must happen INSIDE the loop: each commit
+        # needs the marker's new content staged.
+        git -C "$dir" add -f "$marker"
         GIT_AUTHOR_DATE="2024-01-01T00:00:00Z" \
         GIT_COMMITTER_DATE="2024-01-01T00:00:00Z" \
         GIT_AUTHOR_NAME="${authors[$i]}" \
-        GIT_AUTHOR_EMAIL="author$i@example.invalid" \
+        GIT_AUTHOR_EMAIL="author$n@example.invalid" \
         GIT_COMMITTER_NAME="${authors[$i]}" \
-        GIT_COMMITTER_EMAIL="author$i@example.invalid" \
-        git -C "$dir" commit -qm "fixture commit $i"
+        GIT_COMMITTER_EMAIL="author$n@example.invalid" \
+        git -C "$dir" commit -qm "fixture commit $n"
     done
     echo "  Seeded: ${dir}/.git (3 pinned-author commits)"
 }
