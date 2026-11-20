@@ -111,8 +111,10 @@ on more than its seed:
 
 - **OS-seeded randomness** (mines): the minefield is shuffled with
   `rand::rng()`, seeded from the operating system, so every process
-  gets a different board. mines targets M2 and M4 therefore vary from
-  run to run; judge them with a margin or more seeds.
+  gets a different board, so mines targets M2 and M4 varied from run to
+  run in this baseline. On Linux the battery now makes this repeatable
+  per seed (a preloaded `getrandom()` shim; see the README), so later
+  baselines no longer carry this noise.
   (alien_cake_addict only seeds its RNG when `GITHUB_ACTIONS=true`;
   its targets are passive, so it matched anyway.)
 - **Background loading** (loading_screen): a level is ready once its
@@ -120,10 +122,10 @@ on more than its seed:
   On CI's software renderer that spans more frames (median 144 vs 91
   locally), so frame-based timings shift with machine speed.
 
-Both must be addressed before replay-based exploration can work:
-deterministic randomness in test builds (e.g. a custom `getrandom`
-backend fed from the scenario seed) and a settle step that does not
-advance frames while assets or pipelines are still loading.
+Both had to be addressed before replay-based exploration can work. The
+first is done for Linux (the `getrandom()` shim); the second remains: a
+settle step that does not advance frames while assets or pipelines are
+still loading.
 
 ## Caveats
 
