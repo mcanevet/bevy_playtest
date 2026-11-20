@@ -118,7 +118,7 @@ fn resource_exclusion_predicate_works() {
     ));
     assert!(!resource_is_excluded("game::Score", "Score"));
     assert!(!resource_is_excluded(
-        "state_digest::GameScore",
+        concat!(module_path!(), "::GameScore"),
         "GameScore"
     ));
 }
@@ -132,7 +132,7 @@ fn snapshot_captures_resource_values() {
 
     // Verify GameScore appears in the snapshot keyed by FULL type path
     // (distinct resources can share a short name).
-    let key = "state_digest::GameScore";
+    let key = concat!(module_path!(), "::GameScore");
     let score_entry = snapshot.resources.get(key);
     assert!(
         score_entry.is_some(),
@@ -176,7 +176,9 @@ fn reflected_marker_type_swap_changes_digest_at_constant_structure() {
     // the entity to the `Powerup` type by FULL path.
     let snapshot_before = bevy_playtest::digest::build_snapshot(&mut world);
     assert_eq!(
-        snapshot_before.marker_counts.get("state_digest::Powerup"),
+        snapshot_before
+            .marker_counts
+            .get(concat!(module_path!(), "::Powerup")),
         Some(&1),
         "marker_counts must count the reflected marker by full type path; got {:?}",
         snapshot_before.marker_counts
@@ -189,12 +191,16 @@ fn reflected_marker_type_swap_changes_digest_at_constant_structure() {
 
     let snapshot_after = bevy_playtest::digest::build_snapshot(&mut world);
     assert_eq!(
-        snapshot_after.marker_counts.get("state_digest::Powerup"),
+        snapshot_after
+            .marker_counts
+            .get(concat!(module_path!(), "::Powerup")),
         Some(&0),
         "removed marker must no longer count entities"
     );
     assert_eq!(
-        snapshot_after.marker_counts.get("state_digest::Cursed"),
+        snapshot_after
+            .marker_counts
+            .get(concat!(module_path!(), "::Cursed")),
         Some(&1),
         "inserted marker must be counted by full type path; got {:?}",
         snapshot_after.marker_counts
