@@ -2,7 +2,7 @@
 //! writes ANY file — the platform-neutral stand-in for "a game that
 //! exits without reporting" (no reliance on PATH-resolved `true`,
 //! which is unix-only and left the stale-report gate unpinned on
-//! Windows). See tests/probe_pool.rs:
+//! Windows). See tests/it/probe_pool.rs:
 //! stale_report_cannot_masquerade_as_a_fresh_success.
 //!
 //! Deliberately NOT an `App` run: a plugin-less Bevy app under the

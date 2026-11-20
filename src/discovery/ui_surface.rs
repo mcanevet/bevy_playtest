@@ -872,7 +872,7 @@ mod tracker_tests {
         // path had ZERO unit coverage (bare-World tests can never
         // resolve geometry — ComputedUiTargetCamera is only written
         // by UiPlugin's prepare systems). Bootstrap the same
-        // headless layout app as tests/ui_surface.rs (dev-deps make
+        // headless layout app as tests/it/ui_surface.rs (dev-deps make
         // the text/asset/image/mesh stacks legal in lib tests), so
         // the mirroring contract is pinned with a real center —
         // and the despawn path visibly EMPTIES the target vec

@@ -49,8 +49,7 @@
 #![cfg(feature = "takeover")]
 
 // Shared test harness (run-slot serialization)
-#[path = "common/mod.rs"]
-mod common;
+use crate::common;
 
 use bevy::prelude::*;
 use bevy_playtest::plugin::{exit_code, ENV_REPORT, ENV_SCENARIO};

@@ -1,5 +1,5 @@
 //! Cwd/HOME-isolation child for the BATTERY regression test
-//! (tests/battery.rs: battery_child_runs_in_its_own_cwd_and_home):
+//! (tests/it/battery.rs: battery_child_runs_in_its_own_cwd_and_home):
 //! self-checks its working directory and HOME, writes two small
 //! marker files — one RELATIVE to its working directory, one under
 //! its HOME — then exits.

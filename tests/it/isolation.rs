@@ -9,8 +9,7 @@
 //! after a run ends are dropped). These tests pin that contract.
 
 // Shared test harness (run-slot serialization)
-#[path = "common/mod.rs"]
-mod common;
+use crate::common;
 
 use bevy_app::App;
 use bevy_playtest::run_scenario;

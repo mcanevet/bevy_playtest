@@ -3,8 +3,7 @@
 //! classify as gating (not informational).
 
 // Shared test harness (run-slot serialization)
-#[path = "common/mod.rs"]
-mod common;
+use crate::common;
 
 use bevy_app::prelude::*;
 use bevy_playtest::driver::run_scenario;

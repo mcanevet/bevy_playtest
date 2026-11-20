@@ -28,7 +28,7 @@
 
 #![cfg(feature = "takeover")]
 
-mod common;
+use crate::common;
 
 use std::path::PathBuf;
 

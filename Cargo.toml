@@ -144,22 +144,6 @@ bevy_image = "0.20.1"
 bevy_mesh = "0.20.1"
 bevy_utils = "0.20.1"
 
-# The render_liveness integration test drives the bevy_camera/
-# bevy_render-typed API surface, which only exists under the
-# feature — cargo SKIPS the target (rather than failing to build
-# it) when the feature is off, keeping plain `cargo test` green.
-[[test]]
-name = "render_liveness"
-required-features = ["render-liveness"]
-
-# The screen_liveness integration test drives the capture rig
-# (bevy_asset/bevy_image/bevy_camera/bevy_render API surface) and,
-# for its GPU-positive cases, the real renderer — both only exist
-# under the feature.
-[[test]]
-name = "screen_liveness"
-required-features = ["screen-liveness"]
-
 [[bin]]
 name = "takeover_demo"
 path = "src/bin/takeover_demo.rs"
