@@ -70,11 +70,17 @@ canonical identity (`nodes_in_bounds:entity`) that the gate
 actually compares; `healed:` notes likewise print the canonical
 key, not what you wrote.
 
-Every sweep member is reproducible standalone — the sweep is just a
-fan-out of ordinary battery runs with a seed override. The seed var
-needs its scenario alongside: on its own it leaves `PlaytestPlugin`
-inert, so the run would neither reproduce the member nor gate
-anything:
+Every sweep member is an ordinary battery run with a seed override,
+so you reproduce one exactly with a single battery run: the same
+binary and scenario with `seed_override: Some(43)`. The battery then
+applies the same source-scan key layering and seeds the deterministic
+OS randomness the same way.
+
+For a quick look by hand, the override also travels to the game via
+`BEVY_PLAYTEST_SEED`. This is only an approximation: it runs without
+the battery's key layering and with real OS randomness, so a finding
+that depends on either may not show up. The seed var needs its
+scenario alongside (on its own it leaves `PlaytestPlugin` inert):
 
 ```console
 $ BEVY_PLAYTEST_SCENARIO=battery BEVY_PLAYTEST_SEED=43 cargo run --features playtest --bin my_game
@@ -85,6 +91,11 @@ scan-layered scenario variants. A non-`u64`
 value aborts with the config-error exit code (3) — a typo'd seed
 that silently ran the declared seed instead would be the worst
 failure mode for a repro knob.
+
+Panics are never recorded: every panic is reported against the target
+`world`, so one recorded line would mute every later, different panic.
+A member that panics always gates. Likewise, a recorded
+`log_error:<module>` covers every error logged by that module.
 
 ## Healing
 

@@ -178,6 +178,21 @@ fn rejects_duplicate_invariant_names() {
 }
 
 #[test]
+fn rejects_invariant_names_that_break_regression_lines() {
+    // The name is the finding target, half of a regression-file line:
+    // '#' starts a comment and a line break splits the line.
+    for name in ["hp<=100 #boss", "two\nlines", "cr\r"] {
+        let mut json = minimal_scenario("chaos");
+        json["invariants"] = serde_json::json!([
+            { "name": name, "rule": "nodes_in_bounds" }
+        ]);
+        let s = parse(json);
+        let err = validate_scenario(&s).unwrap_err().to_string();
+        assert!(err.contains("may not contain '#'"), "{name:?}: {err}");
+    }
+}
+
+#[test]
 fn rejects_entity_shaped_nodes_in_bounds_invariant_names() {
     // The invariant NAME is the finding's TARGET, and the sweep's
     // fingerprint layer canonicalizes entity-debug-shaped
