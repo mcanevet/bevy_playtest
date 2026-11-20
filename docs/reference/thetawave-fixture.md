@@ -70,8 +70,13 @@ this fixture exercises.
 surviving fetch regeneration):
 
 - **Battery** — the standard zero-config verdict run via
-  `battery::run_and_expect_clean`: the game boots headless under
-  takeover, all oracles stay clean, zero gating findings.
+  `battery::run_and_expect_findings`: the game boots headless under
+  takeover, and two findings are pinned: the stock demo's
+  informational camera dithering warning, and a churning-but-dead
+  `stalled_progress` (on the battery seed the bot ends up where
+  animations churn while no verifiable state changes). Anything else
+  fails. The second pin depends on where exploration leads, so a
+  change to the explorer can add or remove it.
 - **Reader demo** — a deterministic `MENU_DRIVE_SCENARIO`
   (Enter/arrows/WASD/Escape script) driving the real game binary,
   asserting from report data only:

@@ -29,8 +29,10 @@
 //!    interactivity, not a precise widget role, in this iteration.
 //! 5. Pointer-event observers — `world.observers()` exposes the
 //!    centralized observer storage; watching `PointerClick`,
-//!    `PointerPress`, or `PointerRelease` on a *specific entity* is a
-//!    declaration of click-responsiveness, even with no markers.
+//!    `PointerPress`, `PointerRelease`, or a drag event (`DragStart`,
+//!    `Drag`, `DragEnd`, `DragDrop`) on a *specific entity* is a
+//!    declaration of click- or drag-responsiveness, even with no
+//!    markers.
 //!
 //! Geometry mirrors `bevy_ui::picking_backend::ui_picking` (verified
 //! against 0.20.1): `UiGlobalTransform` is in *viewport space of the
@@ -90,7 +92,10 @@ use bevy_ecs::prelude::*;
 use bevy_ecs::query::QueryState;
 use bevy_input_focus::tab_navigation::TabIndex;
 use bevy_math::Vec2;
-use bevy_picking::events::{PointerClick, PointerPress, PointerRelease};
+use bevy_picking::events::{
+    PointerClick, PointerDrag, PointerDragDrop, PointerDragEnd, PointerDragStart, PointerPress,
+    PointerRelease,
+};
 use bevy_picking::Pickable;
 use bevy_ui::{
     prelude::AccessibleLabel, widget::Text, ComputedNode, ComputedUiTargetCamera,
@@ -119,6 +124,16 @@ pub enum InteractableKind {
     /// (`PointerClick`, `PointerPress`, ...). Declarative by
     /// construction: someone wrote code reacting to clicks here.
     Observed,
+    /// Carries no declaration, but shares its archetype with a node
+    /// whose click the game reacted to (explore mode learns these from
+    /// random clicks, e.g. grid cells handled by one global observer).
+    Learned,
+    /// Has an entity observer for `DragStart`, `Drag` or `DragEnd`:
+    /// dragging it does something.
+    Draggable,
+    /// Has an entity observer for `DragDrop`: dropping onto it does
+    /// something.
+    DropTarget,
 }
 
 impl InteractableKind {
@@ -130,6 +145,9 @@ impl InteractableKind {
             InteractableKind::Focusable => "focusable",
             InteractableKind::Accessible => "accessible",
             InteractableKind::Observed => "observed",
+            InteractableKind::Learned => "learned",
+            InteractableKind::Draggable => "draggable",
+            InteractableKind::DropTarget => "drop_target",
         }
     }
 }
@@ -244,24 +262,50 @@ pub struct UiSurfaceResult {
     pub notes: Vec<String>,
 }
 
-/// The pointer events whose observers declare click-responsiveness.
+/// The pointer events whose observers declare click- or
+/// drag-responsiveness.
 ///
-/// Deliberately only press/click/release: hover/scroll observers mark
+/// Deliberately only press/click/release and drag: hover/scroll observers mark
 /// attention-tracking, not actionability — the distinction matters
 /// because the enumeration's purpose is answering "what can I DO".
 fn pointer_observers(world: &World) -> HashMap<Entity, usize> {
-    let mut result = HashMap::new();
     let pointer_event_keys = [
         world.event_key::<PointerClick>(),
         world.event_key::<PointerPress>(),
         world.event_key::<PointerRelease>(),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>();
+        world.event_key::<PointerDragStart>(),
+        world.event_key::<PointerDrag>(),
+        world.event_key::<PointerDragEnd>(),
+        world.event_key::<PointerDragDrop>(),
+    ];
+    entity_observers(world, pointer_event_keys)
+}
 
+/// Entities with an entity-scoped observer for dragging them.
+fn drag_observers(world: &World) -> HashSet<Entity> {
+    let keys = [
+        world.event_key::<PointerDragStart>(),
+        world.event_key::<PointerDrag>(),
+        world.event_key::<PointerDragEnd>(),
+    ];
+    entity_observers(world, keys).into_keys().collect()
+}
+
+/// Entities with an entity-scoped observer for a drop onto them.
+fn drop_observers(world: &World) -> HashSet<Entity> {
+    entity_observers(world, [world.event_key::<PointerDragDrop>()])
+        .into_keys()
+        .collect()
+}
+
+/// Entity -> number of entity-scoped observers for any of `keys`.
+fn entity_observers<const N: usize>(
+    world: &World,
+    keys: [Option<bevy_ecs::event::EventKey>; N],
+) -> HashMap<Entity, usize> {
+    let mut result = HashMap::new();
     let observers = world.observers();
-    for key in pointer_event_keys {
+    for key in keys.into_iter().flatten() {
         let Some(cached) = observers.try_get_observers(key) else {
             continue;
         };
@@ -318,8 +362,49 @@ fn role_for_entity(world: &World, entity: Entity) -> WidgetRole {
 /// [`UiSurfaceResult::complete`] for what the enumeration provably
 /// saw — and the module docs for what it provably did not.
 pub fn enumerate_ui(world: &World) -> UiSurfaceResult {
+    enumerate_ui_with(world, &LearnedArchetypes::default())
+}
+
+/// Archetype key of a node: its component ids, minus the hierarchy
+/// links (`ChildOf`, `Children`) and picking's own hover state
+/// (`PickingInteraction`), which vary between otherwise identical
+/// nodes (a flagged mines tile has a child, a plain one does not).
+/// Stable within one run only.
+pub type ArchetypeKey = Vec<usize>;
+
+/// Archetypes learned to respond to clicks (see
+/// [`InteractableKind::Learned`]).
+pub type LearnedArchetypes = std::collections::BTreeSet<ArchetypeKey>;
+
+/// The [`ArchetypeKey`] of `entity`, if it exists.
+pub fn archetype_key(world: &World, entity: Entity) -> Option<ArchetypeKey> {
+    let entity_ref = world.get_entity(entity).ok()?;
+    let skip = [
+        world.component_id::<ChildOf>(),
+        world.component_id::<Children>(),
+        // Added by picking to nodes the pointer has hovered: without
+        // this, a key learned from a hovered node would only match
+        // nodes the cursor happened to pass over.
+        world.component_id::<bevy_picking::hover::PickingInteraction>(),
+    ];
+    let mut key: Vec<usize> = entity_ref
+        .archetype()
+        .components()
+        .iter()
+        .filter(|&&id| !skip.contains(&Some(id)))
+        .map(|id| id.index())
+        .collect();
+    key.sort_unstable();
+    Some(key)
+}
+
+/// [`enumerate_ui`], plus every laid-out node whose archetype is in
+/// `learned`, reported with [`InteractableKind::Learned`].
+pub fn enumerate_ui_with(world: &World, learned: &LearnedArchetypes) -> UiSurfaceResult {
     let mut result = UiSurfaceResult::default();
     let observed = pointer_observers(world);
+    let draggable = drag_observers(world);
+    let droppable = drop_observers(world);
 
     let focused: Option<Entity> = world
         .get_resource::<bevy_input_focus::InputFocus>()
@@ -383,7 +468,33 @@ pub fn enumerate_ui(world: &World) -> UiSurfaceResult {
     declared.extend(tabindex_entities.iter().copied());
     declared.extend(a11y_entities.iter().copied());
     declared.extend(observed.keys().copied());
+    let learned_entities: HashSet<Entity> = if learned.is_empty() {
+        HashSet::new()
+    } else {
+        QueryState::<Entity, With<ComputedNode>>::try_new(world)
+            .map(|mut state| {
+                state
+                    .iter(world)
+                    // Same archetype, but made click-through
+                    // (`Pickable::IGNORE`): not a target, as above.
+                    .filter(|&e| world.get::<Pickable>(e).is_none_or(|p| p.is_hoverable))
+                    .filter(|&e| archetype_key(world, e).is_some_and(|k| learned.contains(&k)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    declared.extend(learned_entities.iter().copied());
 
+    let sets = DeclarationSets {
+        widget: &widget_entities,
+        pickable: &pickable_entities,
+        tabindex: &tabindex_entities,
+        a11y: &a11y_entities,
+        observed: &observed,
+        learned: &learned_entities,
+        draggable: &draggable,
+        droppable: &droppable,
+    };
     let mut viewport_min_cache: HashMap<Entity, Option<Vec2>> = HashMap::new();
     let mut interactables: Vec<Interactable> = Vec::with_capacity(declared.len());
 
@@ -398,14 +509,7 @@ pub fn enumerate_ui(world: &World) -> UiSurfaceResult {
             // Declared but not a laid-out UI node (e.g. a world-space
             // entity with an observer). Report it as a surface point
             // with unknown geometry.
-            let kinds = empty_kinds_for(
-                entity,
-                &widget_entities,
-                &pickable_entities,
-                &tabindex_entities,
-                &a11y_entities,
-                &observed,
-            );
+            let kinds = sets.kinds(entity);
             interactables.push(Interactable {
                 entity,
                 kinds,
@@ -419,14 +523,7 @@ pub fn enumerate_ui(world: &World) -> UiSurfaceResult {
             continue;
         };
         let Some(transform) = world.get::<UiGlobalTransform>(entity) else {
-            let kinds = empty_kinds_for(
-                entity,
-                &widget_entities,
-                &pickable_entities,
-                &tabindex_entities,
-                &a11y_entities,
-                &observed,
-            );
+            let kinds = sets.kinds(entity);
             interactables.push(Interactable {
                 entity,
                 kinds,
@@ -454,14 +551,7 @@ pub fn enumerate_ui(world: &World) -> UiSurfaceResult {
         }
 
         let role = role_for_entity(world, entity);
-        let kinds = empty_kinds_for(
-            entity,
-            &widget_entities,
-            &pickable_entities,
-            &tabindex_entities,
-            &a11y_entities,
-            &observed,
-        );
+        let kinds = sets.kinds(entity);
 
         // Resolve window-space rect: node position is in target
         // camera viewport space; add the viewport offset. Both fields
@@ -587,6 +677,8 @@ pub(crate) struct UiSurfaceTracker {
     /// Latest enumeration snapshot (what the report's `ui_surface`
     /// field will carry).
     snapshot: Option<UiSurfaceResult>,
+    /// Recapture on the next `observe` regardless of the interval.
+    forced: bool,
     /// Entity ids of the last snapshot, for diffing.
     last_ids: HashSet<Entity>,
     /// Delta notes accumulated across recaptures (bounded).
@@ -598,6 +690,14 @@ pub(crate) struct UiSurfaceTracker {
 }
 
 impl UiSurfaceTracker {
+    /// Recapture on the next [`Self::observe`] call, off the interval:
+    /// after a state transition the screen is new, and a bot that
+    /// leaves it within half a second would otherwise only ever see the
+    /// previous screen's targets.
+    pub(crate) fn request_recapture(&mut self) {
+        self.forced = true;
+    }
+
     /// Tick interval between recaptures: half a second of
     /// simulated time, minimum 1 tick. Twice a second catches
     /// menu/dialog opens without re-walking the UI tree every
@@ -617,6 +717,7 @@ impl UiSurfaceTracker {
         tick: u64,
         interval: u64,
         click_targets: &mut Vec<Vec2>,
+        learned: &LearnedArchetypes,
     ) {
         debug_assert!(interval > 0, "interval must be >= 1");
         let boundary = tick.is_multiple_of(interval);
@@ -628,11 +729,20 @@ impl UiSurfaceTracker {
         // observing from tick 1 with interval 2 would silently skip
         // its first capture. Not a bug-fix for a live path; intent.
         let is_first = self.snapshot.is_none();
-        if !boundary && !is_first {
+        if !boundary && !is_first && !self.forced {
             return;
         }
-        let result = enumerate_ui(world);
-        let ids: HashSet<Entity> = result.interactables.iter().map(|e| e.entity).collect();
+        self.forced = false;
+        let result = enumerate_ui_with(world, learned);
+        // Deltas track what the game declares; learned targets are the
+        // explorer's guesses and stay out of the report (see
+        // `into_result`).
+        let ids: HashSet<Entity> = result
+            .interactables
+            .iter()
+            .filter(|e| !is_learned_only(e))
+            .map(|e| e.entity)
+            .collect();
         if let Some(_prev) = &self.snapshot {
             // Diff against the previous snapshot's entity set.
             let prev = &self.last_ids;
@@ -646,6 +756,30 @@ impl UiSurfaceTracker {
         click_targets.extend(result.interactables.iter().filter_map(|e| e.center));
         self.last_ids = ids;
         self.snapshot = Some(result);
+    }
+
+    /// Whether each current click target (same order as
+    /// [`Self::target_ids`]) can be dragged.
+    pub(crate) fn target_draggable(&self) -> Vec<bool> {
+        self.targets_with(InteractableKind::Draggable)
+    }
+
+    /// Whether each current click target (same order as
+    /// [`Self::target_ids`]) accepts drops.
+    pub(crate) fn target_drop(&self) -> Vec<bool> {
+        self.targets_with(InteractableKind::DropTarget)
+    }
+
+    fn targets_with(&self, kind: InteractableKind) -> Vec<bool> {
+        let Some(snapshot) = &self.snapshot else {
+            return Vec::new();
+        };
+        snapshot
+            .interactables
+            .iter()
+            .filter(|e| e.center.is_some())
+            .map(|e| e.kinds.contains(&kind))
+            .collect()
     }
 
     /// Stable action names for the current click targets, in the same
@@ -673,11 +807,18 @@ impl UiSurfaceTracker {
                     .as_deref()
                     .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
                     .unwrap_or_default();
-                if label.is_empty() {
+                let name = if label.is_empty() {
                     let role = serde_json::to_string(&e.role).unwrap_or_default();
                     format!("<{}>", role.trim_matches('"'))
                 } else {
                     label
+                };
+                // Known only through learning: marked, so the explorer
+                // can keep them out of the screen identity.
+                if e.kinds == [InteractableKind::Learned] {
+                    format!("{}{name}", crate::explorer::LEARNED_PREFIX)
+                } else {
+                    name
                 }
             })
             .collect();
@@ -698,7 +839,9 @@ impl UiSurfaceTracker {
         for &i in &order {
             let n = seen.entry(base[i].as_str()).or_default();
             *n += 1;
-            let unlabeled = base[i].starts_with('<');
+            let unlabeled = base[i]
+                .trim_start_matches(crate::explorer::LEARNED_PREFIX)
+                .starts_with('<');
             names[i] = match (*n, unlabeled) {
                 (1, false) => base[i].clone(),
                 (n, _) => format!("{}#{n}", base[i]),
@@ -755,6 +898,20 @@ impl UiSurfaceTracker {
         let suppressed = self.suppressed;
         let deltas = std::mem::take(&mut self.notes);
         self.snapshot.map(|mut snap| {
+            let before = snap.interactables.len();
+            snap.interactables.retain(|e| !is_learned_only(e));
+            let learned = before - snap.interactables.len();
+            // Declared entries that were also learned keep only their
+            // declarations: the report says what the game declares.
+            for e in &mut snap.interactables {
+                e.kinds.retain(|k| *k != InteractableKind::Learned);
+            }
+            if learned > 0 {
+                snap.notes.push(format!(
+                    "{learned} learned click targets left out: explore-mode \
+                     guesses, not declarations (see exploration.learned_targets)"
+                ));
+            }
             if suppressed > 0 {
                 snap.notes.push(format!(
                     "ui surface deltas: {suppressed} more delta notes \
@@ -769,32 +926,53 @@ impl UiSurfaceTracker {
     }
 }
 
-/// Kinds for an entity given the pre-collected signal sets.
-fn empty_kinds_for(
-    entity: Entity,
-    widget_entities: &HashSet<Entity>,
-    pickable_entities: &HashSet<Entity>,
-    tabindex_entities: &HashSet<Entity>,
-    a11y_entities: &HashSet<Entity>,
-    observed: &HashMap<Entity, usize>,
-) -> Vec<InteractableKind> {
-    let mut kinds = Vec::new();
-    if pickable_entities.contains(&entity) {
-        kinds.push(InteractableKind::Pickable);
+/// Known only through explore-mode learning, nothing declared.
+fn is_learned_only(e: &Interactable) -> bool {
+    e.kinds == [InteractableKind::Learned]
+}
+
+/// Every declaration signal found, by kind.
+struct DeclarationSets<'a> {
+    widget: &'a HashSet<Entity>,
+    pickable: &'a HashSet<Entity>,
+    tabindex: &'a HashSet<Entity>,
+    a11y: &'a HashSet<Entity>,
+    observed: &'a HashMap<Entity, usize>,
+    learned: &'a HashSet<Entity>,
+    draggable: &'a HashSet<Entity>,
+    droppable: &'a HashSet<Entity>,
+}
+
+impl DeclarationSets<'_> {
+    /// The kinds `entity` is declared interactable by.
+    fn kinds(&self, entity: Entity) -> Vec<InteractableKind> {
+        let mut kinds = Vec::new();
+        if self.pickable.contains(&entity) {
+            kinds.push(InteractableKind::Pickable);
+        }
+        if self.widget.contains(&entity) {
+            kinds.push(InteractableKind::Widget);
+        }
+        if self.tabindex.contains(&entity) {
+            kinds.push(InteractableKind::Focusable);
+        }
+        if self.a11y.contains(&entity) {
+            kinds.push(InteractableKind::Accessible);
+        }
+        if self.observed.contains_key(&entity) {
+            kinds.push(InteractableKind::Observed);
+        }
+        if self.learned.contains(&entity) {
+            kinds.push(InteractableKind::Learned);
+        }
+        if self.draggable.contains(&entity) {
+            kinds.push(InteractableKind::Draggable);
+        }
+        if self.droppable.contains(&entity) {
+            kinds.push(InteractableKind::DropTarget);
+        }
+        kinds
     }
-    if widget_entities.contains(&entity) {
-        kinds.push(InteractableKind::Widget);
-    }
-    if tabindex_entities.contains(&entity) {
-        kinds.push(InteractableKind::Focusable);
-    }
-    if a11y_entities.contains(&entity) {
-        kinds.push(InteractableKind::Accessible);
-    }
-    if observed.contains_key(&entity) {
-        kinds.push(InteractableKind::Observed);
-    }
-    kinds
 }
 
 /// Best-effort label: `AccessibleLabel` > descendant `Text` (one
@@ -902,7 +1080,7 @@ mod tracker_tests {
         let world = test_world();
         let mut tracker = UiSurfaceTracker::default();
         let mut targets: Vec<Vec2> = Vec::new();
-        tracker.observe(&world, 7, 30, &mut targets);
+        tracker.observe(&world, 7, 30, &mut targets, &Default::default());
         assert!(tracker.snapshot.is_some(), "first observe must capture");
     }
 
@@ -911,19 +1089,19 @@ mod tracker_tests {
         let world = test_world();
         let mut tracker = UiSurfaceTracker::default();
         let mut targets: Vec<Vec2> = Vec::new();
-        tracker.observe(&world, 0, 30, &mut targets);
+        tracker.observe(&world, 0, 30, &mut targets, &Default::default());
         // Mutate the world BETWEEN captures: the tracker must not
         // notice it off-boundary (that's the whole point of the
         // cadence — a full archetype sweep every frame would be
         // needlessly expensive).
         let mut world = world;
         let spawned = spawn_pickable(&mut world);
-        tracker.observe(&world, 1, 30, &mut targets);
+        tracker.observe(&world, 1, 30, &mut targets, &Default::default());
         assert!(
             tracker.last_ids.is_empty(),
             "off-boundary observe must not recapture"
         );
-        tracker.observe(&world, 30, 30, &mut targets);
+        tracker.observe(&world, 30, 30, &mut targets, &Default::default());
         assert_eq!(
             tracker.last_ids,
             HashSet::from([spawned]),
@@ -932,16 +1110,32 @@ mod tracker_tests {
     }
 
     #[test]
+    fn requested_recapture_happens_off_boundary_once() {
+        let mut world = test_world();
+        let mut tracker = UiSurfaceTracker::default();
+        let mut targets: Vec<Vec2> = Vec::new();
+        tracker.observe(&world, 0, 30, &mut targets, &Default::default());
+        let spawned = spawn_pickable(&mut world);
+        tracker.request_recapture();
+        tracker.observe(&world, 5, 30, &mut targets, &Default::default());
+        assert_eq!(tracker.last_ids, HashSet::from([spawned]));
+        // The request is consumed: the next off-boundary call is idle.
+        let later = spawn_pickable(&mut world);
+        tracker.observe(&world, 6, 30, &mut targets, &Default::default());
+        assert!(!tracker.last_ids.contains(&later));
+    }
+
+    #[test]
     fn added_and_removed_entities_become_notes() {
         let mut world = test_world();
         let a = spawn_pickable(&mut world);
         let mut tracker = UiSurfaceTracker::default();
         let mut targets: Vec<Vec2> = Vec::new();
-        tracker.observe(&world, 0, 30, &mut targets);
+        tracker.observe(&world, 0, 30, &mut targets, &Default::default());
         // Remove `a`, add `b`.
         world.despawn(a);
         let b = spawn_pickable(&mut world);
-        tracker.observe(&world, 30, 30, &mut targets);
+        tracker.observe(&world, 30, 30, &mut targets, &Default::default());
         assert!(tracker
             .notes
             .iter()
@@ -975,14 +1169,14 @@ mod tracker_tests {
         let mut world = test_world();
         let mut tracker = UiSurfaceTracker::default();
         let mut targets: Vec<Vec2> = Vec::new();
-        tracker.observe(&world, 0, 1, &mut targets);
+        tracker.observe(&world, 0, 1, &mut targets, &Default::default());
         // Interval 1 => every tick is a boundary; each pair of
         // mutations generates 2 delta notes (added + removed).
         let mut pairs_spawned: Vec<Entity> = Vec::new();
         for tick in 1..=(MAX_SURFACE_DELTA_NOTES as u64 + 10) * 2 {
             let e = spawn_pickable(&mut world);
             pairs_spawned.push(e);
-            tracker.observe(&world, tick, 1, &mut targets);
+            tracker.observe(&world, tick, 1, &mut targets, &Default::default());
         }
         // More than MAX_SURFACE_DELTA_NOTES boundaries fired with
         // deltas: individual notes cap out, suppressed > 0.
@@ -1097,7 +1291,7 @@ mod tracker_tests {
         let mut targets: Vec<Vec2> = Vec::new();
         {
             let world = app.world();
-            tracker.observe(world, 0, 2, &mut targets);
+            tracker.observe(world, 0, 2, &mut targets, &Default::default());
         }
         assert_eq!(
             targets.len(),
@@ -1113,7 +1307,7 @@ mod tracker_tests {
         // Off-boundary observe must leave targets untouched.
         {
             let world = app.world();
-            tracker.observe(world, 1, 2, &mut targets);
+            tracker.observe(world, 1, 2, &mut targets, &Default::default());
         }
         assert_eq!(
             targets.len(),
@@ -1127,7 +1321,7 @@ mod tracker_tests {
         app.world_mut().despawn(node);
         {
             let world = app.world();
-            tracker.observe(world, 2, 2, &mut targets);
+            tracker.observe(world, 2, 2, &mut targets, &Default::default());
         }
         assert!(
             targets.is_empty(),

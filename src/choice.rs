@@ -37,6 +37,10 @@ pub enum ChoiceKind {
     /// frames. Deliberately NOT [`ChoiceKind::Key`]: the action log
     /// filters on `Key`, and a duration draw is not a key press.
     KeyHoldFrames,
+    /// An explore-mode modifier+key combo draw; the label is
+    /// `Modifier+Key` (e.g. `ControlLeft+KeyS`), logged as `key_combo`
+    /// so `key_press` entries keep canonical single-key labels.
+    KeyCombo,
 }
 
 /// One recorded random draw.
