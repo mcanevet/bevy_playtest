@@ -36,7 +36,7 @@ game's actual `InputMap`s and that a driven action reaches
   `storage` feature — upstream parity, excluded from the playtest
   battery; gameplay unchanged. The port itself lives in the
   [mcanevet/thetawave](https://github.com/mcanevet/thetawave) fork
-  (branch `bevy-0.20`) and is cloned into `fixtures/thetawave/` by
+  (branch `bevy-0.20-pause-sound`) and is cloned into `fixtures/thetawave/` by
   `scripts/fetch_bevy_examples.sh` at the pinned commit SHA — same
   pattern as the showcase games, except the remote is our fork
   because the port is ours.
@@ -52,7 +52,9 @@ either. The port substitutes, without touching gameplay code:
 - **Placeholder art** — ~55 1×1 PNGs standing in for the
   premium S3-only textures, at the paths the game's asset lists name.
 - **Silent audio** — one tiny silent WAV standing in for every real
-  sound file, with all 30 dynamic-asset keys repointed at it.
+  sound file, with all 30 dynamic-asset keys repointed at it, plus a
+  copy at `sounds/menu_input_success.wav`, which the pause menu loads
+  by path rather than through the asset collection.
 - **Added font** — `fonts/Lunchds.ttf` ("Lunchtime Doubly So" by
   codeman38, <https://zone38.net/>, a 100%-free dafont.com font whose
   license asks for credit; credit hereby given). Absent from the
