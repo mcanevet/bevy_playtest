@@ -181,8 +181,12 @@ jobs:
             . -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      # No --locked for the fixtures workspace: its lockfile records
+      # bevy_playtest's own version (path dependency), which every
+      # release-plz bump changes without touching fixtures/Cargo.lock.
+      # Cargo updates only that path entry; third-party pins still hold.
       - name: Build fixtures
-        run: cargo nextest run --locked --manifest-path fixtures/Cargo.toml --workspace --features playtest --test playtest --no-run
+        run: cargo nextest run --manifest-path fixtures/Cargo.toml --workspace --features playtest --test playtest --no-run
 
       # UX pin: plain `cargo test` on breakout must activate the
       # playtest feature and run the battery (not ignore it). Stays on
@@ -203,7 +207,7 @@ jobs:
       # watchdogs, so saturating the 4 vCPUs invites timeout flakes.
       - name: Battery tier (all fixtures, nextest)
         run: |
-          timeout 600 cargo nextest run --locked --manifest-path fixtures/Cargo.toml --workspace --features playtest --test playtest --profile ci --config-file .config/nextest.toml --test-threads 2
+          timeout 600 cargo nextest run --manifest-path fixtures/Cargo.toml --workspace --features playtest --test playtest --profile ci --config-file .config/nextest.toml --test-threads 2
 
       # Release-purity guard: plain bin builds must NOT resolve
       # bevy_playtest. This is a cargo check + tree walk, not a rebuild.
