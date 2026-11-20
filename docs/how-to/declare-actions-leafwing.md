@@ -2,10 +2,9 @@
 
 **Problem:** your game uses [Leafwing Input
 Manager](https://leafwing-studios.com/projects/leafwing-input-manager/)
-(LW) to declare its bindings in `InputMap`s, and you want discovery
-to read those declarations — so the report can distinguish "this key
-is dead wiring" from "this key is a live binding the sweep happened
-to miss", and so declared-but-dead bindings actually alarm.
+(LW) to declare its bindings in `InputMap`s, and you want the harness
+to read those declarations — so the report can tell dead wiring from
+live bindings, and so declared-but-dead bindings actually alarm.
 
 **Solution:** enable the `lw-reader` feature on `bevy_playtest`. The
 declared tier is pure reflection — the harness links **no** Leafwing
@@ -25,7 +24,7 @@ During a playtest run the reader snapshots every binding from every
 - **Multiple maps and multiple `Actionlike` types** coexist fine —
   each row records which map it came from (`action_map`) plus the
   action's variant label and the binding's input, normalized to the
-  same key spellings the sweep uses (e.g. `KeyJ`; mouse buttons join
+  same key spellings the scenario schema uses (e.g. `KeyJ`; mouse buttons join
   the same canonical mouse names — `Left`, `Right`, `Middle`,
   `Back`, `Forward` — the scenario space uses).
 - **RON-loaded maps work.** A map parsed from a RON string or asset
@@ -45,8 +44,7 @@ During a playtest run the reader snapshots every binding from every
   disabled.
 
 The declaration snapshot is one-shot: bindings the game builds or
-loads after the reader's snapshot frame are not enumerated (same
-class of limitation as the sweep's init-time binding read). Mid-run
+loads after the reader's snapshot frame are not enumerated. Mid-run
 REBINDS are covered by the same caveat from the other side: a key
 rebound after the snapshot keeps reporting its snapshot-time
 binding, so the report can disagree with the game's CURRENT keybinds
@@ -93,23 +91,19 @@ pressed, nor for fired-but-ignored actions, nor for a disabled
 action that went on to fire. Zero false taps is the channel's
 survival condition.
 
-## Reconciling against the sweep
+## Reconciliation on every run
 
-Since D1-d the reconcile is WIRED into the discovery sweep: every
-probe child's declared rows and tap stats aggregate into one
-run-equivalent evidence, and the resulting section rides the surface
-and the draft as an additive `lw` field — no caller-side assembly
-required. Games without Leafwing state (and `lw-reader`-off builds)
-simply omit it.
+The reconcile runs inside every `lw-reader` run: the run's declared
+rows and tap stats are joined at report time, and the result rides
+the report as `lw_reconciled` — no caller-side assembly required.
+Games without Leafwing state (and `lw-reader`-off builds) simply
+omit it.
 
-The section is a REPORT, not an edit: it joins the declared tier to
-the draft sweep's measured surface — declared inputs upgrade to
-`manager_pipeline_ok` when the tap corroborates — but the draft's
-own entries and findings stay untouched, including the
-`discovered_but_undeclared` residue on inputs the reader declared.
-Those inputs are listed in the section's `retracted_residue` for a
-CONSUMER to apply (the reader's source citation supersedes the raw
-finding when you fold the section into your curated surface); the
-draft itself keeps its findings ↔ live-inputs bijection intact.
-The determinism gate extends unchanged — identical runs produce
-byte-identical reconcile output.
+Declared inputs grade `manager_pipeline_ok` when the tap saw their
+action fire, `declared` otherwise. Proven-dead wiring raises a
+`declared_but_dead` finding; an action that fired but has no
+verified game effect carries a `context_unverified` note (wiring
+liveness is not game liveness); chord members only ever get notes.
+`retracted_residue` lists every declared input. The determinism gate
+extends unchanged — identical runs produce byte-identical reconcile
+output.

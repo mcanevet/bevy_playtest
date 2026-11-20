@@ -47,7 +47,6 @@
 //! `cargo build --release` compiles the game WITHOUT the feature: the
 //! plugin lines are cfg'd out and zero playtest bytes ship.
 
-use crate::discovery::flow;
 use crate::discovery::source_scan;
 use crate::plugin::ENV_REPORT;
 use crate::plugin::ENV_SCENARIO;
@@ -262,11 +261,6 @@ pub enum BatteryError {
     GpuMissing { exit_code: Option<i32> },
     /// A report was written but could not be parsed.
     ReportParse(String),
-    /// Opt-in input-surface discovery failed (probe matrix or setup).
-    /// Discovery is infrastructure, not a game finding — a game that
-    /// crashes under probing surfaces here, while a game that is
-    /// merely NONDETERMINISTIC still gets a (statistical) surface.
-    Discovery(String),
 }
 
 impl std::fmt::Display for BatteryError {
@@ -296,9 +290,6 @@ impl std::fmt::Display for BatteryError {
                  the full recipe."
             ),
             Self::ReportParse(e) => write!(f, "playtest report is not valid JSON: {e}"),
-            Self::Discovery(e) => {
-                write!(f, "input-surface discovery failed: {e}")
-            }
         }
     }
 }
@@ -338,29 +329,6 @@ fn battery_temp_dir_at(now: std::time::SystemTime) -> std::path::PathBuf {
 /// content, not an infrastructure error). Inspect `report.status` /
 /// `report.violations`, or use [`run_and_expect_clean`].
 ///
-/// With `BEVY_PLAYTEST_DISCOVER=1` in the environment, the returned
-/// report additionally carries a discovered input surface
-/// (`report.discovered_surface`, frozen-world findings annotated with
-/// probe statistics via `_meta`). Discovery runs AFTER the game child
-/// completes, as a report-annotation step — it does not touch the
-/// run itself; the game child never sees the opt-in variables. See
-/// [`crate::discovery::flow`] for the full opt-in contract (candidate
-/// and cache-dir overrides).
-///
-/// With `BEVY_PLAYTEST_DISCOVER_INJECT=1`, discovery changes the
-/// run itself: the parent discovers FIRST (cache-first, ~40s cold
-/// at pool=8), and when the scenario is the built-in battery literal
-/// (whose key surface is undeclared — the default WASD+arrows set
-/// the game may ignore), it writes a scenario variant whose chaos
-/// bot samples the discovered effective keys UNIONED with the
-/// source-scan candidates (the probe matrix is bounded by its
-/// candidate prior; the scan fills the prior's gaps — see
-/// [`crate::discovery::source_scan::scan_extras`]), driving the
-/// child with it and recording the full union as
-/// `report.injected_surface_keys` (the scan-derived portion is
-/// stamped separately in `report.source_derived_keys`). An authored
-/// scenario file is never injected into — declaration beats
-/// inference; discovery then describes rather than replaces.
 pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, BatteryError> {
     // Unique temp dir (see `battery_temp_dir`): one throwaway root per
     // run, shared by the report, child cwd and any `./`-relative child
@@ -428,145 +396,11 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
         .map_err(|e| BatteryError::Spawn(format!("cannot create battery child cwd: {e}")))?;
     populate_symlink_tree(&child_cwd);
 
-    // Discovery-driven scenario injection (see
-    // `discovery::flow::ENV_DISCOVER_INJECT`). Precedence rules:
-    // - An authored scenario FILE always wins — declaration beats
-    //   inference, exactly as the report-annotation path treats a
-    //   declared `raw_surface`.
-    // - Injection targets only the built-in battery literal, whose
-    //   surface is undeclared (the default WASD+arrows set).
-    // - `inject_requested` implies discovery: the surface feeding
-    //   the injected scenario is the very surface annotated onto
-    //   the report, so discovery runs ONCE here (cache-first) and
-    //   the post-run annotation step reuses it — never re-probes.
     let mut scenario_arg = config.scenario.clone();
-    let mut pre_discovered: Option<crate::discovery::surface::DiscoveredSurface> = None;
-    let mut injected_keys: Option<Vec<String>> = None;
-    // Scan extras unioned into the INJECTED surface (distinct
-    // provenance channel from `injected_keys`; stamped onto
-    // `report.source_derived_keys` after the run).
-    let mut injected_scan_extras: Option<Vec<String>> = None;
-    // Decision notes for the INJECTED surface (withheld probe poisons,
-    // scan filtering decisions): stamped onto
-    // `report.source_derived_notes` after the run — possibly WITHOUT
-    // `source_derived_keys`, when a scan applied but contributed no
-    // keys (refusal over silence still demands the decisions be
-    // reported).
-    let mut inject_notes: Option<Vec<String>> = None;
-    if flow::inject_requested() && scenario_arg == BUILTIN_BATTERY {
-        let outcome = flow::discover_from_env(
-            std::path::Path::new(&config.binary),
-            Some(config.scenario.as_str()),
-        )
-        .map_err(|e| BatteryError::Discovery(e.to_string()))?;
-        let mut keys = outcome.surface.chaos_keys();
-        // Decision notes for this injected surface — withheld
-        // probe-verified poison keys, scan filtering decisions.
-        // Refusal over silence: every filtering decision the parent
-        // made when aiming the bot is reported, never dropped.
-        let mut notes: Vec<String> = Vec::new();
-        // POISON FILTER, probe tier (Escape/Tab close menus and grab
-        // UI focus — a blind chaos bot pressing them aborts the very
-        // scene it is supposed to exercise). The scan tier filters
-        // poison inside `scan_extras`; before this guard the probe
-        // tier had NO such filter, so a probe-VERIFIED Escape could
-        // reach the injected bot's surface. Withheld, and the
-        // withholding is a REPORTED decision, never a silent drop.
-        let (poison_free, withheld_note) = withhold_probe_poison(&keys);
-        if let Some(note) = withheld_note {
-            notes.push(note);
-        }
-        keys = poison_free;
-
-        // SCAN ∪ PROBE UNION (tier-order fix): `chaos_keys()` is
-        // bounded by the probe matrix's candidate prior, while the
-        // source scan reads the game's whole emittable key universe.
-        // Injecting the probe surface alone could therefore LOSE scan
-        // keys the default battery had (a key textually present in
-        // the game's sources but outside the probe prior —
-        // thetawave's KeyV is the concrete case). Union the scan
-        // extras in: the probe prior stays the EVIDENCE tier
-        // (probe-observed effectiveness, Inferred siblings), the
-        // scan fills its gaps with candidates under the same
-        // poison/cap discipline as the default-battery layering
-        // (`scan_extras`). Same applicability as injection itself:
-        // only here, only for the undeclared builtin surface.
-        let mut scan_applied = false;
-        if !source_scan::scan_disabled() {
-            if let Some(root) = source_scan::scan_root_from_env() {
-                let result = source_scan::scan_from_root(&root);
-                let extras = source_scan::scan_extras(&result);
-                scan_applied = true;
-                // Every filtering decision the scan made (poison,
-                // cap, unsupported, unreadable) rides along — the
-                // same decisions the default layering reports.
-                notes.extend(extras.notes);
-                let mut unioned: Vec<String> = Vec::new();
-                for key in extras.keys {
-                    if !keys.contains(&key) {
-                        keys.push(key.clone());
-                        unioned.push(key);
-                    }
-                }
-                if !unioned.is_empty() {
-                    // Canonical order for the injected surface too.
-                    keys.sort();
-                    injected_scan_extras = Some(unioned.clone());
-                    notes.push(format!(
-                        "unioned {} scan keys into the injected (probe-verified) surface: {}",
-                        unioned.len(),
-                        unioned.join(", ")
-                    ));
-                }
-            }
-        }
-        if scan_applied && injected_scan_extras.is_none() {
-            // A scan ran but contributed nothing beyond the probe
-            // surface — still a decision worth reporting (the union
-            // considered the scan; it added nothing), never silence.
-            notes.push(
-                "source scan ran but added no keys beyond the probe-verified surface".to_string(),
-            );
-        }
-        // The injected scenario is the built-in battery with exactly
-        // one field added: the chaos bot's key surface — the
-        // probe-verified keys UNIONED with scan candidates, i.e.
-        // exactly `injected_keys` below. Mouse buttons stay at their
-        // default (three primaries): the MVP probe matrix is
-        // keyboard-only, so there is no discovered mouse surface to
-        // inject — an explicitly empty mouse list would DISABLE mouse
-        // chaos, which discovery never licensed.
-        let mut scenario = crate::plugin::battery_scenario()
-            .map_err(|e| BatteryError::Spawn(format!("injected battery scenario: {e}")))?;
-        scenario.bot.raw_surface = Some(crate::scenario::RawSurface {
-            keys: keys.clone(),
-            ..Default::default()
-        });
-        let injected_path = dir.join("scenario.injected.json");
-        let json = serde_json::to_string_pretty(&scenario)
-            .map_err(|e| BatteryError::Spawn(format!("serialize injected scenario: {e}")))?;
-        std::fs::write(&injected_path, json)
-            .map_err(|e| BatteryError::Spawn(format!("write injected scenario: {e}")))?;
-        scenario_arg = injected_path.to_string_lossy().into_owned();
-        pre_discovered = Some(outcome.surface);
-        injected_keys = Some(keys);
-        if !notes.is_empty() {
-            inject_notes = Some(notes);
-        }
-    }
-
-    // Source-derived surface layering (D1.5 slice 5, parent-side).
-    // Same precedence shape as injection above, one tier below:
-    // an authored scenario file always wins (declaration beats
-    // inference). Applicability mirrors injection's: only the
-    // built-in battery literal (a scenario file may declare its
-    // own surface). When injection RAN, the scan's role is the
-    // UNION inside the injected surface (see the inject branch
-    // above) — it must never REPLACE the probe-verified keys, and
-    // equally the probe prior must never CROWD OUT scan-only keys
-    // (the pre-fix tier inversion: a textually-present key outside
-    // the probe prior, e.g. thetawave's KeyV, was silently LOST
-    // when inject was enabled).
+    // Source-derived surface layering (parent-side): an authored
+    // scenario file always wins (declaration beats inference); only
+    // the built-in battery literal, whose key surface is undeclared,
+    // gets the scan-derived surface.
     //
     // Cost: milliseconds (a text pass over the game's `src/`),
     // paid per battery run — no probing, no game execution beyond
@@ -575,8 +409,7 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
     // with `ProvenanceGrade::SourceCited` evidence is the planned
     // next step (the scan's hit records already carry file:line).
     let mut source_layered: Option<crate::discovery::source_scan::LayeredKeys> = None;
-    if scenario_arg == BUILTIN_BATTERY && !flow::inject_requested() && !source_scan::scan_disabled()
-    {
+    if scenario_arg == BUILTIN_BATTERY && !source_scan::scan_disabled() {
         if let Some(root) = source_scan::scan_root_from_env() {
             let result = source_scan::scan_from_root(&root);
             let layered = source_scan::layered_chaos_keys(&result);
@@ -595,8 +428,7 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
             if !is_backbone_set {
                 // The scan REPLACED the blind default with its own
                 // poison-filtered surface: rewrite the scenario the
-                // child receives, same pattern as injection (the
-                // parent writes a variant file). A set-equal
+                // child receives (the parent writes a variant file). A set-equal
                 // surface (empty scan or exactly the backbone)
                 // leaves the declared default surface untouched
                 // and stays
@@ -720,59 +552,12 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
     let mut report: PlaytestReport =
         serde_json::from_slice(&bytes).map_err(|e| BatteryError::ReportParse(e.to_string()))?;
 
-    // Opt-in input-surface discovery (env contract in
-    // `discovery::flow`): the game child never sees these variables
-    // (stripped above), so this is purely a parent-side decision.
-    // A cache hit makes this a no-op cost-wise; a cold run probes
-    // the matrix (~40s at pool=8) before returning.
-    //
-    // INJECT implies discovery — even when injection itself refuses
-    // (an authored scenario file): the promised annotation must not
-    // vanish with it. When injection RAN, discovery already
-    // happened BEFORE the child (the surface fed the injected
-    // scenario) — reuse it; the scenario string would otherwise name
-    // the INJECTED file and cold-miss the "battery"-keyed cache
-    // entry, re-probing the whole matrix for a surface we already
-    // hold.
-    if flow::env_requested() || flow::inject_requested() {
-        let surface = match pre_discovered {
-            Some(surface) => surface,
-            None => {
-                flow::discover_from_env(
-                    std::path::Path::new(&config.binary),
-                    Some(config.scenario.as_str()),
-                )
-                .map_err(|e| BatteryError::Discovery(e.to_string()))?
-                .surface
-            }
-        };
-        // Honesty: record WHICH keys injection put in the bot's
-        // surface (None ⇒ injection did not happen — e.g. an authored
-        // scenario file, or inject not requested). The recorded list
-        // is exactly what the injected scenario carried.
-        report.injected_surface_keys = injected_keys;
-        report.discovered_surface = Some(surface);
-        report.annotate_frozen_world_with_surface();
-    }
-    // Source-scan honesty fields: stamped whenever the parent put
-    // scan-derived keys into the run's surface (independent of
-    // discovery). For a DEFAULT battery that is the scan-derived
-    // surface that REPLACED the WASD/arrows default (Some ⇒ the
-    // scan-hit arm fired; the fallback arm leaves None — no
-    // scan, scan-empty, or backbone-equal scan, all of which run
-    // the unchanged default); for an INJECTED run it is exactly
-    // the scan keys unioned into the probe-verified surface (the
-    // full bot surface lives in `injected_surface_keys` — the two
-    // channels stay distinct so provenance is never coalesced).
+    // Source-scan honesty fields: stamped only when the scan-hit
+    // arm REPLACED the WASD/arrows default (the fallback arm runs the
+    // unchanged default and leaves both fields None).
     if let Some(layered) = source_layered {
         report.source_derived_keys = Some(layered.keys);
         report.source_derived_notes = Some(layered.notes);
-    }
-    if let Some(extras) = &injected_scan_extras {
-        report.source_derived_keys = Some(extras.clone());
-    }
-    if let Some(notes) = inject_notes {
-        report.source_derived_notes = Some(notes);
     }
     Ok(report)
 }
@@ -1175,71 +960,9 @@ pub fn run_and_expect_scoped_findings(binary: &str, scenario: &str, expects: &[E
     }
 }
 
-/// Withhold poison keys ([`crate::discovery::source_scan::POISON_KEYS`])
-/// from a probe-verified injectable surface, returning the filtered
-/// list plus the refusal note naming what was withheld (refusal over
-/// silence: `None` means nothing was withheld — no decision, no
-/// note). Pure function: the inject path is otherwise unreachable
-/// from unit tests (it needs a real probe run over a game binary).
-pub fn withhold_probe_poison(keys: &[String]) -> (Vec<String>, Option<String>) {
-    let withheld: Vec<String> = keys
-        .iter()
-        .filter(|k| source_scan::POISON_KEYS.contains(&k.as_str()))
-        .cloned()
-        .collect();
-    let note = if withheld.is_empty() {
-        None
-    } else {
-        Some(format!(
-            "probe-verified poison keys withheld from the injected surface: {}",
-            withheld.join(", ")
-        ))
-    };
-    let kept: Vec<String> = keys
-        .iter()
-        .filter(|k| !source_scan::POISON_KEYS.contains(&k.as_str()))
-        .cloned()
-        .collect();
-    (kept, note)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn probe_poison_is_withheld_and_reported_by_name() {
-        // A probe-VERIFIED Escape/Tab must never reach the injected
-        // blind bot's surface (frozen rule: poison never reaches the
-        // chaos bot), and the withholding is reported, naming the
-        // keys — never a silent drop.
-        let keys = vec![
-            "Digit1".to_string(),
-            "Escape".to_string(),
-            "KeyV".to_string(),
-            "Tab".to_string(),
-        ];
-        let (kept, note) = withhold_probe_poison(&keys);
-        assert_eq!(
-            kept,
-            vec!["Digit1".to_string(), "KeyV".to_string()],
-            "poison keys must be withheld from the injected surface"
-        );
-        let note = note.expect("withholding must be reported (refusal over silence)");
-        assert!(
-            note.contains("Escape") && note.contains("Tab"),
-            "the note must name the withheld keys: {note}"
-        );
-    }
-
-    #[test]
-    fn no_poison_no_note() {
-        // Nothing withheld => no decision => no note (a note here
-        // would LIE about a withholding that did not happen).
-        let (kept, note) = withhold_probe_poison(&["Digit1".to_string(), "KeyV".to_string()]);
-        assert_eq!(kept, vec!["Digit1".to_string(), "KeyV".to_string()]);
-        assert_eq!(note, None, "no withholding happened — stay silent");
-    }
 
     #[test]
     fn battery_temp_dirs_are_unique_per_call() {

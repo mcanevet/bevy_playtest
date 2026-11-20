@@ -524,7 +524,7 @@ pub struct DiscoveredSurface {
     pub notes: Vec<String>,
     /// Build profile of the GAME binary the surface was learned
     /// against (promoted from the probe child's report by
-    /// [`crate::discovery::flow::discover`]). `cfg`-gated keys make
+    /// the (removed) discovery flow). `cfg`-gated keys make
     /// dev-profile surfaces strictly larger than release ones, so a
     /// surface without its profile invites misleading cross-profile
     /// comparisons. `None` for D0-era cached surfaces and direct
@@ -547,7 +547,7 @@ pub struct DiscoveredSurface {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub findings: Vec<DiscoveryFinding>,
     /// Leafwing declared-tier reconcile ([`crate::discovery::lw`]),
-    /// populated by [`crate::discovery::flow::discover`] when the
+    /// populated by the (removed) discovery flow when the
     /// probe children's reader found declared bindings. PURELY
     /// ADDITIVE — a REPORTED section, never an applied one: the
     /// frozen D1-c fields above (`entries`, `findings`) are the
@@ -560,18 +560,6 @@ pub struct DiscoveredSurface {
     #[cfg(feature = "lw-reader")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lw: Option<crate::discovery::lw::ReconciledLw>,
-    /// Authoring-time contract suggestions (work item 2:
-    /// [`crate::discovery::suggestions`]) — writer/reader lists per
-    /// game-owned resource, a candidate-invariant menu for written
-    /// resources, dead-message-channel candidates. PURELY ADDITIVE
-    /// DRAFT DATA: every row is machine-proposed with its derivation
-    /// attached, never a finding, never graded, never applied by the
-    /// harness. Promoted from the first control run's static scan by
-    /// [`crate::discovery::flow::discover`]. `#[serde(default)]`:
-    /// suggestion-less caches and old artifacts deserialize to
-    /// `None`. Serialized only when present.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub suggestions: Option<crate::discovery::suggestions::ContractSuggestions>,
     /// Mouse grid-cell findings (Phase 1 mouse grammar): one row per
     /// probed cell of the plan's bounded grid, in row-major order —
     /// the mouse analogue of `keys`. ADDITIVE and default-empty:
@@ -656,30 +644,6 @@ impl DiscoveredSurface {
         keys
     }
 
-    /// Convenience accessor for the frozen-world annotation.
-    pub fn frozen_world_meta(&self) -> ViolationMeta {
-        ViolationMeta {
-            probed_keys_effective: Some(self.effective_key_count()),
-            probed_keys_total: Some(self.probed_key_count()),
-            pruned_devices: if self.pruned_devices.is_empty() {
-                None
-            } else {
-                Some(self.pruned_devices.clone())
-            },
-            note: Some(format!(
-                "probed {} keys, {} effective (confidence: {})",
-                self.probed_key_count(),
-                self.effective_key_count(),
-                self.confidence.as_str()
-            )),
-            // `stepping` is oracle-side evidence, never part of the
-            // surface-derived annotation: the merge in
-            // `annotate_frozen_world_with_surface` preserves an
-            // oracle-set value and never writes one.
-            stepping: None,
-        }
-    }
-
     /// Mechanical projection of today's `keys`/`mouse_buttons`
     /// findings into IR entries, for D1-c consumers that read
     /// entries (avoiding dual-format maintenance). Lossy BY DESIGN:
@@ -734,26 +698,15 @@ impl DiscoveredSurface {
 }
 
 /// Machine-readable annotation block attached to a violation
-/// (serialized as `_meta`). Carries discovery context next to the
-/// verbatim human `detail`.
+/// (serialized as `_meta`), next to the verbatim human `detail`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ViolationMeta {
-    /// Keys that caused divergence, out of all probed.
-    pub probed_keys_effective: Option<usize>,
-    /// Total candidates probed.
-    pub probed_keys_total: Option<usize>,
-    /// Devices skipped via static pruning.
-    pub pruned_devices: Option<Vec<String>>,
-    /// One-line context for humans skimming JSON.
-    pub note: Option<String>,
     /// `frozen_world` only: whether the broadened state digest kept
     /// changing through the silent streak (`Some(true)` — the sim was
     /// demonstrably stepping but nothing visual changed; `Some(false)`
     /// — the digest was flat too, corroborating a true freeze;
     /// `None` — no digest was recorded, so stepping is UNKNOWN and
-    /// the detail keeps the legacy "soft-lock?" wording). Set by the
-    /// oracle at report time, preserved (never overwritten) by the
-    /// battery's discovery annotation.
+    /// the detail keeps the legacy "soft-lock?" wording).
     #[serde(default)]
     pub stepping: Option<bool>,
 }
@@ -883,31 +836,6 @@ mod tests {
         };
         assert_eq!(s.effective_key_count(), 1, "only KeyW is effective");
         assert_eq!(s.probed_key_count(), 1);
-        // And the frozen-world annotation inherits the exclusion.
-        let meta = s.frozen_world_meta();
-        assert_eq!(meta.probed_keys_effective, Some(1));
-    }
-
-    #[test]
-    fn frozen_world_meta_reports_probe_stats() {
-        let s = sample_surface();
-        let meta = s.frozen_world_meta();
-        assert_eq!(meta.probed_keys_effective, Some(1));
-        assert_eq!(meta.probed_keys_total, Some(2));
-        assert_eq!(meta.pruned_devices, None);
-        let note = meta.note.unwrap();
-        assert!(note.contains("probed 2 keys, 1 effective"));
-        assert!(note.contains("exact"));
-    }
-
-    #[test]
-    fn frozen_world_meta_lists_pruned_devices_when_present() {
-        let mut s = sample_surface();
-        s.pruned_devices = vec!["gamepad".to_string(), "wheel".to_string()];
-        assert_eq!(
-            s.frozen_world_meta().pruned_devices,
-            Some(vec!["gamepad".to_string(), "wheel".to_string()])
-        );
     }
 
     #[test]
@@ -968,10 +896,6 @@ mod tests {
             detail: "no Transform change for 180 frames — soft-lock?".to_string(),
             last_detail: "no Transform change".to_string(),
             meta: Some(ViolationMeta {
-                probed_keys_effective: Some(3),
-                probed_keys_total: Some(54),
-                pruned_devices: Some(vec!["gamepad".to_string()]),
-                note: Some("probed 54 keys, 3 effective".to_string()),
                 stepping: Some(true),
             }),
         };
@@ -983,8 +907,7 @@ mod tests {
 
     #[test]
     fn violation_without_meta_stays_verbatim_and_back_compatible() {
-        // Old reports (pre-discovery) carry neither `meta` nor
-        // `discovered_surface`: deserializing them must keep working
+        // Old reports carry no `meta`: deserializing them must keep working
         // (serde `default`), and serialization must not add keys.
         let old_json = r#"{
             "rule": "frozen_world",
@@ -999,156 +922,6 @@ mod tests {
         assert!(entry.meta.is_none());
         let reserialized = serde_json::to_string(&entry).unwrap();
         assert!(!reserialized.contains("_meta"));
-    }
-
-    #[test]
-    fn report_annotation_targets_frozen_world_only() {
-        let mut report = crate::state::PlaytestReport::crashed_empty();
-        report.violations = vec![
-            crate::state::ViolationEntry {
-                rule: "frozen_world".to_string(),
-                target: "world".to_string(),
-                first_frame: 12,
-                last_frame: 180,
-                count: 1,
-                detail: "no Transform change for 180 frames".to_string(),
-                last_detail: "no Transform change".to_string(),
-                meta: None,
-            },
-            crate::state::ViolationEntry {
-                rule: "log_error".to_string(),
-                target: "server".to_string(),
-                first_frame: 5,
-                last_frame: 5,
-                count: 1,
-                detail: "connection refused".to_string(),
-                last_detail: "connection refused".to_string(),
-                meta: None,
-            },
-        ];
-        report.discovered_surface = Some(sample_surface());
-        report.annotate_frozen_world_with_surface();
-        assert!(
-            report.violations[0].meta.is_some(),
-            "frozen_world gets annotated"
-        );
-        // And with the SURFACE'S stats — not just any meta block.
-        assert_eq!(
-            report.violations[0].meta.as_ref().unwrap(),
-            &sample_surface().frozen_world_meta()
-        );
-        assert!(
-            report.violations[1].meta.is_none(),
-            "other rules stay untouched"
-        );
-        // The annotation sits next to the detail, never in it.
-        assert!(!report.violations[0].detail.contains("probed"));
-    }
-
-    #[test]
-    fn report_annotation_is_noop_without_surface() {
-        let mut report = crate::state::PlaytestReport::crashed_empty();
-        report.violations = vec![crate::state::ViolationEntry {
-            rule: "frozen_world".to_string(),
-            target: "world".to_string(),
-            first_frame: 12,
-            last_frame: 180,
-            count: 1,
-            detail: "no Transform change".to_string(),
-            last_detail: "no Transform change".to_string(),
-            meta: None,
-        }];
-        report.annotate_frozen_world_with_surface();
-        assert!(report.violations[0].meta.is_none());
-    }
-
-    #[test]
-    fn report_annotation_is_idempotent() {
-        let mut report = crate::state::PlaytestReport::crashed_empty();
-        report.violations = vec![crate::state::ViolationEntry {
-            rule: "frozen_world".to_string(),
-            target: "world".to_string(),
-            first_frame: 12,
-            last_frame: 180,
-            count: 1,
-            detail: "no Transform change".to_string(),
-            last_detail: "no Transform change".to_string(),
-            meta: Some(ViolationMeta {
-                probed_keys_effective: Some(99),
-                probed_keys_total: Some(99),
-                pruned_devices: None,
-                note: Some("hand-written".to_string()),
-                // Oracle-set stepping evidence must SURVIVE the
-                // discovery annotation (merge, not overwrite)…
-                stepping: Some(true),
-            }),
-        }];
-        report.discovered_surface = Some(sample_surface());
-        report.annotate_frozen_world_with_surface();
-        // Existing meta is never overwritten.
-        assert_eq!(
-            report.violations[0]
-                .meta
-                .as_ref()
-                .unwrap()
-                .probed_keys_total,
-            Some(99)
-        );
-        // …and oracle-set stepping evidence survives the merge too.
-        assert_eq!(
-            report.violations[0].meta.as_ref().unwrap().stepping,
-            Some(true),
-            "discovery annotation must not clobber oracle stepping evidence"
-        );
-    }
-
-    #[test]
-    fn old_report_json_deserializes_without_surface_fields() {
-        // An "old report" is a current report MINUS the two fields
-        // Phase 5 added — constructed by round-tripping through
-        // serde_json::Value and deleting them, so the fixture never
-        // rots as other report fields evolve.
-        let mut report = crate::state::PlaytestReport::crashed_empty();
-        report.status = crate::enums::PlaytestStatus::Pass;
-        report.frame_count = 180;
-        report.violations.push(crate::state::ViolationEntry {
-            rule: "frozen_world".to_string(),
-            target: "world".to_string(),
-            first_frame: 12,
-            last_frame: 180,
-            count: 1,
-            detail: "no Transform change".to_string(),
-            last_detail: "no Transform change".to_string(),
-            meta: Some(ViolationMeta::default()),
-        });
-        report.discovered_surface = Some(sample_surface());
-        let mut value = serde_json::to_value(&report).unwrap();
-        let obj = value.as_object_mut().unwrap();
-        assert!(obj.remove("discovered_surface").is_some());
-        for v in obj.get_mut("violations").unwrap().as_array_mut().unwrap() {
-            // Reports with violations too: entries predate `meta`.
-            v.as_object_mut().unwrap().remove("meta");
-            v.as_object_mut().unwrap().remove("_meta");
-        }
-        let old_json = serde_json::to_string(&value).unwrap();
-        assert!(!old_json.contains("discovered_surface"));
-        assert!(!old_json.contains("_meta"));
-
-        let back: crate::state::PlaytestReport = serde_json::from_str(&old_json).unwrap();
-        assert!(back.discovered_surface.is_none());
-        // Round trip keeps the field absent.
-        let out = serde_json::to_string(&back).unwrap();
-        assert!(!out.contains("discovered_surface"));
-    }
-
-    #[test]
-    fn report_with_surface_round_trips() {
-        let mut report = crate::state::PlaytestReport::crashed_empty();
-        report.discovered_surface = Some(sample_surface());
-        let json = serde_json::to_string(&report).unwrap();
-        assert!(json.contains("discovered_surface"));
-        let back: crate::state::PlaytestReport = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.discovered_surface, report.discovered_surface);
     }
 
     // ------------------------------------------------------------------

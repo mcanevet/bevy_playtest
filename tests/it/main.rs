@@ -26,7 +26,6 @@ mod common;
 mod battery;
 mod census;
 mod component_check;
-mod discovery_flow;
 mod driver_smoke;
 mod fault_injection;
 mod frozen_world_detail;
@@ -47,7 +46,6 @@ mod scenario_schema;
 #[cfg(feature = "screen-liveness")]
 mod screen_liveness;
 mod state_digest;
-mod suggestions;
 mod takeover_e2e;
 mod ui_liveness;
 mod ui_surface;
