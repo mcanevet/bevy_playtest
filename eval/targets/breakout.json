@@ -1,0 +1,15 @@
+{
+  "fixture": "breakout",
+  "manifest_dir": "fixtures/breakout",
+  "targets": [
+    {
+      "id": "B1",
+      "description": "Score at least once (ball hits a brick)",
+      "check": {
+        "resource_changed_any": [
+          "Score"
+        ]
+      }
+    }
+  ]
+}

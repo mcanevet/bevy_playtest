@@ -1,0 +1,13 @@
+{
+  "fixture": "desk_toy",
+  "manifest_dir": "fixtures/desk_toy",
+  "targets": [
+    {
+      "id": "D1",
+      "description": "Detect a click or drag interaction",
+      "check": {
+        "unmeasurable": "phase 2: the bot cannot drag yet; the report must list drag as not emitted"
+      }
+    }
+  ]
+}

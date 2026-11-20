@@ -1,0 +1,13 @@
+{
+  "fixture": "contributors",
+  "manifest_dir": "fixtures/contributors",
+  "targets": [
+    {
+      "id": "C1",
+      "description": "Report 'no input consumed, nothing to explore' and saturate quickly",
+      "check": {
+        "unmeasurable": "phase 1: needs the explorer's own report"
+      }
+    }
+  ]
+}

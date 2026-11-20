@@ -19,7 +19,12 @@ bevy_reflect = { version = "0.20.1", default-features = false, features = ["std"
 # module uses `bevy_ecs::reflect` (AppTypeRegistry, ReflectComponent).
 # Today the feature is also enabled transitively via bevy_input/bevy_reflect,
 # but the digest must not rely on another crate's feature wiring to compile.
-bevy_ecs = { version = "0.20.1", default-features = false, features = ["std", "bevy_reflect"] }
+# `debug`: unmasked system/resource/component names (DebugName). Bevy's
+# `debug` feature is OFF by default, so without this every name in a
+# game under test reads as a placeholder and the state trace cannot
+# name what changed. bevy_playtest only exists in test builds, so this
+# never reaches a release build.
+bevy_ecs = { version = "0.20.1", default-features = false, features = ["std", "bevy_reflect", "debug"] }
 # bevy_transform gets an explicit "bevy_reflect": the component_check
 # oracle reads Transform leaves via reflection (the spatial fallback
 # beside the selector component). Verified with `cargo tree`: enabling
@@ -308,6 +313,13 @@ required-features = ["takeover"]
 [[bin]]
 name = "takeover_demo_empty"
 path = "src/bin/takeover_demo_empty.rs"
+required-features = ["takeover"]
+
+# Score a game's exploration against a committed targets file
+# (eval/targets/*.json); used by the evaluation workflow.
+[[bin]]
+name = "bevy_playtest_eval"
+path = "src/bin/bevy_playtest_eval.rs"
 required-features = ["takeover"]
 
 [features]

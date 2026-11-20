@@ -328,8 +328,33 @@ fn battery_temp_dir_at(now: std::time::SystemTime) -> std::path::PathBuf {
 /// completed run — INCLUDING failing ones (findings are the report's
 /// content, not an infrastructure error). Inspect `report.status` /
 /// `report.violations`, or use [`run_and_expect_clean`].
-///
 pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, BatteryError> {
+    run_with_overrides(config, &ScenarioOverrides::default())
+}
+
+/// Per-run scenario overrides, applied on top of whatever scenario the
+/// run would otherwise use (built-in battery, source-layered battery,
+/// or an authored file). Empty overrides change nothing.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ScenarioOverrides {
+    /// Replace the bot seed.
+    pub seed: Option<u64>,
+    /// Replace the run duration (seconds of game time).
+    pub duration_s: Option<f32>,
+}
+
+impl ScenarioOverrides {
+    fn is_empty(&self) -> bool {
+        self.seed.is_none() && self.duration_s.is_none()
+    }
+}
+
+/// [`run_with_config`] with [`ScenarioOverrides`] (e.g. one seed of a
+/// multi-seed evaluation with a fixed frame budget).
+pub fn run_with_overrides(
+    config: &BatteryConfig,
+    overrides: &ScenarioOverrides,
+) -> Result<PlaytestReport, BatteryError> {
     // Unique temp dir (see `battery_temp_dir`): one throwaway root per
     // run, shared by the report, child cwd and any `./`-relative child
     // writes.
@@ -451,6 +476,32 @@ pub fn run_with_config(config: &BatteryConfig) -> Result<PlaytestReport, Battery
                 source_layered = Some(layered);
             }
         }
+    }
+
+    // Overrides apply LAST, on top of the scenario chosen above (so the
+    // source-layered surface is kept), via a variant file like layering.
+    if !overrides.is_empty() {
+        let mut scenario = if scenario_arg == BUILTIN_BATTERY {
+            crate::plugin::battery_scenario()
+                .map_err(|e| BatteryError::Spawn(format!("battery scenario: {e}")))?
+        } else {
+            let text = std::fs::read_to_string(&scenario_arg)
+                .map_err(|e| BatteryError::Spawn(format!("read scenario {scenario_arg}: {e}")))?;
+            serde_json::from_str(&text)
+                .map_err(|e| BatteryError::Spawn(format!("parse scenario {scenario_arg}: {e}")))?
+        };
+        if let Some(seed) = overrides.seed {
+            scenario.bot.seed = seed;
+        }
+        if let Some(duration_s) = overrides.duration_s {
+            scenario.duration_s = duration_s;
+        }
+        let path = dir.join("scenario.overrides.json");
+        let json = serde_json::to_string_pretty(&scenario)
+            .map_err(|e| BatteryError::Spawn(format!("serialize overridden scenario: {e}")))?;
+        std::fs::write(&path, json)
+            .map_err(|e| BatteryError::Spawn(format!("write overridden scenario: {e}")))?;
+        scenario_arg = path.to_string_lossy().into_owned();
     }
 
     let mut cmd = std::process::Command::new(&config.binary);

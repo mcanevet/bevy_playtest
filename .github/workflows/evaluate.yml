@@ -1,0 +1,99 @@
+name: Exploration evaluation
+
+# Scores the bot's exploration against the committed per-fixture
+# targets (eval/targets/*.json): every fixture runs its battery over
+# several seeds with a fixed frame budget, and "reached" is decided
+# from each report's independent state trace. Measures, never gates:
+# results land in the run summary and as JSON artifacts.
+# See docs/explanation/exploration-targets.md.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      seeds:
+        description: Seeds per fixture
+        default: "5"
+      frames:
+        description: Frame budget per run
+        default: "5000"
+
+concurrency:
+  group: evaluate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        fixture:
+          - alien_cake_addict
+          - breakout
+          - contributors
+          - desk_toy
+          - game_menu
+          - known_answer
+          - loading_screen
+          - mines
+          - thetawave
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup
+
+      - name: Generate fixtures from pinned Bevy revision
+        run: ./scripts/fetch_bevy_examples.sh
+
+      # Same lockfile sync as the CI fixtures job (see ci.yml).
+      - name: Sync bevy_playtest version in fixtures lockfile
+        run: |
+          v=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name=="bevy_playtest") | .version')
+          sed -i "/^name = \"bevy_playtest\"\$/{n;s/^version = \".*\"\$/version = \"$v\"/}" fixtures/Cargo.lock
+
+      # Read-only use of the CI fixtures cache saved from main.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: fixtures
+          workspaces: |
+            fixtures -> ../target
+            . -> target
+          save-if: "false"
+
+      - name: Build fixture and evaluator
+        env:
+          FIXTURE: ${{ matrix.fixture }}
+        run: |
+          cargo build --locked --manifest-path fixtures/Cargo.toml \
+            -p "fixture_$FIXTURE" --features playtest --bin "fixture_$FIXTURE"
+          cargo build --locked --bin bevy_playtest_eval
+
+      - name: Evaluate
+        env:
+          FIXTURE: ${{ matrix.fixture }}
+          SEEDS: ${{ inputs.seeds || '5' }}
+          FRAMES: ${{ inputs.frames || '5000' }}
+        run: |
+          ./target/debug/bevy_playtest_eval \
+            --targets "eval/targets/$FIXTURE.json" \
+            --binary "target/debug/fixture_$FIXTURE" \
+            --seeds "$SEEDS" --frames "$FRAMES" \
+            --json-out "eval-$FIXTURE.json" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: eval-${{ matrix.fixture }}
+          path: eval-${{ matrix.fixture }}.json
+          retention-days: 30

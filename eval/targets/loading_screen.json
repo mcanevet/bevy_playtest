@@ -1,0 +1,16 @@
+{
+  "fixture": "loading_screen",
+  "manifest_dir": "fixtures/loading_screen",
+  "targets": [
+    {
+      "id": "L1",
+      "description": "Load levels: LoadingState written at least twice (load start + ready); it is a resource, not bevy_state",
+      "check": {
+        "resource_changed_times": {
+          "resource": "LoadingState",
+          "at_least": 2
+        }
+      }
+    }
+  ]
+}
