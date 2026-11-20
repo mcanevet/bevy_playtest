@@ -1,44 +1,39 @@
 name: Setup Bevy CI runner
 description: >
-  Shared runner preparation for every CI job: reclaim disk, install the
-  pinned toolchain components, and install Bevy's Linux build/runtime
-  dependencies (plus software Vulkan for headless rendering).
-
-inputs:
-  free-disk:
-    description: Remove pre-installed SDKs we never use (needed for full Bevy debug builds).
-    default: "true"
+  Shared runner preparation for every CI job: install the pinned Rust
+  toolchain (and only it), plus Bevy's Linux build/runtime dependencies
+  (and software Vulkan for headless rendering).
 
 runs:
   using: composite
   steps:
-    # The stock image ships ~12 GB of Android SDK, ~6 GB of Haskell
-    # (.ghcup), ~3 GB of Swift, and other pre-installed tooling we never
-    # touch. Removing these leaves headroom for Bevy's debug artifacts.
-    - name: Free disk space
-      if: inputs.free-disk == 'true'
+    # No disk cleanup: ubuntu-26.04 runners have ~117 GB free, and our
+    # caches are < 1 GB per job. Deleting the preinstalled SDKs took
+    # 1.5-6.6 min per job (and sat on the critical path).
+    #
+    # Single source of truth for the toolchain version: rust-toolchain.toml.
+    # Install it EXPLICITLY (relying on rustup's auto-install is
+    # deprecated), then uninstall every other toolchain: Swatinem/rust-cache
+    # hashes ALL installed toolchains into its cache key, and some runner
+    # images preinstall a stable toolchain while others don't, which made
+    # the key (and so the cache) flip between runners.
+    - name: Install the pinned Rust toolchain (only)
       shell: bash
       run: |
-        sudo rm -rf \
-          /usr/local/lib/android \
-          /usr/share/dotnet \
-          /opt/hostedtoolcache/CodeQL \
-          /usr/local/.ghcup \
-          /opt/ghc \
-          /usr/share/swift \
-          /usr/lib/jvm \
-          /usr/local/share/powershell \
-          /usr/lib/google-cloud-sdk || true
-        df -h /
-
-    # Single source of truth for the toolchain version: rust-toolchain.toml.
-    # GitHub runners ship rustup, which auto-installs the pinned toolchain
-    # (plus components) on the first cargo invocation. This avoids a
-    # second version source (dtolnay/rust-toolchain tags historically
-    # desynchronized from rust-toolchain.toml).
-    - name: Install Rust toolchain components
-      shell: bash
-      run: rustup component add clippy rustfmt
+        set -euo pipefail
+        # The pin comes from the file itself, never from `rustup show
+        # active-toolchain` (RUSTUP_TOOLCHAIN or a directory override
+        # would make that report something else).
+        channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
+        test -n "$channel"
+        rustup toolchain install "$channel" --profile minimal --component clippy,rustfmt
+        for t in $(rustup toolchain list | cut -d' ' -f1); do
+          case "$t" in
+            "$channel"-*) ;;
+            *) rustup toolchain uninstall "$t" ;;
+          esac
+        done
+        rustup toolchain list
 
     # azure.archive.ubuntu.com periodically serves archives at ~60kB/s
     # (actions/runner-images#14823, #15040); apt has no
