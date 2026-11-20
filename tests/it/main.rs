@@ -5,8 +5,12 @@
 //! binary), so ~30 targets meant ~30 link steps and a multi-GB `target/`
 //! (and CI cache). One binary links once. Under cargo-nextest every test
 //! still runs in its own process, so per-process exclusivity
-//! (`run_scenario`'s capture state) is preserved; under plain
-//! `cargo test`, `common::run_slot` serializes runs as before.
+//! (`run_scenario`'s capture state) is preserved.
+//!
+//! Under plain `cargo test` all suites share ONE process, so any test
+//! that calls `run_scenario`, mutates the environment, or spawns
+//! children that read `BEVY_PLAYTEST_*` variables must hold
+//! `common::run_slot()` for its whole body.
 //!
 //! EXCEPTION: the `tests/log_*.rs` suites stay separate binaries. They
 //! claim write-once process globals (the `log` logger slot, tracing's

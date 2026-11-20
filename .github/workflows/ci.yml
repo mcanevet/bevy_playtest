@@ -20,8 +20,10 @@ env:
   # none for dependencies). Do NOT set RUSTFLAGS debuginfo here: it
   # would override the per-package profile for every crate.
 
-# Three independent jobs run in parallel; `ci` aggregates them so the
-# branch-protection required check stays a single stable name.
+# Jobs: lint, fixtures and test-build run in parallel; test (3
+# partitions) runs the archive test-build produces. `ci` aggregates
+# them so the branch-protection required check stays a single stable
+# name.
 #
 # Caching (Swatinem/rust-cache): one cache per job, saved ONLY from
 # main. It keeps dependency artifacts and prunes this repo's own
@@ -181,12 +183,26 @@ jobs:
             . -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      # No --locked for the fixtures workspace: its lockfile records
-      # bevy_playtest's own version (path dependency), which every
-      # release-plz bump changes without touching fixtures/Cargo.lock.
-      # Cargo updates only that path entry; third-party pins still hold.
+      # fixtures/Cargo.lock records bevy_playtest's own version (it is a
+      # path dependency), which every release-plz bump changes without
+      # touching this lockfile. Rewrite ONLY that version line to the
+      # crate's current version, so every fixture build below can stay
+      # --locked: third-party pins remain enforced, and any other drift
+      # still fails CI.
+      - name: Sync bevy_playtest version in fixtures lockfile
+        run: |
+          v=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name=="bevy_playtest") | .version')
+          sed -i "/^name = \"bevy_playtest\"\$/{n;s/^version = \".*\"\$/version = \"$v\"/}" fixtures/Cargo.lock
+          git diff --stat fixtures/Cargo.lock
+
+      # Prebuild everything the later steps run, including breakout's
+      # plain (flagless) test targets, so the UX pin's 300 s timeout
+      # bounds the run only, not compilation.
       - name: Build fixtures
-        run: cargo nextest run --manifest-path fixtures/Cargo.toml --workspace --features playtest --test playtest --no-run
+        run: |
+          cargo nextest run --locked --manifest-path fixtures/Cargo.toml --workspace --features playtest --test playtest --no-run
+          cargo test --locked --manifest-path fixtures/breakout/Cargo.toml --no-run
 
       # UX pin: plain `cargo test` on breakout must activate the
       # playtest feature and run the battery (not ignore it). Stays on
@@ -194,7 +210,7 @@ jobs:
       - name: UX pin (flagless breakout cargo test)
         run: |
           set -o pipefail
-          timeout 300 cargo test --manifest-path fixtures/breakout/Cargo.toml \
+          timeout 300 cargo test --locked --manifest-path fixtures/breakout/Cargo.toml \
             | tee /tmp/breakout_flagless.log
           ! grep -Eq "[1-9][0-9]* ignored" /tmp/breakout_flagless.log
 
@@ -207,7 +223,7 @@ jobs:
       # watchdogs, so saturating the 4 vCPUs invites timeout flakes.
       - name: Battery tier (all fixtures, nextest)
         run: |
-          timeout 600 cargo nextest run --manifest-path fixtures/Cargo.toml --workspace --features playtest --test playtest --profile ci --config-file .config/nextest.toml --test-threads 2
+          timeout 600 cargo nextest run --locked --manifest-path fixtures/Cargo.toml --workspace --features playtest --test playtest --profile ci --config-file .config/nextest.toml --test-threads 2
 
       # Release-purity guard: plain bin builds must NOT resolve
       # bevy_playtest. This is a cargo check + tree walk, not a rebuild.
