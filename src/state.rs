@@ -197,6 +197,11 @@ pub struct PlaytestReport {
     /// already started, so nothing could be intercepted) and old reports.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub randomness: Option<String>,
+    /// What the exploring bot reached and left untouched (`bot.explore`
+    /// runs only): screens seen, widgets never clicked, keys never
+    /// pressed, and a saturation verdict.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub exploration: Option<crate::explorer::ExplorationSummary>,
     /// Load-time capability census rows captured during
     /// `run_scenario` startup, before bot/oracle registration
     /// (present whenever
@@ -284,6 +289,7 @@ impl PlaytestReport {
             lw_reconciled: None,
             state_trace: None,
             randomness: None,
+            exploration: None,
             // Crash stub: the run never reached the census attach
             // point, so no census exists.
             capability_census: None,

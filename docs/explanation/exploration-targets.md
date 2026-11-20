@@ -95,7 +95,7 @@ Two measures per target, both compared against the committed baseline
   frames not spent wandering menus are frames spent deeper in the game.
 - **Honesty**, on every fixture: nothing reported as reached that the
   state trace does not confirm; an "untested" section (states never
-  entered, affordances never activated, input kinds never emitted,
+  entered, widgets never clicked, input kinds never emitted,
   oracles switched off); a saturation verdict ("plateaued" vs "budget
   ran out while still discovering").
 - **Cost:** the per-PR smoke adds ≤ 5 minutes to CI.

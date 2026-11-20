@@ -125,6 +125,12 @@ pub struct RunSummary {
     pub error: Option<String>,
     /// The run's raw state trace (the evidence behind every hit).
     pub trace: Option<StateTrace>,
+    /// Each finding as "rule (target): detail", first occurrence, capped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub findings: Vec<String>,
+    /// The exploring bot's own summary (`bot.explore` runs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exploration: Option<crate::explorer::ExplorationSummary>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -151,8 +157,46 @@ pub fn run_evaluation(
     let duration_s = frames as f32 / tps as f32;
     let manifest_dir: PathBuf = repo_root.join(&targets.manifest_dir);
     // The child (and the battery's source scan) resolve the game crate
-    // through CARGO_MANIFEST_DIR, exactly as under `cargo test`.
+    // through CARGO_MANIFEST_DIR, and the battery mirrors the CURRENT
+    // directory into the child's working directory, so games reading
+    // `./assets/...` directly need it to be the game crate, exactly as
+    // under `cargo test`.
+    //
+    // Resolve the binary BEFORE changing directory (callers pass paths
+    // relative to the repo root).
+    let binary = std::fs::canonicalize(binary)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| binary.to_string());
+    let binary = binary.as_str();
+    // Both are restored when this function returns OR panics, so callers'
+    // relative paths (e.g. `--json-out`) and their own CARGO_MANIFEST_DIR
+    // are untouched afterwards.
+    struct RestoreProcessState {
+        dir: Option<PathBuf>,
+        manifest_dir: Option<std::ffi::OsString>,
+    }
+    impl Drop for RestoreProcessState {
+        fn drop(&mut self) {
+            if let Some(dir) = &self.dir {
+                let _ = std::env::set_current_dir(dir);
+            }
+            match &self.manifest_dir {
+                Some(v) => std::env::set_var("CARGO_MANIFEST_DIR", v),
+                None => std::env::remove_var("CARGO_MANIFEST_DIR"),
+            }
+        }
+    }
+    let _restore = RestoreProcessState {
+        dir: std::env::current_dir().ok(),
+        manifest_dir: std::env::var_os("CARGO_MANIFEST_DIR"),
+    };
     std::env::set_var("CARGO_MANIFEST_DIR", &manifest_dir);
+    if let Err(e) = std::env::set_current_dir(&manifest_dir) {
+        eprintln!(
+            "bevy_playtest_eval: cannot enter {}: {e}",
+            manifest_dir.display()
+        );
+    }
 
     let mut traces: Vec<Option<StateTrace>> = Vec::new();
     let mut runs = Vec::new();
@@ -182,7 +226,14 @@ pub fn run_evaluation(
                         .map(|r| r.to_string())
                         .collect(),
                     error: None,
+                    findings: report
+                        .violations
+                        .iter()
+                        .take(20)
+                        .map(|v| format!("{} ({}): {}", v.rule, v.target, v.detail))
+                        .collect(),
                     trace: report.state_trace.clone(),
+                    exploration: report.exploration.clone(),
                 });
                 traces.push(report.state_trace);
             }
@@ -193,7 +244,9 @@ pub fn run_evaluation(
                     wall_s,
                     violation_rules: vec![],
                     error: Some(e.to_string()),
+                    findings: vec![],
                     trace: None,
+                    exploration: None,
                 });
                 traces.push(None);
             }

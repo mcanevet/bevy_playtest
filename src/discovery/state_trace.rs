@@ -128,15 +128,18 @@ impl StateTraceRecorder {
     }
 
     /// Record what happened during `frame` (call right after `update()`).
-    pub fn after_frame(&mut self, world: &World, frame: u64) {
+    /// Returns the state schedules that ran during this frame.
+    pub fn after_frame(&mut self, world: &World, frame: u64) -> Vec<String> {
         let ran: Vec<String> = std::mem::take(
             &mut *self
                 .pending
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner()),
         );
-        self.runs
-            .extend(ran.into_iter().map(|label| ScheduleRun { frame, label }));
+        self.runs.extend(ran.iter().map(|label| ScheduleRun {
+            frame,
+            label: label.clone(),
+        }));
 
         let now = world.read_change_tick();
         if frame > 0 {
@@ -175,6 +178,7 @@ impl StateTraceRecorder {
             }
         }
         self.last_tick = now;
+        ran
     }
 
     /// Finish the trace.

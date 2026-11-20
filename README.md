@@ -87,10 +87,23 @@ findings (violation, tick, entities involved) instead.
 
 ## What the battery catches out of the box
 
-The built-in battery scenario runs the chaos bot — keys (WASD/arrows
-by default) and mouse clicks (all primary buttons) at 10 Hz, holding
-each input 2 frames so `ButtonInput`-based games observe it — while
-these oracles watch:
+The built-in battery scenario runs the chaos bot in **explore** mode —
+keys (the game's own `KeyCode`s found by the source scan, else
+WASD/arrows) and mouse clicks at 10 Hz — while these oracles watch.
+Exploring means the bot remembers what it tried on each screen (the
+set of enabled widgets it can see) and prefers the least-tried key or
+widget there, clicks widgets three times out of four (else a random
+spot), and presses Escape to back out after 3 s without anything new
+(a new state or a new screen): never on the first screen seen, and
+waiting twice as long after each back-out on the same screen. Escape
+needs a key surface, so a scenario declaring no keys never backs out. Every choice is still drawn from the
+seeded stream, so runs replay exactly. The report then carries an
+`exploration` section: screens seen, states entered, widgets never
+clicked, keys never pressed, back-outs, and a verdict — "plateaued"
+(nothing new in the last quarter of the run) or "still discovering
+when the run ended", in which case "no findings" only covers what was
+reached. Authored scenarios opt in with `"explore": true` on a chaos
+bot. The oracles:
 
 - **Non-finite translations** — any non-finite `Transform.translation` → Fail (rotations/scales are not checked)
 - **Runaway geometry** — with nothing declared, an entity outside a
@@ -208,15 +221,17 @@ and `BEVY_PLAYTEST_SOURCE_ROOT` points the scan at a non-standard
 source root. An authored scenario file always wins (declaration
 beats inference).
 
-Games with menus get a UI tier too: with the `ui-surface` feature
-the harness enumerates the declared UI/interactable surface
-(`Pickable` markers, `bevy_ui_widgets` components, `TabIndex`,
-accessibility nodes, pointer-event observers) after the first frame
+Games with menus get a UI tier too: with the `ui-surface` feature (on
+by default under the takeover) the harness enumerates the declared
+UI/interactable surface (`Pickable` markers, `bevy_ui_widgets`
+components, bevy_ui `Interaction` buttons, `TabIndex`, accessibility
+nodes, pointer-event observers) after the first frame
 and re-captures it periodically (~twice a second), so menus and
 dialogs opened mid-run join the surface, with geometry matching
 `bevy_ui`'s own picking backend. The latest snapshot rides the
 playtest report as `ui_surface` (entity-set deltas along the way are
-reported as notes), and the chaos mouse bot interleaves: half its
+reported as notes), and it is what the explorer (above) navigates by.
+Without explore mode, the chaos mouse bot interleaves: half its
 clicks target the widget centers from the latest recapture
 (pointer-driven games get exercised; centers lag the world by at
 most one recapture interval, ~0.5s), half keep sweeping the whole
