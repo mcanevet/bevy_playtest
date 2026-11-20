@@ -70,6 +70,11 @@ one. Two `Actionlike` types coexist (multi-map enumeration), and no
 handler consumes `MenuAction2`, so `KeyH` shares L2's
 `context_unverified` grade.
 
+The `context_unverified` grades above are the ground truth for a
+reconcile that HAS independent liveness evidence (formerly the probe
+sweep; next, exploration). The per-run reconcile has none, so it
+emits only the L1 alarm.
+
 Supporting testbeds (structure-only in D1, consumed by later
 slices): a bespoke `Keymap` resource routing the REAL WASD bindings
 (shape and behavior), a `MenuFocus` witness, and a
@@ -121,8 +126,9 @@ plant catalog went away with discovery itself. What remains asserted:
 - the Leafwing declared tier (`lw_reconcile_lens_known_answer_commitments`):
   reader completeness across both maps (RON-loaded binding included),
   intent-tap press/fire correlation row by row, exactly one pristine
-  `DeclaredButDead` alarm (L1 KeyN), `ContextUnverified` on every
-  wiring-live non-chord binding, chord members carrying notes only, and
+  `DeclaredButDead` alarm (L1 KeyN) and no other finding (the per-run
+  reconcile has no liveness evidence, so it emits no
+  `ContextUnverified`), chord members carrying notes only, and
   byte-identical reconcile output across two runs — all read from the
   report's `lw_reconciled`;
 - the ground truth's closed vocabularies.

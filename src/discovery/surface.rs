@@ -1,103 +1,14 @@
-//! Discovered input surface (Phase 5): the report-facing shape of
-//! discovery results.
-//!
-//! `DiscoveredSurface` is what the probe/diff/cache layers produce
-//! and what `PlaytestReport` carries when discovery ran. Consumers
-//! (JUnit renderers, dashboards) read it as structured data; it is
-//! deliberately SEPARATE from `ViolationEntry.detail` so the
-//! verbatim-detail contract of violations is untouched. The one
-//! overlap is the frozen-world annotation: a `frozen_world` finding
-//! annotated with discovery context gets a `ViolationMeta` block
-//! (serialized as `_meta`) — extra structured data NEXT TO the
-//! verbatim detail, never inside it.
-//!
-//! The IR layer (`SurfaceEntry`, `ContextWitness`, `Evidence`,
-//! `BuildProfile`, `DiscoveryFinding`) extends the legacy
-//! `keys`/`mouse_buttons` lists — nothing existing is removed or
-//! renamed; every existing consumer, cache entry and test keeps
-//! working. The new fields are additive, default-empty and
-//! skip-serialized when empty (scoped to the IR layer's fields;
-//! whole-matrix findings like `mouse_motion`/`focus_walk` instead
-//! serialize as `null` when absent via `#[serde(default)]` — same
-//! additive-promotion outcome: old JSON never grows new keys and
-//! new JSON stays readable by old consumers). `to_entries` projects
-//! the legacy shape into entries for D1-c consumers; the projection
-//! is lossy by design (entries are richer; a reverse mapping would
-//! only ever be approximate).
-//!
-//! Field-reality adjustments vs the design doc, made visible here:
-//!
-//! - `readers` maps a device class to a reader COUNT (not system
-//!   names): system names are masked without `bevy_ecs/debug`, and
-//!   the crate does not depend on that feature. Counts remain
-//!   annotation-grade information.
-//! - `probed_keys_effective` / `probed_keys_total` in the
-//!   frozen-world annotation derive from `keys`, but "probed" means
-//!   an INFORMATIVE raw probe record: never-probed group-completion
-//!   siblings ([`KeyConfidence::Inferred`]) and the control key
-//!   ([`KeyConfidence::Unclassified`]) stay visible in `keys` yet
-//!   are excluded from the count.
+//! Report-facing IR shared by the declared tier and the oracles:
+//! `SurfaceEntry`, `ContextWitness`, `Evidence`, `DiscoveryFinding`
+//! (used by the Leafwing reconcile, reported as `lw_reconciled`),
+//! `BuildProfile` (stamped on every report), and `ViolationMeta`
+//! (structured `_meta` evidence next to a violation's verbatim
+//! detail, never inside it).
 
 use serde::{Deserialize, Serialize};
 
 use super::diff::Effect;
 use super::provenance::ProvenanceGrade;
-
-/// How a key came to be in the surface.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum KeyConfidence {
-    /// Observed divergence in this key's own probe run(s).
-    Exact,
-    /// Inferred: group-completion sibling of a key that DID diverge
-    /// (e.g., KeyW diverges; KeyA/KeyS/KeyD marked as
-    /// likely-movement). Heuristic — inferred only, never `Exact`,
-    /// or the confidence field lies. (Phase 6 populates this.)
-    Inferred,
-    /// Unclassifiable: this key IS the probe matrix's control key, so
-    /// its probe run is identical to its own control baseline BY
-    /// CONSTRUCTION — no differential verdict about it is possible,
-    /// whatever the game binds. Never a trusted negative, and never
-    /// counted as an informative probe (the flow layer assigns
-    /// this when the control key appears among the candidates; by
-    /// default it is excluded from the candidate set instead).
-    Unclassified,
-}
-
-/// Whole-surface confidence.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum SurfaceConfidence {
-    /// Controls agreed (determinism gate passed): every `None`
-    /// effect is a trusted negative.
-    #[default]
-    Exact,
-    /// The two control runs diverged from each other: effects are
-    /// statistical. The report must say so, not silently trust
-    /// negatives (refusal-over-silence applies to confidence too).
-    Statistical,
-}
-
-impl SurfaceConfidence {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            SurfaceConfidence::Exact => "exact",
-            SurfaceConfidence::Statistical => "statistical",
-        }
-    }
-}
-
-/// One effectiveness datum: key → effect, plus the length
-/// of the probe that established it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct KeyFinding {
-    /// Candidate key name (normalized control-pair string).
-    pub key: String,
-    /// Observed effect (first-divergence delta), or `None` if the
-    /// probe run matched the control trace.
-    pub effect: Option<Effect>,
-    /// How this entry got into the surface.
-    pub confidence: KeyConfidence,
-}
 
 /// Build profile a surface was learned under. `cfg`-gated keys
 /// (e.g. `#[cfg(debug_assertions)]` debug trackers) make dev-profile
@@ -141,8 +52,7 @@ impl BuildProfile {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ContextWitness {
     /// Entry observed at boot context, WITHOUT a recorded
-    /// fingerprint (the legacy shape — [`DiscoveredSurface::to_entries`]
-    /// emits this for D0 findings). The context is genuinely
+    /// fingerprint (what the Leafwing reconcile emits). The context is genuinely
     /// uncharacterized beyond "the game's ordinary startup state";
     /// `describe` says so rather than guessing.
     Boot,
@@ -209,8 +119,7 @@ impl ContextWitness {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Evidence {
     /// Differential probe run diverged from its control baseline
-    /// at `frame` (frames are absolute, matching
-    /// [`DiscoveredSurface::probed_at`]).
+    /// at `frame` (absolute frame index).
     ProbeRun { frame: u64, effect: Effect },
     /// Intent-tap observed at `stage` (stage names come from the
     /// `crate::discovery::provenance` constants, starting with
@@ -245,17 +154,10 @@ pub enum Evidence {
 /// was observed in, the declared intent it maps to (if any), the
 /// observed effect signature, the evidence that earned its grade,
 /// and the qualifiers that alarm semantics depend on.
-///
-/// Entries are additive to [`DiscoveredSurface`]'s legacy
-/// `keys`/`mouse_buttons` lists (see [`DiscoveredSurface::entries`]);
-/// D0 surfaces stay valid, and [`DiscoveredSurface::to_entries`]
-/// projects them mechanically so D1-c consumers need not maintain
-/// both formats by hand.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SurfaceEntry {
-    /// Normalized input name — SAME string space as
-    /// [`KeyFinding::key`] (normalized control-pair keys), so sweep
-    /// output and entries interoperate without remapping.
+    /// Normalized input name — the scenario schema's key spelling
+    /// (e.g. `KeyJ`).
     pub input: String,
     /// Grade this entry earned. Backing evidence lives in
     /// `evidence`; see [`Self::grade_is_consistent`].
@@ -280,8 +182,7 @@ pub struct SurfaceEntry {
     /// Build profile that produced this entry (`cfg`-gated keys
     /// make dev surfaces larger than release ones).
     pub profile: Option<BuildProfile>,
-    /// Scan-caveat style qualifiers, same tone as
-    /// [`DiscoveredSurface::notes`].
+    /// Scan-caveat style qualifiers.
     pub notes: Vec<String>,
 }
 
@@ -330,8 +231,8 @@ impl SurfaceEntry {
 }
 
 /// Kind of discovery finding — the disagreement channel between
-/// methods. Findings live in a separate list on [`DiscoveredSurface`]
-/// (`findings`); they annotate the surface, they never mutate the
+/// methods. Findings live in a separate list (e.g.
+/// `ReconciledLw::findings`); they annotate, they never mutate the
 /// entries they discuss.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -376,327 +277,6 @@ pub struct DiscoveryFinding {
     pub detail: String,
 }
 
-/// One mouse grid-cell finding (Phase 1 mouse grammar): a scripted
-/// left click at this cell's center, probed at the readiness point
-/// and diffed against the mouse control run (a click at the plan's
-/// control position). Coordinates are NORMALIZED window space
-/// (0.0..=1.0, cell center), so findings stay comparable across
-/// window sizes and grid resolutions.
-///
-/// Confidence vocabulary reuses [`KeyConfidence`]: `Exact` =
-/// observed divergence vs the mouse control; `Unclassified` =
-/// vacuous or coverage-untrusted verdict (the control-position cell,
-/// or a probe/control pair whose frames stopped short of the
-/// expected span); `Inferred` is never assigned here (group
-/// completion is keyboard-only).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct MouseCellFinding {
-    /// Cell identifier `r{row}c{col}` (0-based; schema-safe, matches
-    /// the probe scenario names).
-    pub id: String,
-    /// Grid row (0-based, top to bottom).
-    pub row: u32,
-    /// Grid column (0-based, left to right).
-    pub col: u32,
-    /// Normalized window x of the cell center (0.0..=1.0).
-    pub norm_x: f32,
-    /// Normalized window y of the cell center (0.0..=1.0).
-    pub norm_y: f32,
-    /// Observed effect (first divergence vs the mouse control
-    /// trace), or `None` if the probe matched the control.
-    pub effect: Option<Effect>,
-    /// How this cell's verdict was earned (see the type docs).
-    pub confidence: KeyConfidence,
-    /// Derivation record: the differential probe sweep that pressed
-    /// this cell's center click (`probe_verified`; no new grade
-    /// variants — the roadmap §6 vocabulary is frozen).
-    pub provenance: ProvenanceGrade,
-}
-
-/// The motion-probe finding (Phase 1 mouse grammar, continuation):
-/// the zero-net +d/−d oscillation probed at the readiness point and
-/// diffed against the motion control pair (same inert-key baseline,
-/// no motion). Answers "does the game react to mouse movement AT
-/// ALL" — not which directions (see [`DiscoveredSurface::mouse_motion`]).
-///
-/// Confidence vocabulary reuses [`KeyConfidence`]: `Exact` =
-/// observed divergence vs the motion control; `Unclassified` =
-/// coverage-untrusted inert verdict (asymmetric or short-span
-/// probe/control pair). `Inferred` is never assigned (group
-/// completion is keyboard-only).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct MouseMotionFinding {
-    /// Observed effect (first divergence vs the motion control
-    /// trace), or `None` if the probe matched the control.
-    pub effect: Option<Effect>,
-    /// How the verdict was earned (see the type docs).
-    pub confidence: KeyConfidence,
-    /// Derivation record: the differential probe sweep that
-    /// injected the oscillation (`probe_verified`).
-    pub provenance: ProvenanceGrade,
-}
-
-/// The focus-walk probe finding: a single scripted `Tab` press at
-/// the readiness point, diffed against a doubled focus-walk control
-/// pair (same inert-key baseline, no Tab). Answers "does advancing
-/// keyboard focus change observable state AT ALL".
-///
-/// HONEST SCOPE (docs must not lie): an inert `effect` means "a Tab
-/// press produced no observable state change in this run" — NOT
-/// "the game has no focus system". bevy_input_focus 0.20.1 reacts
-/// to Tab only when the game itself adds `TabNavigationPlugin`
-/// (NOT part of DefaultPlugins) and spawns focusable entities, so
-/// a game can read inert here and still manage focus through other
-/// channels (e.g. pointer clicks setting focus directly).
-///
-/// Confidence vocabulary reuses [`KeyConfidence`]: `Exact` =
-/// observed divergence vs the focus-walk control; `Unclassified` =
-/// coverage-untrusted inert verdict (asymmetric or short-span
-/// probe/control pair). `Inferred` is never assigned.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct FocusWalkFinding {
-    /// Observed effect (first divergence vs the focus-walk control
-    /// trace), or `None` if the probe matched the control.
-    pub effect: Option<Effect>,
-    /// How the verdict was earned (see the type docs).
-    pub confidence: KeyConfidence,
-    /// Derivation record: the differential probe sweep that
-    /// injected the Tab press (`probe_verified`).
-    pub provenance: ProvenanceGrade,
-}
-
-/// The discovered input surface of one game (per
-/// `docs/explanation/input-surface-discovery.md`, Report
-/// Integration section).
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct DiscoveredSurface {
-    /// Keyboard keys probed (all candidates; `effect: None` = probed
-    /// but inert at the probed points). Group-completed siblings
-    /// (Phase 6) appear here with `KeyConfidence::Inferred`.
-    pub keys: Vec<KeyFinding>,
-    /// Mouse buttons probed, same shape as `keys`.
-    pub mouse_buttons: Vec<KeyFinding>,
-    /// Motion-probe finding, if mouse motion was probed: whether the
-    /// game reacted to the zero-net oscillation. Answers "does the
-    /// game react to mouse movement AT ALL" — not to which
-    /// directions (a single diagonal oscillation cannot resolve
-    /// direction; `mouse_motion_cardinals` is a future knob).
-    ///
-    /// `#[serde(default)]` + additive promotion: pre-motion-era
-    /// artifacts serialized `"mouse_motion": null` (or omitted) and
-    /// deserialize unchanged to `None`; new artifacts serialize a
-    /// [`MouseMotionFinding`] OBJECT instead of a bare effect.
-    #[serde(default)]
-    pub mouse_motion: Option<MouseMotionFinding>,
-    /// Focus-walk probe finding, if the walker ran: whether a
-    /// single scripted `Tab` press changed observable state at the
-    /// readiness point. See [`FocusWalkFinding`] for the honest
-    /// scope of an inert verdict.
-    ///
-    /// `#[serde(default)]` + additive promotion, same pattern as
-    /// `mouse_motion`: pre-walker artifacts deserialize unchanged.
-    #[serde(default)]
-    pub focus_walk: Option<FocusWalkFinding>,
-    /// Wheel-probe effect, if the wheel was probed.
-    pub wheel: Option<Effect>,
-    /// Gamepad buttons probed, same shape as `keys`.
-    pub gamepad_buttons: Vec<KeyFinding>,
-    /// Gamepad axes probed (axis name → effect).
-    pub gamepad_axes: Vec<(String, Option<Effect>)>,
-    /// Probe points (frames) the surface was learned at.
-    pub probed_at: Vec<u64>,
-    /// Device class → number of game systems whose access set
-    /// includes a read of that class's signals (annotation-grade;
-    /// system names are not extractable without bevy_ecs/debug).
-    pub readers: Vec<(String, usize)>,
-    /// Per-key confidence override map, keyed by key name. Sparse:
-    /// keys absent from this map use their `KeyFinding.confidence`.
-    /// Populated by group completion (Phase 6).
-    pub key_confidence: Vec<(String, KeyConfidence)>,
-    /// Whole-surface confidence.
-    pub confidence: SurfaceConfidence,
-    /// Devices skipped via static pruning (e.g. `["gamepad",
-    /// "wheel"]`). The keyboard class is never in this list
-    /// (fail-open rule).
-    pub pruned_devices: Vec<String>,
-    /// Caveats surfaced by the static scan (exclusive systems,
-    /// uninitialized schedules, ...) that qualify the surface.
-    pub notes: Vec<String>,
-    /// Build profile of the GAME binary the surface was learned
-    /// against (promoted from the probe child's report by
-    /// the (removed) discovery flow). `cfg`-gated keys make
-    /// dev-profile surfaces strictly larger than release ones, so a
-    /// surface without its profile invites misleading cross-profile
-    /// comparisons. `None` for D0-era cached surfaces and direct
-    /// `aggregate` callers. Additive, skip-serialized when empty.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub build_profile: Option<BuildProfile>,
-    /// Canonical IR entries (D1+): richer than `keys`/`mouse_buttons`
-    /// — one entry per (input × context) with grade, evidence,
-    /// action label and qualifiers. ADDITIVE and default-empty:
-    /// D0 surfaces (and the legacy renderers that read them) are
-    /// unaffected; D1-c producers fill this so later tooling can
-    /// read one format instead of both.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub entries: Vec<SurfaceEntry>,
-    /// Method disagreements ([`DiscoveryFinding`]): declared-but-dead
-    /// alarms, discovered-but-undeclared residue, unexplained
-    /// upstream consumption, unverified-context coverage. ADDITIVE
-    /// and default-empty (old JSON never grows the key; old
-    /// consumers never see it).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub findings: Vec<DiscoveryFinding>,
-    /// Leafwing declared-tier reconcile ([`crate::discovery::lw`]),
-    /// populated by the (removed) discovery flow when the
-    /// probe children's reader found declared bindings. PURELY
-    /// ADDITIVE — a REPORTED section, never an applied one: the
-    /// frozen D1-c fields above (`entries`, `findings`) are the
-    /// sweep's own commitments, and `retracted_residue` in
-    /// particular is left for consumers to apply (the sweep draft
-    /// deliberately keeps its findings ↔ live-inputs bijection).
-    /// `None` when the game declares nothing or the `lw-reader`
-    /// feature is off. `#[serde(default)]`: D1-d-era caches
-    /// deserialize to `None`. Serialized only when present.
-    #[cfg(feature = "lw-reader")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lw: Option<crate::discovery::lw::ReconciledLw>,
-    /// Mouse grid-cell findings (Phase 1 mouse grammar): one row per
-    /// probed cell of the plan's bounded grid, in row-major order —
-    /// the mouse analogue of `keys`. ADDITIVE and default-empty:
-    /// D0/D1-era surfaces and keyboard-only plans (`0 × 0` grid)
-    /// leave it absent on the wire, and old artifacts deserialize
-    /// unchanged. Serialized with provenance; never pruned on weak
-    /// evidence (fail-open: a cell with no verdict is reported as
-    /// `Unclassified`, never dropped).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mouse_cells: Vec<MouseCellFinding>,
-}
-
-impl DiscoveredSurface {
-    /// The number of keyboard keys that caused divergence (used by
-    /// the frozen-world annotation as `probed_keys_effective`).
-    /// EXCLUDES the control key ([`KeyConfidence::Unclassified`]):
-    /// under nondeterminism its probe can diverge from its own
-    /// baseline, and that artifact must not count as an effective
-    /// key (the same exclusion `probed_key_count` applies).
-    pub fn effective_key_count(&self) -> usize {
-        self.keys
-            .iter()
-            .filter(|k| k.effect.is_some() && k.confidence != KeyConfidence::Unclassified)
-            .count()
-    }
-
-    /// Number of keyboard keys with an informative raw probe record
-    /// (the denominator of the frozen-world annotation). EXCLUDES
-    /// group-completion siblings that were never probed
-    /// ([`KeyConfidence::Inferred`] entries added by Phase 6) and the
-    /// control key ([`KeyConfidence::Unclassified`], which carries no
-    /// differential verdict): counting those would overstate how many
-    /// keys the matrix actually tapped.
-    pub fn probed_key_count(&self) -> usize {
-        self.keys
-            .iter()
-            .filter(|k| k.confidence == KeyConfidence::Exact)
-            .count()
-    }
-
-    /// Look up the effective confidence for a key, falling back to
-    /// the `KeyFinding`'s own value when the sparse override map has
-    /// no entry.
-    pub fn confidence_for(&self, key: &str) -> Option<KeyConfidence> {
-        if let Some((_, conf)) = self.key_confidence.iter().find(|(k, _)| k == key) {
-            return Some(*conf);
-        }
-        self.keys
-            .iter()
-            .find(|k| k.key == key)
-            .map(|k| k.confidence)
-    }
-
-    /// Keys worth pressing for discovery-driven scenario injection
-    /// (`BEVY_PLAYTEST_DISCOVER_INJECT=1`): every key with an
-    /// observed effect PLUS group-completed siblings
-    /// ([`KeyConfidence::Inferred`] — heuristically likely-bound, and
-    /// pressing them is cheap; leaving them out would starve the
-    /// bot of exactly the movement-cluster coverage the group phase
-    /// exists to provide). NEVER the control key
-    /// ([`KeyConfidence::Unclassified`] — no differential verdict
-    /// exists about it) and never inert keys (pressing keys the game
-    /// demonstrably ignores recreates the declared-surface hole
-    /// injection exists to close). Sorted and deduplicated: this
-    /// list seeds the injected `bot.raw_surface.keys` — the battery
-    /// parent additionally withholds poison keys (Escape/Tab; a
-    /// probe-VERIFIED poison key never reaches the blind bot) and
-    /// reports the withholding, keeping reports and cache entries
-    /// comparable.
-    pub fn chaos_keys(&self) -> Vec<String> {
-        let mut keys: Vec<String> = self
-            .keys
-            .iter()
-            .filter(|k| {
-                k.confidence != KeyConfidence::Unclassified
-                    && (k.effect.is_some() || k.confidence == KeyConfidence::Inferred)
-            })
-            .map(|k| k.key.clone())
-            .collect();
-        keys.sort();
-        keys.dedup();
-        keys
-    }
-
-    /// Mechanical projection of today's `keys`/`mouse_buttons`
-    /// findings into IR entries, for D1-c consumers that read
-    /// entries (avoiding dual-format maintenance). Lossy BY DESIGN:
-    /// entries are richer than the legacy shape, and a reverse
-    /// mapping would only ever be approximate.
-    ///
-    /// - Only EFFECTIVE findings project (observed effect, excluding
-    ///   the control key — the same exclusion discipline as
-    ///   [`Self::effective_key_count`] and [`Self::chaos_keys`]);
-    ///   inert and inferred-no-effect keys stay legacy-only. The
-    ///   entry list is the "what is live" view; the negatives are
-    ///   the `keys` list's job.
-    /// - Grade is `ProbeVerified` for every projected entry (each
-    ///   carries a `ProbeRun` evidence, so `grade_is_consistent`
-    ///   holds); context is the unfingerprinted `Boot` witness (the
-    ///   D0 flow never recorded fingerprints).
-    /// - The probe FRAME is not retained per-key by
-    ///   [`KeyFinding`]; the first entry of `probed_at` stands in
-    ///   for all — a documented lossiness, and each projected
-    ///   entry's `notes` say so, so the caveat travels with the
-    ///   artifact instead of living only in this doc.
-    pub fn to_entries(&self) -> Vec<SurfaceEntry> {
-        let probe_frame = self.probed_at.first().copied().unwrap_or(0);
-        self.keys
-            .iter()
-            .chain(self.mouse_buttons.iter())
-            .filter(|k| k.effect.is_some() && k.confidence != KeyConfidence::Unclassified)
-            .map(|k| {
-                let effect = k.effect.expect("filtered: effect.is_some()");
-                SurfaceEntry {
-                    input: k.key.clone(),
-                    grade: ProvenanceGrade::ProbeVerified,
-                    action_label: None,
-                    context: ContextWitness::Boot,
-                    effect_signature: Some(effect),
-                    evidence: vec![Evidence::ProbeRun {
-                        frame: probe_frame,
-                        effect,
-                    }],
-                    mutable: false,
-                    profile: None,
-                    notes: vec![format!(
-                        "projected from a D0 surface: per-key probe \
-                         frames are not retained; the evidence frame \
-                         ({probe_frame}) is the surface's first probe \
-                         point, not this input's"
-                    )],
-                }
-            })
-            .collect()
-    }
-}
-
 /// Machine-readable annotation block attached to a violation
 /// (serialized as `_meta`), next to the verbatim human `detail`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -714,174 +294,6 @@ pub struct ViolationMeta {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn finding(key: &str, effect: Option<Effect>, confidence: KeyConfidence) -> KeyFinding {
-        KeyFinding {
-            key: key.to_string(),
-            effect,
-            confidence,
-        }
-    }
-
-    fn sample_surface() -> DiscoveredSurface {
-        DiscoveredSurface {
-            keys: vec![
-                finding(
-                    "KeyW",
-                    Some(Effect {
-                        first_divergence_frame_delta: 2,
-                    }),
-                    KeyConfidence::Exact,
-                ),
-                finding("KeyA", None, KeyConfidence::Exact),
-                // Never-probed sibling (group completion): visible in
-                // `keys` but NOT counted as probed.
-                finding("KeyS", None, KeyConfidence::Inferred),
-                // The control key itself: no differential verdict.
-                finding("KeyQ", None, KeyConfidence::Unclassified),
-            ],
-            probed_at: vec![60, 90],
-            readers: vec![("keyboard".to_string(), 3)],
-            confidence: SurfaceConfidence::Exact,
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn effective_and_probed_counts_split_inert_from_live() {
-        let s = sample_surface();
-        assert_eq!(s.effective_key_count(), 1);
-        // 4 entries in `keys`, but only 2 carry informative raw
-        // probe records (KeyW probed-effective, KeyA probed-inert);
-        // the Inferred sibling and the Unclassified control key are
-        // visible in the surface but never overstated as probed.
-        assert_eq!(s.probed_key_count(), 2);
-    }
-
-    #[test]
-    fn chaos_keys_pick_effective_and_inferred_drop_the_rest() {
-        // The injection derivation in miniature: what the battery
-        // parent puts into the injected chaos bot's raw_surface.
-        let s = sample_surface();
-        // KeyW: observed effect (Exact). KeyS: Inferred sibling —
-        // included; discovery believes group completion, and the
-        // bot pressing it costs nothing. KeyA: demonstrably inert
-        // (probed, no effect) — excluded, pressing it recreates the
-        // declared-surface hole injection exists to close. KeyQ:
-        // the control key (Unclassified) — never.
-        assert_eq!(s.chaos_keys(), vec!["KeyS".to_string(), "KeyW".to_string()]);
-        // Order stability matters: the list becomes a scenario file
-        // verbatim, and dedup must survive duplicated findings.
-        let mut duped = sample_surface();
-        duped
-            .keys
-            .push(finding("KeyW", None, KeyConfidence::Inferred));
-        assert_eq!(
-            duped.chaos_keys(),
-            vec!["KeyS".to_string(), "KeyW".to_string()],
-            "duplicates collapse and the sort order is canonical"
-        );
-        // An Unclassified key is excluded even if it spuriously
-        // carries an effect (nondeterministic control-run artifact)
-        // — mirroring the effective-count exclusion.
-        let s = DiscoveredSurface {
-            keys: vec![finding(
-                "Space",
-                Some(Effect {
-                    first_divergence_frame_delta: 1,
-                }),
-                KeyConfidence::Unclassified,
-            )],
-            ..sample_surface()
-        };
-        assert!(
-            !s.chaos_keys().contains(&"Space".to_string()),
-            "the control key never enters the injected surface"
-        );
-        // Empty surface (a game that consumes no keys): injection
-        // yields an empty key list — keyboard-opt-out, mouse chaos
-        // unaffected (the battery keeps default mouse buttons).
-        let empty = DiscoveredSurface {
-            keys: vec![],
-            ..sample_surface()
-        };
-        assert_eq!(empty.chaos_keys(), Vec::<String>::new());
-    }
-
-    #[test]
-    fn spurious_control_key_effect_does_not_count_as_effective() {
-        // Under nondeterminism the control key's probe CAN diverge
-        // from its own baseline — carrying `effect: Some(..)` — but
-        // it is `Unclassified` by design and must stay OUT of the
-        // effective count just as it is out of the probed count.
-        let s = DiscoveredSurface {
-            keys: vec![
-                finding(
-                    "KeyW",
-                    Some(Effect {
-                        first_divergence_frame_delta: 3,
-                    }),
-                    KeyConfidence::Exact,
-                ),
-                finding(
-                    "KeyQ",
-                    Some(Effect {
-                        first_divergence_frame_delta: 1,
-                    }),
-                    KeyConfidence::Unclassified,
-                ),
-            ],
-            probed_at: vec![60, 90],
-            ..sample_surface()
-        };
-        assert_eq!(s.effective_key_count(), 1, "only KeyW is effective");
-        assert_eq!(s.probed_key_count(), 1);
-    }
-
-    #[test]
-    fn confidence_lookup_prefers_override_map() {
-        let mut s = sample_surface();
-        // KeyA has no override → its own finding confidence.
-        assert_eq!(s.confidence_for("KeyA"), Some(KeyConfidence::Exact));
-        // KeyS has no override → Inferred from the finding.
-        assert_eq!(s.confidence_for("KeyS"), Some(KeyConfidence::Inferred));
-        // Override flips the answer for KeyS.
-        s.key_confidence = vec![("KeyS".to_string(), KeyConfidence::Exact)];
-        assert_eq!(s.confidence_for("KeyS"), Some(KeyConfidence::Exact));
-        // Unknown key → None.
-        assert_eq!(s.confidence_for("KeyX"), None);
-    }
-
-    #[test]
-    fn surface_confidence_serializes_lowercase_key_confidence_title_case() {
-        // The documented wire contract (design doc + how-to): the
-        // WHOLE-SURFACE confidence is lowercase; the per-key
-        // confidence is title-cased. Pin the wire bytes.
-        let s = DiscoveredSurface {
-            keys: vec![
-                finding("Digit1", None, KeyConfidence::Exact),
-                finding("KeyW", None, KeyConfidence::Inferred),
-                finding("KeyQ", None, KeyConfidence::Unclassified),
-            ],
-            confidence: SurfaceConfidence::Statistical,
-            ..Default::default()
-        };
-        let json = serde_json::to_string(&s).unwrap();
-        assert!(json.contains("\"confidence\":\"statistical\""), "{json}");
-        assert!(json.contains("\"confidence\":\"Exact\""), "{json}");
-        assert!(json.contains("\"confidence\":\"Inferred\""), "{json}");
-        assert!(json.contains("\"confidence\":\"Unclassified\""), "{json}");
-        let back: DiscoveredSurface = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, s);
-    }
-
-    #[test]
-    fn surface_round_trips_through_json() {
-        let s = sample_surface();
-        let json = serde_json::to_string(&s).unwrap();
-        let back: DiscoveredSurface = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, s);
-    }
 
     #[test]
     fn violation_meta_serializes_as_underscore_meta() {
@@ -1211,58 +623,6 @@ mod tests {
     }
 
     #[test]
-    fn to_entries_projects_effective_findings_as_probe_verified() {
-        let s = sample_surface();
-        let entries = s.to_entries();
-        // Only KeyW is effective (the Inferred sibling KeyS carries
-        // no effect; KeyA is inert; KeyQ is the control key —
-        // excluded even if it spuriously carried one, per the
-        // effective-count discipline).
-        assert_eq!(entries.len(), 1);
-        let e = &entries[0];
-        assert_eq!(e.input, "KeyW");
-        assert_eq!(e.grade, ProvenanceGrade::ProbeVerified);
-        assert_eq!(e.effect_signature, Some(effect(2)));
-        assert_eq!(e.context, ContextWitness::Boot);
-        assert!(e.grade_is_consistent(), "projection must be consistent");
-        // The ProbeRun evidence carries the first probe frame —
-        // documented lossiness (per-key frames are not retained).
-        assert!(
-            matches!(e.evidence[0], Evidence::ProbeRun { frame: 60, .. }),
-            "first probed_at frame stands in for the lost per-key frame"
-        );
-        // And the entry SAYS so (refusal-over-silence): the lossiness
-        // disclosure travels with the artifact, not just the docs.
-        assert_eq!(e.notes.len(), 1, "projection carries its caveat");
-        assert!(e.notes[0].contains("not retained"));
-        // Control keys and effectless findings never project, even
-        // with a spurious effect on the control key.
-        let s = DiscoveredSurface {
-            keys: vec![
-                finding("KeyQ", Some(effect(1)), KeyConfidence::Unclassified),
-                finding("KeyA", None, KeyConfidence::Exact),
-                finding("KeyW", Some(effect(3)), KeyConfidence::Exact),
-            ],
-            ..sample_surface()
-        };
-        let entries = s.to_entries();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].input, "KeyW");
-        // Mouse buttons project too (effective ones, same rules);
-        // the sample base already carries an effective KeyW, so the
-        // mouse entry ADDS to it rather than replacing it.
-        let s = DiscoveredSurface {
-            mouse_buttons: vec![finding("Left", Some(effect(1)), KeyConfidence::Exact)],
-            ..sample_surface()
-        };
-        let entries = s.to_entries();
-        assert_eq!(entries.len(), 2);
-        let inputs: Vec<&str> = entries.iter().map(|e| e.input.as_str()).collect();
-        assert!(inputs.contains(&"Left"));
-        assert!(inputs.contains(&"KeyW"));
-    }
-
-    #[test]
     fn context_witness_describe_never_empty() {
         let witnesses = vec![
             ContextWitness::Boot,
@@ -1322,102 +682,5 @@ mod tests {
             let back: DiscoveryFindingKind = serde_json::from_str(&kj).unwrap();
             assert_eq!(back, kind);
         }
-    }
-
-    #[test]
-    fn empty_entries_and_findings_skip_serialization_old_json_stays_old() {
-        // Back-compat both directions: a surface with no IR fields
-        // serializes EXACTLY as before (no new keys appear), and a
-        // legacy JSON document deserializes with empty IR lists.
-        let legacy = sample_surface();
-        let json = serde_json::to_string(&legacy).unwrap();
-        assert!(!json.contains("\"entries\""), "{json}");
-        assert!(!json.contains("\"findings\""), "{json}");
-        let old_doc = r#"{
-            "keys": [],
-            "mouse_buttons": [],
-            "mouse_motion": null,
-            "wheel": null,
-            "gamepad_buttons": [],
-            "gamepad_axes": [],
-            "probed_at": [60],
-            "readers": [["keyboard", 1]],
-            "key_confidence": [],
-            "confidence": "exact",
-            "pruned_devices": [],
-            "notes": []
-        }"#;
-        let back: DiscoveredSurface = serde_json::from_str(old_doc).unwrap();
-        assert!(back.entries.is_empty());
-        assert!(back.findings.is_empty());
-        assert!(back.mouse_cells.is_empty());
-        assert_eq!(back.probed_at, vec![60]);
-    }
-
-    #[test]
-    fn empty_mouse_cells_skip_serialization_and_old_surfaces_stay_old() {
-        // Same back-compat contract for the mouse grid (additive
-        // field): a keyboard-only surface (or a `0 × 0` plan)
-        // serializes with NO `mouse_cells` key — byte-level old
-        // artifacts stay byte-level identical — and a pre-mouse
-        // JSON document deserializes with an empty grid.
-        let legacy = sample_surface();
-        let json = serde_json::to_string(&legacy).unwrap();
-        assert!(!json.contains("\"mouse_cells\""), "{json}");
-        let old_doc = r#"{
-            "keys": [],
-            "mouse_buttons": [],
-            "mouse_motion": null,
-            "wheel": null,
-            "gamepad_buttons": [],
-            "gamepad_axes": [],
-            "probed_at": [60],
-            "readers": [["keyboard", 1]],
-            "key_confidence": [],
-            "confidence": "exact",
-            "pruned_devices": [],
-            "notes": []
-        }"#;
-        let back: DiscoveredSurface = serde_json::from_str(old_doc).unwrap();
-        assert!(back.mouse_cells.is_empty());
-    }
-
-    #[test]
-    fn populated_mouse_cells_round_trip_on_the_surface() {
-        let mut s = sample_surface();
-        s.mouse_cells = vec![MouseCellFinding {
-            id: "r2c3".to_string(),
-            row: 2,
-            col: 3,
-            norm_x: 0.7,
-            norm_y: 0.625,
-            effect: Some(effect(1)),
-            confidence: KeyConfidence::Exact,
-            provenance: ProvenanceGrade::ProbeVerified,
-        }];
-        let json = serde_json::to_string(&s).unwrap();
-        assert!(json.contains("\"mouse_cells\""), "{json}");
-        let back: DiscoveredSurface = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.mouse_cells, s.mouse_cells);
-        assert_eq!(back, s);
-    }
-
-    #[test]
-    fn populated_entries_and_findings_round_trip_on_the_surface() {
-        let mut s = sample_surface();
-        s.entries = vec![entry(
-            ProvenanceGrade::ProbeVerified,
-            vec![probe_run_evidence()],
-        )];
-        s.findings = vec![DiscoveryFinding {
-            kind: DiscoveryFindingKind::DiscoveredButUndeclared,
-            input: "KeyW".to_string(),
-            detail: "probe-verified but no declared source names it".to_string(),
-        }];
-        let json = serde_json::to_string(&s).unwrap();
-        assert!(json.contains("\"entries\""), "{json}");
-        assert!(json.contains("\"findings\""), "{json}");
-        let back: DiscoveredSurface = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, s);
     }
 }

@@ -695,18 +695,22 @@ pub fn aggregate_lw_evidence(reports: &[&crate::state::PlaytestReport]) -> Optio
 ///   a disabled-then-re-enabled action that FIRED (the firing
 ///   overrides the sticky disabled evidence).
 /// - **`ContextUnverified`** finding: declared ∧ tap-ok (wiring
-///   live) ∧ never verified outside the boot context — the honest
-///   coverage grade for context-gated actions; NOT alarm-grade.
+///   live) ∧ liveness evidence exists but never verified this input
+///   — the honest coverage grade for context-gated actions; NOT
+///   alarm-grade. Emitted ONLY when `live_inputs` is `Some`: with no
+///   liveness evidence at all there is nothing to be unverified
+///   against, so the grade would fire on every working binding.
 /// - **Retraction**: draft `DiscoveredButUndeclared` findings on
 ///   inputs the reader declared are duplicated residue — listed in
 ///   `retracted_residue` for the caller to remove.
 ///
-/// `draft_inputs_live`: inputs the sweep measured LIVE (effect
-/// signature observed). Chord awareness comes from the declaration
-/// rows themselves (`LwDeclaration::chord`).
+/// `live_inputs`: inputs independently measured LIVE (effect
+/// signature observed), or `None` when no liveness evidence exists
+/// (the per-run report path). Chord awareness comes from the
+/// declaration rows themselves (`LwDeclaration::chord`).
 pub fn reconcile(
     evidence: &LwRunEvidence,
-    draft_inputs_live: &std::collections::BTreeSet<String>,
+    live_inputs: Option<&std::collections::BTreeSet<String>>,
 ) -> ReconciledLw {
     use super::provenance::ProvenanceGrade;
     use super::surface::{DiscoveryFinding, DiscoveryFindingKind, Evidence};
@@ -810,9 +814,12 @@ pub fn reconcile(
                 input: decl.input.clone(),
                 detail,
             });
-        } else if wiring_live && !decl.chord && !draft_inputs_live.contains(&decl.input) {
-            // Wiring live but the sweep never verified game liveness
-            // outside boot context: the honest coverage finding.
+        } else if wiring_live
+            && !decl.chord
+            && live_inputs.is_some_and(|live| !live.contains(&decl.input))
+        {
+            // Wiring live, liveness evidence exists, but none verified
+            // this input's game effect: the honest coverage finding.
             // NEVER for chord members: a satisfied chord under a
             // driver-synchronized multi-press is still an
             // acknowledged probe limitation (single-key taps miss
@@ -1172,7 +1179,7 @@ mod tests {
             .into_iter()
             .map(String::from)
             .collect::<std::collections::BTreeSet<_>>();
-        let out = reconcile(&evidence, &live);
+        let out = reconcile(&evidence, Some(&live));
 
         // Alarm discipline: exactly the two dead wirings fire, and
         // only one finding kind is alarm-grade.
@@ -1270,7 +1277,7 @@ mod tests {
                 stat("Dual", "KeyJ", 2, 0, false),
             ];
             let evidence = LwRunEvidence { declared, stats };
-            let out = reconcile(&evidence, &Default::default());
+            let out = reconcile(&evidence, Some(&Default::default()));
             let dead: Vec<&str> = out
                 .findings
                 .iter()
@@ -1297,7 +1304,7 @@ mod tests {
             let declared = vec![decl("Dual", "KeyJ", false), decl("Dual", "KeyK", false)];
             let stats = vec![stat("Dual", "KeyJ", 2, 1, false)];
             let evidence = LwRunEvidence { declared, stats };
-            let out = reconcile(&evidence, &Default::default());
+            let out = reconcile(&evidence, Some(&Default::default()));
             assert!(
                 !out.findings.iter().any(|f| matches!(
                     f.kind,
@@ -1324,7 +1331,7 @@ mod tests {
             stats: vec![stat("Ignored", "KeyH", 1, 1, false)],
         };
         let live: std::collections::BTreeSet<String> = Default::default();
-        let out = reconcile(&evidence, &live);
+        let out = reconcile(&evidence, Some(&live));
         assert!(out.findings.iter().any(|f| matches!(
             f.kind,
             super::super::surface::DiscoveryFindingKind::ContextUnverified
@@ -1341,7 +1348,7 @@ mod tests {
             declared: vec![decl("A", "KeyJ", false), decl("B", "KeyK", true)],
             stats: vec![],
         };
-        let out = reconcile(&evidence, &Default::default());
+        let out = reconcile(&evidence, Some(&Default::default()));
         assert_eq!(out.retracted_residue, ["KeyJ", "KeyK"]);
     }
 

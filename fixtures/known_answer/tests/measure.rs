@@ -64,21 +64,22 @@ fn run_lw_lens(tag: &str) -> bevy_playtest::state::PlaytestReport {
 /// - ALARM PRECISION: exactly ONE `DeclaredButDead` (L1 KeyN,
 ///   disabled arm) across the whole pristine reconcile — zero false
 ///   taps is the channel's survival condition.
-/// - HONESTY GRADES: every action that fires at wiring level but
-///   has no verified game effect → `ContextUnverified`, never an
-///   alarm (wiring liveness ≠ game liveness).
+/// - NO UNEARNED GRADES: the per-run reconcile has no independent
+///   liveness evidence, so it emits NO `ContextUnverified` (it would
+///   flag every working binding); wiring-live entries still grade
+///   `manager_pipeline_ok` and never alarm.
 /// - CHORD DISCIPLINE: chord members get notes, never findings —
 ///   even though the chord FIRED under the scenario.
 /// - RETRACTION: `retracted_residue` lists every declared input.
 /// - BYTE STABILITY: two identical runs produce identical reconcile
-///   outputs (wire-form comparison).
+///   outputs.
 #[test]
 fn lw_reconcile_lens_known_answer_commitments() {
     let gt = support::load_ground_truth();
 
-    // Reconcile now runs inside every run (no probe sweep): the live
-    // input set is empty, so retraction lists every declared input and
-    // every wiring-live, non-chord action carries ContextUnverified.
+    // Reconcile runs inside every run with no liveness evidence (`None`
+    // live set): retraction lists every declared input, and no
+    // ContextUnverified grade is emitted.
     let report_a = run_lw_lens("a");
     let report_b = run_lw_lens("b");
     let rec_a = report_a
@@ -90,21 +91,9 @@ fn lw_reconcile_lens_known_answer_commitments() {
         .clone()
         .expect("lw-reader run with Leafwing state must stamp lw_reconciled");
 
-    // Byte stability across the two independent child runs (same
-    // wire-form trick: `ReconciledLw` has no Eq derive, so compare
-    // serde forms; each field serializes by
-    // REFERENCE so `rec_a` stays usable below).
-    let wire = |rec: &bevy_playtest::discovery::lw::ReconciledLw| {
-        (
-            serde_json::to_string(&rec.entries).unwrap(),
-            serde_json::to_string(&rec.findings).unwrap(),
-            serde_json::to_string(&rec.retracted_residue).unwrap(),
-        )
-    };
-    let wire_a = wire(&rec_a);
-    let wire_b = wire(&rec_b);
+    // Byte stability across the two independent child runs.
     assert_eq!(
-        wire_a, wire_b,
+        rec_a, rec_b,
         "two identical deterministic runs must produce identical reconcile \
          outputs — the determinism gate extends to the declared tier"
     );
@@ -241,29 +230,19 @@ fn lw_reconcile_lens_known_answer_commitments() {
     );
     assert_eq!(alarms[0].input, "KeyN", "the one pristine alarm is L1 KeyN");
 
-    // Findings beyond the alarm: exactly the ContextUnverified set
-    // {KeyO, KeyP, KeyH} — wiring live, game effect unverifiable.
-    // Chord members NEVER appear (note-only, even when fired).
+    // Findings beyond the alarm: none. Without liveness evidence the
+    // reconcile emits no ContextUnverified, and chord members NEVER
+    // carry findings (note-only, even when fired).
     {
-        let unverified: BTreeSet<&str> = rec_a
+        let others: Vec<&str> = rec_a
             .findings
             .iter()
-            .filter(|f| matches!(f.kind, DiscoveryFindingKind::ContextUnverified))
+            .filter(|f| !matches!(f.kind, DiscoveryFindingKind::DeclaredButDead))
             .map(|f| f.input.as_str())
             .collect();
-        // KeyJ fires too; with no probe sweep its game effect is
-        // unverified, so it joins Ignored/Gated/RonBound here.
-        let expected: BTreeSet<&str> = ["KeyH", "KeyJ", "KeyO", "KeyP"]
-            .into_iter()
-            .collect();
-        assert_eq!(
-            unverified, expected,
-            "ContextUnverified must name exactly the wiring-live, non-chord \
-             bindings (no probe evidence verifies any game effect)"
-        );
         assert!(
-            !unverified.contains("ControlLeft") && !unverified.contains("KeyI"),
-            "chord members must NEVER carry findings"
+            others.is_empty(),
+            "per-run reconcile must emit only the alarm, got: {others:?}"
         );
     }
 

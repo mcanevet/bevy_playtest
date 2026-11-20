@@ -142,10 +142,8 @@ pub struct PlaytestReport {
     /// In-process and takeover runs alike stamp the reporting
     /// process's own `cfg!(debug_assertions)` — the report-writing
     /// code lives in the game's binary in both modes, so this is
-    /// the game's profile, not the harness library's. Discovery
-    /// promotes it to `DiscoveredSurface.build_profile` (cfg-gated
-    /// keys make dev-profile surfaces strictly larger than release
-    /// ones; comparing surfaces across profiles misleads).
+    /// the game's profile, not the harness library's (cfg-gated
+    /// code makes dev-profile behavior differ from release).
     /// Additive, default `None` (absent on stubs and pre-field
     /// reports).
     #[serde(skip_serializing_if = "Option::is_none", default)]

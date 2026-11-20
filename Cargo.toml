@@ -281,9 +281,9 @@ required-features = ["takeover"]
 
 # Demo "game" for the mouse-MOTION probe tests: the canonical
 # AccumulatedMouseMotion consumer (camera-pan idiom, signed delta).
-# The motion probes' positive control — discovery MUST report a
-# mouse_motion finding with an effect on this game. See
-# tests/it/discovery_flow.rs: mouse_motion_finds_effects_on_motion_driven_game.
+# The motion probe's positive control — the probe MUST diverge on
+# this game. See
+# tests/it/probe_pool.rs: motion_probe_diverges_on_a_raw_motion_game.
 [[bin]]
 name = "takeover_demo_motion"
 path = "src/bin/takeover_demo_motion.rs"
@@ -292,9 +292,9 @@ required-features = ["takeover"]
 # Demo "game" for the FOCUS-WALK probe tests: the canonical
 # tab-navigation consumer (TabNavigationPlugin + a TabGroup of
 # TabIndexed widgets, digest-visibly reacting to focus movement).
-# The walker's positive control — discovery MUST report a
-# focus_walk finding with an effect on this game. See
-# tests/it/discovery_flow.rs: focus_walk_finds_effects_on_tab_navigation_game.
+# The walker's positive control — the probe MUST diverge on this
+# game. See
+# tests/it/probe_pool.rs: focus_walk_diverges_on_a_tab_navigation_game.
 [[bin]]
 name = "takeover_demo_focus"
 path = "src/bin/takeover_demo_focus.rs"

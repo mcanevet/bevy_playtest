@@ -120,8 +120,8 @@ fn mutation_lw_dead_alarms_on_healthy_binding_turned_dead() {
 
     // Blast radius: the rest of the declared tier is unchanged —
     // chords never alarm (Combo fired under the synchronized
-    // multi-press in BOTH arms), Ignored/Gated/RonBound stay
-    // ContextUnverified, never alarms.
+    // multi-press in BOTH arms), Ignored/Gated/RonBound keep the same
+    // findings and never alarm.
     fn kinds<'a>(
         rec: &'a bevy_playtest::discovery::lw::ReconciledLw,
         key: &str,

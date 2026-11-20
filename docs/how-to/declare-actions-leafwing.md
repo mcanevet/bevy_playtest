@@ -65,8 +65,10 @@ earn `grade: manager_pipeline_ok` plus `TapObserved` evidence.
 
 A binding that fires with no game effect still grades
 `manager_pipeline_ok` — **wiring liveness is not game liveness**.
-The report says so via a `context_unverified` finding (wiring fired,
-no effect verified outside boot context), never by an alarm.
+The per-run reconcile has no independent evidence of game effects,
+so it makes no claim either way (no finding, never an alarm); the
+`context_unverified` finding is reserved for reconciles that DO have
+liveness evidence and found none for that input.
 
 ## Alarms: declared-but-dead only
 
@@ -101,9 +103,9 @@ omit it.
 
 Declared inputs grade `manager_pipeline_ok` when the tap saw their
 action fire, `declared` otherwise. Proven-dead wiring raises a
-`declared_but_dead` finding; an action that fired but has no
-verified game effect carries a `context_unverified` note (wiring
-liveness is not game liveness); chord members only ever get notes.
+`declared_but_dead` finding; nothing else ever does (wiring liveness
+is not game liveness, and no game effect is verified per run); chord
+members only ever get notes.
 `retracted_residue` lists every declared input. The determinism gate
 extends unchanged — identical runs produce byte-identical reconcile
 output.
