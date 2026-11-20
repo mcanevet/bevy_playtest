@@ -532,13 +532,17 @@ const HEADLESS_CLICK_EXTENT: f32 = 1280.0;
 /// `MouseMotion` form (feeds `AccumulatedMouseMotion`), and the wrapped
 /// `bevy_window::WindowEvent` form (what bevy_picking reads).
 #[derive(SystemParam)]
-struct BotMouseWriters<'w> {
+struct BotMouseWriters<'w, 's> {
     raw: MessageWriter<'w, bevy_input::mouse::MouseButtonInput>,
     motion: MessageWriter<'w, bevy_input::mouse::MouseMotion>,
     window: MessageWriter<'w, bevy_window::WindowEvent>,
+    /// The primary window itself: its cursor position is what bevy_ui's
+    /// `ui_focus_system` reads to compute `Interaction` (winit sets it
+    /// in a real run; the takeover has no winit).
+    primary: Query<'w, 's, &'static mut bevy_window::Window, With<bevy_window::PrimaryWindow>>,
 }
 
-impl BotMouseWriters<'_> {
+impl BotMouseWriters<'_, '_> {
     /// Writes a bot click through BOTH message forms, mirroring
     /// winit's pipeline: the raw `MouseButtonInput` (feeds
     /// `ButtonInput<MouseButton>`) and the wrapped
@@ -602,6 +606,15 @@ impl BotMouseWriters<'_> {
                     delta: last_pos.map(|last| pos - last),
                 },
             ));
+        }
+        // Third form: the window's own cursor position, which winit
+        // updates on every move. bevy_ui's `ui_focus_system` reads ONLY
+        // this (`Window::physical_cursor_position`) to compute
+        // `Interaction`, so without it no `Interaction`-driven button
+        // (bevy_ui `Button`, common despite the 0.20 deprecation) could
+        // ever be hovered or pressed under the takeover.
+        if let Ok(mut window) = self.primary.single_mut() {
+            window.set_cursor_position(Some(pos));
         }
     }
 }
@@ -728,7 +741,9 @@ fn chaos_mouse_system(
     mut hold_state: ResMut<MouseHoldState>,
     mut cursor: ResMut<CursorInputResource>,
     ui_targets: Res<UiClickTargets>,
-    primary_window: Query<(Entity, &bevy_window::Window), With<bevy_window::PrimaryWindow>>,
+    // Entity only: the Window itself is read through `writers.primary`
+    // (a second `&Window` query would conflict with its `&mut Window`).
+    primary_window: Query<Entity, With<bevy_window::PrimaryWindow>>,
     mut writers: BotMouseWriters,
 ) {
     let rate = scenario.0.bot.input_rate_hz.max(1);
@@ -739,17 +754,21 @@ fn chaos_mouse_system(
     // (pure headless apps) — fall back to the theoretical extent and
     // skip the wrapped WindowEvent forms (nothing consumes them
     // without a window anyway).
-    let window = primary_window.single().ok().map(|(entity, w)| {
-        (
-            entity,
-            // Logical extent: scale bot positions INTO the real window
-            // so clicks land on-screen (picking ignores off-window hits).
-            Vec2::new(w.width(), w.height()),
-            // Physical→logical conversion for enumerated widget
-            // centers (physical px, see ui_surface.rs).
-            w.scale_factor(),
-        )
-    });
+    let window = primary_window
+        .single()
+        .ok()
+        .zip(writers.primary.single().ok())
+        .map(|(entity, w)| {
+            (
+                entity,
+                // Logical extent: scale bot positions INTO the real window
+                // so clicks land on-screen (picking ignores off-window hits).
+                Vec2::new(w.width(), w.height()),
+                // Physical→logical conversion for enumerated widget
+                // centers (physical px, see ui_surface.rs).
+                w.scale_factor(),
+            )
+        });
 
     // Release held button if its hold duration expired. Only the last
     // outstanding hold on a button emits `Released` — a scripted click
