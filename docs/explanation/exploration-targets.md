@@ -34,9 +34,11 @@ because it never had such a yardstick.)
   seeds per fixture, run on demand with the `Exploration evaluation`
   workflow (Actions → Run workflow) before claiming an improvement.
   PRs that touch the harness, targets or dependencies get a quick run
-  automatically (2 seeds × 3,000 frames). It never gates a PR, and has
-  no schedule: every input is pinned, so results only change with the
-  code.
+  automatically (2 seeds × 5,000 frames): its median frames compare with
+  the baseline, its hit counts out of 2 do not (use the full run for the
+  ≥ 4/5 rule). It never gates a PR and has no schedule; because results
+  can also drift with the environment (see "Determinism"), compare
+  against a freshly measured baseline when it matters.
 - **Hit:** a target counts as reached when ≥ 4 of 5 seeds reach it.
 - **Locally:** build the fixtures with `--features playtest`, then
   `bevy_playtest_eval --targets eval/targets/<fixture>.json
@@ -45,7 +47,8 @@ because it never had such a yardstick.)
 ## Baseline (today's chaos bot)
 
 Measured by the `Exploration evaluation` workflow on GitHub runners
-(5,000 frames × 5 seeds, all 45 runs completed); results in
+(run 44752095130, commit `0722110`; 5,000 frames × 5 seeds, all 45 runs
+completed); results in
 `eval/baseline/*.json` (raw traces omitted). Compare explorer runs
 against it on the same kind of machine: see "Determinism" below.
 
