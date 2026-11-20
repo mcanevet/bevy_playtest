@@ -96,10 +96,41 @@ widget there, clicks widgets three times out of four (else a random
 spot), and presses Escape to back out after 3 s without anything new
 (a new state or a new screen): never on the first screen seen, and
 waiting twice as long after each back-out on the same screen. Escape
-needs a key surface, so a scenario declaring no keys never backs out. Every choice is still drawn from the
+needs a key surface, so a scenario declaring no keys never backs out. On
+every new screen it also tries a built-in prior of 27 common keys
+(movement, digits, Space/Enter, modifiers, E/F/R) once each, so keys the
+source scan cannot see (bound in config files, plugin crates, macros)
+are still found; a key followed by a new state or screen within one
+input tick, with no click in between, stays in rotation and is listed
+under `keys_found` ("followed by", not proven to cause it). To keep
+that attribution clean, explore mode alternates input ticks between
+the keyboard and the mouse; a device with nothing to do yields its
+tick. Every fourth key press is a combo: Ctrl, Shift
+or Alt held under a declared or productive key (Ctrl+S, Shift+L), the
+least-tried combo on the screen first; combos followed by something new
+are listed under `combos_found`. Chords of two ordinary keys (A+D) are
+only tried by chance. Every fourth mouse action is a drag when a
+node on screen can be dragged (an entity observer of `DragStart`,
+`Drag` or `DragEnd`: kind `draggable`) or accepts drops (an observer of
+`DragDrop`: kind `drop_target`), every sixteenth otherwise: press on a
+draggable node (else the least-tried widget or a random spot), move
+while held for 11 frames, and release three times in four on a drop
+target (else another widget), otherwise on a random spot; `drags`
+counts them. Clickable nodes that declare nothing (a grid of
+cells handled by one global click observer) are learned: when a click
+at a random spot lands on a node carrying one of the game's own
+components (or under one, like a cell's label) and the game reacts
+within one input turn with no key pressed or released around it (a state change,
+or a game resource changing that had been quiet before the click),
+that node's archetype earns a credit; after two, every
+node of that archetype is a click target (`learned_targets` counts the
+archetypes). A click followed by a state change learns at once, unless
+a key was pressed around it. Learned targets are named with a `~`
+prefix and do not change the screen identity. Every choice is still drawn from the
 seeded stream, so runs replay exactly. The report then carries an
 `exploration` section: screens seen, states entered, widgets never
-clicked, keys never pressed, back-outs, and a verdict — "plateaued"
+clicked, declared keys never pressed, prior keys and combos found, back-outs,
+and a verdict — "plateaued"
 (nothing new in the last quarter of the run) or "still discovering
 when the run ended", in which case "no findings" only covers what was
 reached. Authored scenarios opt in with `"explore": true` on a chaos

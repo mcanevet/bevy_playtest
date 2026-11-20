@@ -171,6 +171,32 @@ mod ui_tests {
     }
 
     #[test]
+    fn learned_archetype_skips_click_through_twins() {
+        #[derive(Component)]
+        struct Tile;
+        let mut app = setup_app();
+        let node = Node {
+            width: Val::Px(50.),
+            height: Val::Px(50.),
+            ..default()
+        };
+        let world = app.world_mut();
+        let live = world.spawn((Tile, node.clone(), Pickable::default())).id();
+        let other = world.spawn((Tile, node.clone(), Pickable::default())).id();
+        let inert = world.spawn((Tile, node, Pickable::IGNORE)).id();
+
+        run_frames(&mut app, 2);
+
+        let key = bevy_playtest::discovery::ui_surface::archetype_key(app.world(), live)
+            .expect("entity exists");
+        let learned = std::collections::BTreeSet::from([key]);
+        let surface =
+            bevy_playtest::discovery::ui_surface::enumerate_ui_with(app.world(), &learned);
+        assert!(surface.interactables.iter().any(|i| i.entity == other));
+        assert!(surface.interactables.iter().all(|i| i.entity != inert));
+    }
+
+    #[test]
     fn tab_index_focusable_is_enumerated() {
         let mut app = setup_app();
 

@@ -269,12 +269,14 @@ impl ChaosHoldState {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // a Bevy system: one parameter per resource
 fn chaos_bot_system(
     mut state: ResMut<RunState>,
     scenario: Res<ScenarioResource>,
     mut choices: ResMut<RunChoices>,
     mut hold_state: ResMut<ChaosHoldState>,
     mut explorer: ResMut<crate::explorer::Explorer>,
+    ui_targets: Res<UiClickTargets>,
     primary_window: Query<Entity, With<bevy_window::PrimaryWindow>>,
     mut keyboard: BotKeyboardWriters,
 ) {
@@ -302,6 +304,9 @@ fn chaos_bot_system(
         let (code, _) = hold_state.held.remove(0);
         if hold_state.release(code) {
             keyboard.key_event(code, ButtonState::Released, primary_window.single().ok());
+            if explorer.enabled {
+                explorer.note_key_release(state.frame);
+            }
         }
     }
 
@@ -309,6 +314,27 @@ fn chaos_bot_system(
     // rate tick, taken only when a slot is free.
     if !state.frame.is_multiple_of(interval) {
         return;
+    }
+    // Explore mode: the keyboard presses on its own tick only (see
+    // `explorer::HIT_CREDIT_FRAMES`), or borrows the mouse's tick while a
+    // drag holds the mouse (declared keys only then: a probe could never
+    // be credited). Without a mouse, every tick is the keyboard's.
+    let mouse_off = scenario
+        .0
+        .bot
+        .raw_surface
+        .as_ref()
+        .is_some_and(|s| s.mouse_buttons.is_empty());
+    let mut borrowed = false;
+    if explorer.enabled {
+        explorer.set_cadence(interval);
+        if !mouse_off && !crate::explorer::Explorer::keyboard_turn(state.frame, interval) {
+            borrowed = crate::explorer::Explorer::mouse_turn(state.frame, interval)
+                && explorer.mouse_busy(state.frame);
+            if !borrowed {
+                return;
+            }
+        }
     }
     if hold_state.held.len() >= CHAOS_HOLD_SLOTS {
         return;
@@ -335,7 +361,21 @@ fn chaos_bot_system(
     // press-press-release ordering (double `just_pressed` fire). The
     // draw bound shrinks as slots occupy surface keys and is recorded
     // per draw, so replay stays faithful.
-    let candidates: Vec<&str> = keys
+    //
+    // Explore mode draws from the explorer's pool instead: the declared
+    // surface plus prior keys untried on this screen plus keys that were
+    // followed by novelty (see `Explorer::key_pool`).
+    let explore_pool: Vec<String> = if explorer.enabled {
+        explorer.key_pool(&keys)
+    } else {
+        Vec::new()
+    };
+    let source: Vec<&str> = if explorer.enabled {
+        explore_pool.iter().map(String::as_str).collect()
+    } else {
+        keys.clone()
+    };
+    let candidates: Vec<&str> = source
         .iter()
         .filter_map(|&k| {
             let canonical = crate::scenario::normalize_key_name(k)?;
@@ -365,6 +405,106 @@ fn chaos_bot_system(
             }
         }
     }
+    // Explore mode, a screen with click targets: probes (prior keys,
+    // combos) only every other keyboard turn, so the mouse keeps enough
+    // turns there (a resting turn with nothing declared to press goes
+    // to the mouse). Declared and productive keys are not affected.
+    // Every other keyboard turn rests (when there is a mouse to take the
+    // turn): keys tried a few times on this screen without effect stand
+    // down, so a keyboard surface the game ignores (mines gets WASD +
+    // arrows by default) does not halve the mouse's clicks for the whole
+    // run. On screens with click targets, probes stand down too.
+    let resting = explorer.enabled
+        && !mouse_off
+        && crate::explorer::Explorer::probe_rest(state.frame, interval);
+    let ui_screen = !ui_targets.centers.is_empty();
+    let probe_rest = resting || borrowed;
+    // A combo due on a turn without probes waits for the next one
+    // (pressing a single key instead would move the combo pacing on).
+    if probe_rest && explorer.combo_due() {
+        return;
+    }
+    let candidates: Vec<&str> = if borrowed {
+        candidates
+            .into_iter()
+            .filter(|k| !explorer.is_probe_key(k))
+            .collect()
+    } else if resting {
+        candidates
+            .into_iter()
+            .filter(|k| explorer.is_fresh_key(k) && !(ui_screen && explorer.is_probe_key(k)))
+            .collect()
+    } else {
+        candidates
+    };
+    if candidates.is_empty() {
+        return;
+    }
+    // Explore mode, combo turn: hold a modifier under a declared or
+    // productive key (Ctrl+A, Shift+L). A combo needs both hold slots,
+    // so the turn waits for them to be free; the decision depends only
+    // on presses delivered, so replays wait the same way.
+    if explorer.enabled && !probe_rest && explorer.combo_due() {
+        let mut combos: Vec<String> = Vec::new();
+        for base in explorer.combo_bases() {
+            let Some(base) = crate::scenario::normalize_key_name(&base) else {
+                continue;
+            };
+            if keycode_from_canonical(base).is_none() || crate::explorer::is_modifier(base) {
+                continue;
+            }
+            for modifier in crate::explorer::COMBO_MODIFIERS {
+                combos.push(format!("{modifier}+{base}"));
+            }
+        }
+        combos.sort();
+        combos.dedup();
+        if !combos.is_empty() {
+            if !hold_state.held.is_empty() {
+                return;
+            }
+            let names: Vec<&str> = combos.iter().map(String::as_str).collect();
+            let pool = explorer.least_tried("combo", &names);
+            let name = names[pool[choices.0.below_kind(
+                state.frame,
+                pool.len() as u64,
+                crate::choice::ChoiceKind::KeyCombo,
+            ) as usize]];
+            choices.0.label_last(name.to_string());
+            explorer.record("combo", name);
+            explorer.note_key_press(name, state.frame);
+            let codes = name
+                .split_once('+')
+                .and_then(|(m, k)| Some((keycode_from_canonical(m)?, keycode_from_canonical(k)?)));
+            let Some((modifier, key)) = codes else {
+                return;
+            };
+            // Drawn as for any press (replay keeps its shape), but a
+            // combo is a probe: tapped, so its release stays inside the
+            // keyboard's turn.
+            let _ = choices.0.below_kind(
+                state.frame,
+                CHAOS_HOLD_MAX_FRAMES - CHAOS_HOLD_MIN_FRAMES + 1,
+                crate::choice::ChoiceKind::KeyHoldFrames,
+            );
+            let hold_frames = CHAOS_HOLD_MIN_FRAMES;
+            // Modifier first, key second, same frame: by the game's
+            // Update both are down and the key is `just_pressed`. The
+            // key lets go one frame before the modifier, as hands do.
+            let window = primary_window.single().ok();
+            keyboard.key_event(modifier, ButtonState::Pressed, window);
+            keyboard.key_event(key, ButtonState::Pressed, window);
+            state.metrics.input_count += 2;
+            // Both released on the same frame (key first, then the
+            // modifier: same-frame entries keep insertion order), right
+            // after the press, inside the keyboard's turn.
+            let release_at =
+                crate::explorer::Explorer::release_frame(state.frame + hold_frames, interval);
+            hold_state.press(key, release_at);
+            hold_state.press(modifier, release_at);
+            return;
+        }
+    }
     // Explore mode: draw among the least-tried keys on this screen
     // (uniform draw over the tied set, recorded like any key draw).
     let pool: Vec<usize> = if explorer.enabled {
@@ -380,6 +520,7 @@ fn chaos_bot_system(
     ) as usize];
     if explorer.enabled {
         explorer.record("key", candidates[idx]);
+        explorer.note_key_press(candidates[idx], state.frame);
     }
     // Resolve the index NOW and label the draw this frame: `value`
     // indexes the unheld-candidate list at draw time, which the report
@@ -399,14 +540,27 @@ fn chaos_bot_system(
         CHAOS_HOLD_MAX_FRAMES - CHAOS_HOLD_MIN_FRAMES + 1,
         crate::choice::ChoiceKind::KeyHoldFrames,
     );
-    let hold_frames = CHAOS_HOLD_MIN_FRAMES + hold_draw;
+    // Explore mode: a probe key (prior, not yet productive) is tapped, so
+    // its release stays inside the keyboard's turn.
+    let hold_frames = if explorer.enabled && explorer.is_probe_key(candidates[idx]) {
+        CHAOS_HOLD_MIN_FRAMES
+    } else {
+        CHAOS_HOLD_MIN_FRAMES + hold_draw
+    };
     // Dual-form emission mirrors winit's pipeline: raw `KeyboardInput`
     // plus wrapped `WindowEvent::KeyboardInput`, with `logical_key`
     // derived for the key code (US QWERTY assumption, same as the
     // `KeyCode` names) and `text` set on printable presses.
     keyboard.key_event(code, ButtonState::Pressed, primary_window.single().ok());
     state.metrics.input_count += 1;
-    hold_state.press(code, state.frame + hold_frames);
+    // Explore mode: a release is key activity too, so it is moved to
+    // just after a keyboard tick, never near the mouse's turn.
+    let release_at = if explorer.enabled {
+        crate::explorer::Explorer::release_frame(state.frame + hold_frames, interval)
+    } else {
+        state.frame + hold_frames
+    };
+    hold_state.press(code, release_at);
 }
 
 /// Synthetic keyboard bot: replays scheduled key presses through the real
@@ -498,12 +652,28 @@ struct BotKeyboardWriters<'w> {
 struct KeyboardModifierState {
     shift_left_held: bool,
     shift_right_held: bool,
+    /// Control, Alt and Super keys currently held (left and right
+    /// tracked separately): while any is down, a press types no text.
+    command_held: std::collections::BTreeSet<KeyCode>,
 }
 
 impl KeyboardModifierState {
     fn shift_held(&self) -> bool {
         self.shift_left_held || self.shift_right_held
     }
+}
+
+/// Control, Alt and Super: with one held, winit delivers no `text`.
+fn is_command_modifier(code: KeyCode) -> bool {
+    matches!(
+        code,
+        KeyCode::ControlLeft
+            | KeyCode::ControlRight
+            | KeyCode::AltLeft
+            | KeyCode::AltRight
+            | KeyCode::SuperLeft
+            | KeyCode::SuperRight
+    )
 }
 
 impl BotKeyboardWriters<'_> {
@@ -526,9 +696,17 @@ impl BotKeyboardWriters<'_> {
         // Resolve the modifier state the OS would have had at this
         // event, then fold the event itself into the tracked state.
         let shift_held = self.modifiers.shift_held();
+        let command_held = !self.modifiers.command_held.is_empty();
         match key_code {
             KeyCode::ShiftLeft => self.modifiers.shift_left_held = btn_state.is_pressed(),
             KeyCode::ShiftRight => self.modifiers.shift_right_held = btn_state.is_pressed(),
+            code if is_command_modifier(code) => {
+                if btn_state.is_pressed() {
+                    self.modifiers.command_held.insert(code);
+                } else {
+                    self.modifiers.command_held.remove(&code);
+                }
+            }
             _ => {}
         }
         let logical_key = logical_key_for_code(key_code, shift_held);
@@ -536,7 +714,10 @@ impl BotKeyboardWriters<'_> {
             key_code,
             logical_key: logical_key.clone(),
             state: btn_state,
+            // Ctrl+S is a shortcut, not typing: no text while a
+            // Control/Alt/Super key is held (winit's behavior).
             text: match (&logical_key, btn_state) {
+                _ if command_held => None,
                 (bevy_input::keyboard::Key::Character(s), ButtonState::Pressed) => Some(s.clone()),
                 (bevy_input::keyboard::Key::Space, ButtonState::Pressed) => Some(" ".into()),
                 _ => None,
@@ -670,7 +851,24 @@ struct MouseHoldState {
     /// accepts multiple clicks per frame and clicks scheduled while a
     /// hold is active; every declared click gets a matching release.
     scripted_pending: Vec<(bevy_input::mouse::MouseButton, u64)>,
+    /// Explore-mode drag in progress: the cursor moves from `from` to
+    /// `to` while the chaos hold lasts, arriving on frame `end` (the
+    /// release frame).
+    chaos_drag: Option<ChaosDrag>,
 }
+
+#[derive(Clone, Copy)]
+struct ChaosDrag {
+    from: Vec2,
+    to: Vec2,
+    start: u64,
+    end: u64,
+}
+
+/// Frames an explore-mode drag takes from press to release: one short
+/// of two default ticks, so the release (a frame with no new press)
+/// does not land on the mouse's next tick.
+const DRAG_FRAMES: u64 = 11;
 
 impl MouseHoldState {
     /// Register a press from one source. Emits `true` when the
@@ -744,6 +942,88 @@ pub(crate) struct UiClickTargets {
     pub(crate) centers: Vec<Vec2>,
     /// Name and disabled flag of each center, same order (explorer).
     pub(crate) ids: Vec<(String, bool)>,
+    /// Whether each center can be dragged, same order.
+    pub(crate) draggable: Vec<bool>,
+    /// Whether each center accepts drops, same order.
+    pub(crate) drop_target: Vec<bool>,
+}
+
+/// The node a click on `hovered` should credit, if any. A game handling
+/// clicks with one global observer recognizes its targets by one of its
+/// own components (`TileCell`, `ButtonAction`), so the credit goes to
+/// the hovered node or its nearest ancestor (up to three levels) that
+/// carries a game-defined component: a cell's number label credits the
+/// cell, and plain labels or layout containers are never learned. When
+/// component names are unreadable (bevy `debug` off) the hovered node
+/// itself is credited. A node covering half the window or more is
+/// layout, never a target.
+#[cfg(feature = "ui-surface")]
+fn credited_node(world: &World, hovered: Entity, window_area: f32) -> Option<Entity> {
+    let mut entity = hovered;
+    for _ in 0..=3 {
+        let computed = world.get::<bevy_ui::ComputedNode>(entity)?;
+        let size = computed.size;
+        if window_area > 0.0 && size.x * size.y >= 0.5 * window_area {
+            return None;
+        }
+        match has_game_component(world, entity) {
+            Some(true) => return Some(entity),
+            None => return Some(hovered),
+            Some(false) => {}
+        }
+        entity = world.get::<ChildOf>(entity)?.parent();
+    }
+    None
+}
+
+/// Whether `entity` carries a component defined outside the engine and
+/// the standard library; None when component names are masked.
+#[cfg(feature = "ui-surface")]
+fn has_game_component(world: &World, entity: Entity) -> Option<bool> {
+    let entity_ref = world.get_entity(entity).ok()?;
+    let mut game = false;
+    for &id in entity_ref.archetype().components() {
+        let name = world.components().get_info(id)?.name().to_string();
+        if name.starts_with('<') {
+            return None;
+        }
+        if !crate::explorer::is_engine_type_path(&name) {
+            game = true;
+        }
+    }
+    Some(game)
+}
+
+/// Archetypes of the laid-out UI nodes the mouse pointer hovers.
+#[cfg(feature = "ui-surface")]
+fn hovered_archetypes(world: &World) -> Vec<Vec<usize>> {
+    let Some(hover) = world.get_resource::<bevy_picking::hover::HoverMap>() else {
+        return Vec::new();
+    };
+    let Some(hits) = hover.get(&bevy_picking::pointer::PointerId::Mouse) else {
+        return Vec::new();
+    };
+    let window_area = world
+        .iter_entities()
+        .find_map(|e| {
+            e.get::<bevy_window::PrimaryWindow>()?;
+            let w = e.get::<bevy_window::Window>()?;
+            Some(w.physical_width() as f32 * w.physical_height() as f32)
+        })
+        .unwrap_or(0.0);
+    let mut entities: Vec<Entity> = hits
+        .keys()
+        .filter_map(|&e| credited_node(world, e, window_area))
+        .collect();
+    entities.sort_unstable_by_key(|e| e.index());
+    entities.dedup();
+    let mut keys: Vec<Vec<usize>> = entities
+        .into_iter()
+        .filter_map(|e| crate::discovery::ui_surface::archetype_key(world, e))
+        .collect();
+    keys.sort();
+    keys.dedup();
+    keys
 }
 
 /// Chaos mouse bot: on input-rate ticks, picks a random surface button,
@@ -806,21 +1086,55 @@ fn chaos_mouse_system(
             )
         });
 
+    // Drag in progress: one cursor step per frame (picking needs
+    // motion WHILE pressed for DragStart/Drag), reaching `to` on the
+    // release frame, before the release below.
+    if let Some(drag) = hold_state.chaos_drag {
+        if state.frame > drag.start {
+            let t = ((state.frame - drag.start) as f32 / (drag.end - drag.start) as f32).min(1.0);
+            let pos = drag.from.lerp(drag.to, t);
+            let last_pos = cursor.position();
+            cursor.set(pos);
+            writers.cursor_moved(window.map(|(e, _, _)| e), pos, last_pos);
+        }
+        if state.frame >= drag.end {
+            hold_state.chaos_drag = None;
+        }
+    }
+
     // Release held button if its hold duration expired. Only the last
     // outstanding hold on a button emits `Released` — a scripted click
     // holding the same button keeps it pressed.
+    let mut released_now = false;
     if let Some((button, release_at)) = hold_state.chaos_pending {
         if state.frame >= release_at {
             if hold_state.release(button) {
                 writers.click(window.map(|(e, _, _)| e), button, ButtonState::Released);
             }
             hold_state.chaos_pending = None;
+            released_now = true;
             // Cursor stays where it was — hover state persists.
         }
+    }
+    // Explore mode: no new press on a release frame (a drop's reaction
+    // would be credited to the new click).
+    if explorer.enabled && released_now {
+        return;
     }
 
     if hold_state.chaos_pending.is_some() || !state.frame.is_multiple_of(interval) {
         return;
+    }
+    // Explore mode: the mouse presses on its own tick, or takes the
+    // keyboard's when the keyboard (which runs first) left it unused.
+    let mut own_tick = true;
+    if explorer.enabled {
+        own_tick = crate::explorer::Explorer::mouse_turn(state.frame, interval);
+        let spare = crate::explorer::Explorer::keyboard_turn(state.frame, interval)
+            && !explorer.keyboard_acted(state.frame);
+        if !own_tick && !spare {
+            return;
+        }
     }
 
     // Surface: declared mouse_buttons. `Some(surface)` is authoritative:
@@ -881,26 +1195,54 @@ fn chaos_mouse_system(
     // Explore mode: 3 of 4 clicks go to the least-tried ENABLED widget
     // on this screen (tie broken by the draw's upper bits), 1 of 4 keep
     // the random position so undeclared regions are still probed.
+    // Explore mode: every few mouse actions is a drag (often when a
+    // node on screen declares drag handling, rarely otherwise, see
+    // `Explorer::drag_due`). A drag starts from a draggable node when
+    // there is one, else picks its start like a click.
+    let enabled: Vec<usize> = (0..ui_targets.centers.len())
+        .filter(|&i| ui_targets.ids.get(i).is_some_and(|(_, disabled)| !disabled))
+        .collect();
+    let draggable: Vec<usize> = enabled
+        .iter()
+        .copied()
+        .filter(|&i| ui_targets.draggable.get(i).copied().unwrap_or(false))
+        .collect();
+    let drop_targets: Vec<usize> = enabled
+        .iter()
+        .copied()
+        .filter(|&i| ui_targets.drop_target.get(i).copied().unwrap_or(false))
+        .collect();
+    let is_drag =
+        explorer.enabled && explorer.drag_due(!draggable.is_empty() || !drop_targets.is_empty());
+    let action = if is_drag { "drag" } else { "click" };
+    let starts = if is_drag && !draggable.is_empty() {
+        &draggable
+    } else {
+        &enabled
+    };
     let explore_target = if explorer.enabled && !pos_draw.is_multiple_of(4) {
-        let enabled: Vec<usize> = (0..ui_targets.centers.len())
-            .filter(|&i| ui_targets.ids.get(i).is_some_and(|(_, disabled)| !disabled))
-            .collect();
-        let names: Vec<&str> = enabled
+        let names: Vec<&str> = starts
             .iter()
             .map(|&i| ui_targets.ids[i].0.as_str())
             .collect();
         if names.is_empty() {
             None
         } else {
-            let tied = explorer.least_tried("click", &names);
+            let tied = explorer.least_tried(action, &names);
             let pick = tied[((pos_draw >> 2) as usize) % tied.len()];
-            explorer.record("click", names[pick]);
-            Some(ui_targets.centers[enabled[pick]])
+            explorer.record(action, names[pick]);
+            // Index into `enabled`, so the drag destination can skip it.
+            let start = enabled
+                .iter()
+                .position(|&i| i == starts[pick])
+                .unwrap_or(pick);
+            Some((start, ui_targets.centers[starts[pick]]))
         }
     } else {
         None
     };
-    let pos = if let Some(center_physical) = explore_target {
+    let start_widget = explore_target.map(|(pick, _)| pick);
+    let pos = if let Some((_, center_physical)) = explore_target {
         let scale = window.map(|(_, _, scale)| scale).unwrap_or(1.0);
         center_physical / scale
     } else if !explorer.enabled && pos_draw % 2 == 1 && !ui_targets.centers.is_empty() {
@@ -925,7 +1267,62 @@ fn chaos_mouse_system(
     writers.click(window.map(|(e, _, _)| e), button, ButtonState::Pressed);
     state.metrics.input_count += 1;
     hold_state.press(button);
-    hold_state.chaos_pending = Some((button, state.frame + hold_frames));
+    let mut release_at = state.frame + hold_frames;
+    if explorer.enabled {
+        explorer.note_mouse_action(is_drag);
+    }
+    if is_drag {
+        // Destination: a second recorded position draw, same frame.
+        // 3 of 4: a drop target other than the start when there is one,
+        // else another enabled widget (so DragDrop can fire on it);
+        // otherwise a random point, as for clicks.
+        let to_draw = choices.0.below_kind(
+            state.frame,
+            1u64 << 32,
+            crate::choice::ChoiceKind::MousePosition,
+        );
+        let scale = window.map(|(_, _, scale)| scale).unwrap_or(1.0);
+        let drops: Vec<usize> = (0..enabled.len())
+            .filter(|&i| Some(i) != start_widget && drop_targets.contains(&enabled[i]))
+            .collect();
+        let others: Vec<usize> = if drops.is_empty() {
+            (0..enabled.len())
+                .filter(|&i| Some(i) != start_widget)
+                .collect()
+        } else {
+            drops
+        };
+        let to = if !to_draw.is_multiple_of(4) && !others.is_empty() {
+            let other = others[((to_draw >> 2) as usize) % others.len()];
+            ui_targets.centers[enabled[other]] / scale
+        } else {
+            Vec2::new(
+                (to_draw >> 16) as f32 / 65536.0 * extent.x,
+                (to_draw & 0xFFFF) as f32 / 65536.0 * extent.y,
+            )
+        };
+        release_at = state.frame + DRAG_FRAMES;
+        hold_state.chaos_drag = Some(ChaosDrag {
+            from: pos,
+            to,
+            start: state.frame,
+            end: release_at,
+        });
+    }
+    hold_state.chaos_pending = Some((button, release_at));
+    if explorer.enabled {
+        // Only a click arms the learning probe: a drag sweeps the cursor
+        // over other nodes, whose reactions are not the start node's.
+        // Only a click on the mouse's own tick arms the learning probe:
+        // a drag sweeps the cursor over other nodes, and a borrowed
+        // keyboard tick has key releases landing right after it.
+        explorer.note_press(
+            state.frame,
+            start_widget.is_none() && !is_drag && own_tick,
+            release_at,
+            is_drag,
+        );
+    }
 }
 
 /// Scripted mouse motion (`mouse_motion`): frame-indexed logical-px
@@ -1710,7 +2107,11 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     app.add_systems(
         Update,
         (
-            chaos_bot_system.run_if(is_chaos_bot),
+            // Keyboard first: in explore mode the mouse checks whether
+            // the keyboard used its turn this frame.
+            chaos_bot_system
+                .run_if(is_chaos_bot)
+                .before(chaos_mouse_system),
             chaos_mouse_system.run_if(is_chaos_bot),
             synthetic_keyboard_bot_system.run_if(is_synthetic_keyboard_bot),
             scripted_mouse_system,
@@ -1785,6 +2186,8 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     #[cfg(feature = "ui-surface")]
     let ui_recapture_interval =
         crate::discovery::ui_surface::UiSurfaceTracker::recapture_interval(tps);
+    #[cfg(feature = "ui-surface")]
+    let mut recapture_next = false;
 
     // Render-liveness sampler (`render-liveness`): identical
     // construction to the two trackers above — borrowed into the
@@ -1860,16 +2263,41 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
                 // Borrow juggling: `enumerate_ui` takes `&World`, so
                 // the click-targets vec is taken out of the resource,
                 // filled, and put back.
+                // A state transition means a new screen: refresh the
+                // targets now and once more next frame (nodes spawned by
+                // deferred commands lay out one frame later).
+                let key_window_ends = app
+                    .world()
+                    .get_resource::<crate::explorer::Explorer>()
+                    .is_some_and(|e| e.enabled && e.recapture_due(i));
+                if !ran_states.is_empty() || recapture_next || key_window_ends {
+                    ui_surface_tracker.request_recapture();
+                }
+                recapture_next = !ran_states.is_empty();
                 let filled = {
                     let world = app.world();
+                    let no_learned = Default::default();
+                    let learned = world
+                        .get_resource::<crate::explorer::Explorer>()
+                        .map_or(&no_learned, |e| &e.learned);
                     let mut targets_taken = click_targets;
-                    ui_surface_tracker.observe(world, i, ui_recapture_interval, &mut targets_taken);
+                    ui_surface_tracker.observe(
+                        world,
+                        i,
+                        ui_recapture_interval,
+                        &mut targets_taken,
+                        learned,
+                    );
                     targets_taken
                 };
                 let ids = ui_surface_tracker.target_ids();
+                let draggable = ui_surface_tracker.target_draggable();
+                let drop_target = ui_surface_tracker.target_drop();
                 if let Some(mut res) = app.world_mut().get_resource_mut::<UiClickTargets>() {
                     res.centers = filled;
                     res.ids = ids;
+                    res.draggable = draggable;
+                    res.drop_target = drop_target;
                 }
             }
             // Explorer novelty for this frame: state schedules that ran,
@@ -1880,9 +2308,31 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
                     .get_resource::<UiClickTargets>()
                     .map(|t| t.ids.clone())
                     .unwrap_or_default();
+                // Learning click targets: the nodes under a random press
+                // (read the frame after it, once picking saw the cursor)
+                // are credited when the game reacts shortly after.
+                #[cfg(feature = "ui-surface")]
+                let hovered: Vec<Vec<usize>> = if world
+                    .get_resource::<crate::explorer::Explorer>()
+                    .is_some_and(|e| e.enabled && e.hover_due(i))
+                {
+                    hovered_archetypes(world)
+                } else {
+                    Vec::new()
+                };
+                #[cfg(not(feature = "ui-surface"))]
+                let hovered: Vec<Vec<usize>> = Vec::new();
                 if let Some(mut explorer) = world.get_resource_mut::<crate::explorer::Explorer>() {
                     if explorer.enabled {
                         explorer.observe(i, &ran_states, &targets);
+                        if explorer.hover_due(i) {
+                            explorer.set_hit(hovered);
+                        }
+                        let window = explorer.window();
+                        let reacted = explorer
+                            .pending_press()
+                            .is_some_and(|press| state_trace.borrow().reacted_after(press, window));
+                        explorer.after_reaction(i, reacted, !ran_states.is_empty());
                     }
                 }
             }
@@ -2198,12 +2648,18 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     // unheld-candidate list, which the report does not contain.
     let action_log = choices
         .iter()
-        .filter(|c| c.kind == crate::choice::ChoiceKind::Key)
-        .map(|c| crate::state::ActionEntry {
-            frame: c.frame,
-            source: "bot".to_string(),
-            action: format!("key_press:{}", c.value),
-            details: c.label.clone(),
+        .filter_map(|c| {
+            let action = match c.kind {
+                crate::choice::ChoiceKind::Key => format!("key_press:{}", c.value),
+                crate::choice::ChoiceKind::KeyCombo => format!("key_combo:{}", c.value),
+                _ => return None,
+            };
+            Some(crate::state::ActionEntry {
+                frame: c.frame,
+                source: "bot".to_string(),
+                action,
+                details: c.label.clone(),
+            })
         })
         .collect();
 
