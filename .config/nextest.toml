@@ -1,0 +1,27 @@
+# cargo-nextest configuration. Used by CI (`--profile ci`) for both the
+# root workspace and the generated fixtures workspace (passed there via
+# `--config-file`, since fixtures/ is generated and not committed).
+#
+# nextest runs every test in its own process, which is what lets the
+# run_scenario-heavy suites run in parallel: run_scenario's exclusive
+# capture state is per-process (see tests/common/mod.rs).
+
+[profile.ci]
+# Report every failure in one run instead of stopping at the first.
+fail-fast = false
+# Flag hangs early; kill a test after 10 minutes (10 x 60 s).
+slow-timeout = { period = "60s", terminate-after = 10 }
+failure-output = "immediate-final"
+
+# Discovery / probe-pool tests already fan out internally: each spawns
+# a pool of up to DEFAULT_POOL_SIZE (8) takeover game subprocesses with
+# software Vulkan. Running several of them concurrently oversubscribes
+# the CPU badly (14 parallel tests drove a dev box to load ~300), so
+# they run one at a time while lighter tests fill the other slots.
+# Defined on the default profile so local `cargo nextest run` is safe too.
+[test-groups]
+subprocess-pool = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'test(/^(discovery_flow|probe_pool)::/)'
+test-group = 'subprocess-pool'
