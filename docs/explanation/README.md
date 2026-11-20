@@ -9,3 +9,4 @@ Design rationale — the "why" behind the harness. One topic per page.
 - [Why the bot is seeded](why-the-bot-is-seeded.md) — Chaos without reproducibility is just flakiness
 - [Why disable winit](why-disable-winit.md) — Keeping rendering, assets, and audio alive while headless
 - [How the harness proves itself](how-the-harness-proves-itself.md) — The test tiers and CI gates behind the harness's own guarantees
+- [Exploration targets](exploration-targets.md) — How "the bot explores better" is measured: committed per-fixture targets decided from an independent state trace

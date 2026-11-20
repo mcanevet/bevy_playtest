@@ -1,0 +1,32 @@
+{
+  "fixture": "alien_cake_addict",
+  "manifest_dir": "fixtures/alien_cake_addict",
+  "targets": [
+    {
+      "id": "A1",
+      "description": "Eat at least one cake",
+      "check": {
+        "unmeasurable": "cake_eaten lives in the Game resource, which is not Reflect and is written by several systems"
+      }
+    },
+    {
+      "id": "A2",
+      "description": "Reach game over",
+      "check": {
+        "entered": [
+          "OnEnter(GameOver)"
+        ]
+      }
+    },
+    {
+      "id": "A3",
+      "description": "Restart after game over (Playing entered again)",
+      "check": {
+        "entered_times": {
+          "label": "OnEnter(Playing)",
+          "at_least": 2
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "fixture": "known_answer",
+  "manifest_dir": "fixtures/known_answer",
+  "targets": [
+    {
+      "id": "K1",
+      "description": "Zero false 'has an effect' claims on inert plants",
+      "check": {
+        "unmeasurable": "phase 1: needs the explorer's own report (per-input attribution)"
+      }
+    },
+    {
+      "id": "K2",
+      "description": "Recall on positive plants >= 9/12",
+      "check": {
+        "unmeasurable": "phase 1: needs the explorer's own report (per-input attribution)"
+      }
+    },
+    {
+      "id": "K3",
+      "description": "P7: Secret reported as never entered, KeyV untested",
+      "check": {
+        "unmeasurable": "Secret has no OnEnter schedule; needs state enumeration (track_state opt-in) and the phase 1 report"
+      }
+    },
+    {
+      "id": "K4",
+      "description": "Find the chord (ShiftLeft+KeyL) or debounce (KeyT) plant (stretch)",
+      "check": {
+        "unmeasurable": "phase 1: needs the explorer's own report (per-input attribution)"
+      }
+    }
+  ]
+}

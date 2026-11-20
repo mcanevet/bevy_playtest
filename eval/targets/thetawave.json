@@ -1,0 +1,42 @@
+{
+  "fixture": "thetawave",
+  "manifest_dir": "fixtures/thetawave",
+  "targets": [
+    {
+      "id": "T0",
+      "description": "Reach the main menu (passive, after asset loading)",
+      "check": {
+        "entered": [
+          "OnEnter(MainMenu)"
+        ]
+      }
+    },
+    {
+      "id": "T1",
+      "description": "Reach character selection",
+      "check": {
+        "entered": [
+          "OnEnter(CharacterSelection)"
+        ]
+      }
+    },
+    {
+      "id": "T2",
+      "description": "Reach the game (stretch)",
+      "check": {
+        "entered": [
+          "OnEnter(Game)"
+        ]
+      }
+    },
+    {
+      "id": "T3",
+      "description": "Victory: expected 0 hits; must later be reported as never reached",
+      "check": {
+        "entered": [
+          "OnEnter(Victory)"
+        ]
+      }
+    }
+  ]
+}

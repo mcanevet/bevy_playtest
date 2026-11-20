@@ -1,0 +1,52 @@
+{
+  "fixture": "mines",
+  "manifest_dir": "fixtures/mines",
+  "targets": [
+    {
+      "id": "M1",
+      "description": "Start a game (Playing)",
+      "check": {
+        "entered": [
+          "OnEnter(Playing)"
+        ]
+      }
+    },
+    {
+      "id": "M2",
+      "description": "Reveal at least 10 tiles",
+      "check": {
+        "unmeasurable": "tile state lives in components; component-change tracing is not in phase 0"
+      }
+    },
+    {
+      "id": "M3",
+      "description": "Change the game resource during play (reveal/flag/game over)",
+      "check": {
+        "resource_changed_times": {
+          "resource": "Game",
+          "at_least": 2
+        }
+      }
+    },
+    {
+      "id": "M4",
+      "description": "Return to the menu after playing",
+      "check": {
+        "entered_times": {
+          "label": "OnEnter(Menu)",
+          "at_least": 2
+        }
+      }
+    },
+    {
+      "id": "M5",
+      "description": "Start three games (difficulty itself is not visible)",
+      "check": {
+        "entered_times": {
+          "label": "OnEnter(Playing)",
+          "at_least": 3
+        }
+      }
+    }
+  ]
+}

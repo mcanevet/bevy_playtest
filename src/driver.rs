@@ -1663,6 +1663,15 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     let total_ticks = (scenario.duration_s * tps as f32).ceil() as u64;
     let start = std::time::Instant::now();
 
+    // State trace: recorder systems go into every OnEnter/OnExit/
+    // OnTransition schedule BEFORE the first update (so the initial
+    // OnEnter is captured); resource change ticks are sampled between
+    // frames. RefCell-wrapped like the trackers below so a panicking
+    // run still reports the partial trace.
+    let state_trace = std::cell::RefCell::new(
+        crate::discovery::state_trace::StateTraceRecorder::install(app),
+    );
+
     // Leafwing declared-tier capture + intent-tap (`lw-reader`). Runs
     // as a driver-loop recorder (like the digest), never a scheduled
     // system — it must not appear in the game's schedule or the
@@ -1738,6 +1747,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             sinks::assert_log_bridge_level();
             sinks::set_current_frame(i);
             app.update();
+            state_trace.borrow_mut().after_frame(app.world(), i);
             // Detection half of the defense: a level still lowered
             // after app.update() means a game system re-blinds every
             // tick — repaired next tick, but each tick's tail was
@@ -2340,6 +2350,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         lw_tap_stats,
         #[cfg(feature = "lw-reader")]
         lw_reconciled,
+        state_trace: Some(state_trace.into_inner().into_result()),
         capability_census: Some(capability_census),
         #[cfg(feature = "ui-surface")]
         ui_surface: ui_surface_tracker.into_result(),

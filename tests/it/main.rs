@@ -46,6 +46,7 @@ mod scenario_schema;
 #[cfg(feature = "screen-liveness")]
 mod screen_liveness;
 mod state_digest;
+mod state_trace;
 mod takeover_e2e;
 mod ui_liveness;
 mod ui_surface;

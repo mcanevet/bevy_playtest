@@ -184,6 +184,12 @@ pub struct PlaytestReport {
     #[cfg(feature = "lw-reader")]
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub lw_reconciled: Option<crate::discovery::lw::ReconciledLw>,
+    /// What the game did during the run, observed generically: state
+    /// schedules that ran (and those that never did) and game
+    /// resources that changed. `None` on crash stubs and pre-field
+    /// reports. See [`crate::discovery::state_trace`].
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub state_trace: Option<crate::discovery::state_trace::StateTrace>,
     /// Load-time capability census rows captured during
     /// `run_scenario` startup, before bot/oracle registration
     /// (present whenever
@@ -269,6 +275,7 @@ impl PlaytestReport {
             lw_tap_stats: vec![],
             #[cfg(feature = "lw-reader")]
             lw_reconciled: None,
+            state_trace: None,
             // Crash stub: the run never reached the census attach
             // point, so no census exists.
             capability_census: None,
