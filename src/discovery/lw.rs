@@ -705,10 +705,25 @@ pub fn aggregate_lw_evidence(reports: &[&crate::state::PlaytestReport]) -> Optio
 ///   `retracted_residue` for the caller to remove.
 ///
 /// `live_inputs`: inputs independently measured LIVE (effect
-/// signature observed), or `None` when no liveness evidence exists
-/// (the per-run report path). Chord awareness comes from the
-/// declaration rows themselves (`LwDeclaration::chord`).
+/// signature observed). Chord awareness comes from the declaration
+/// rows themselves (`LwDeclaration::chord`). With no liveness
+/// evidence at all, use [`reconcile_without_liveness`].
 pub fn reconcile(
+    evidence: &LwRunEvidence,
+    live_inputs: &std::collections::BTreeSet<String>,
+) -> ReconciledLw {
+    reconcile_impl(evidence, Some(live_inputs))
+}
+
+/// [`reconcile`] for runs with NO independent liveness evidence (the
+/// per-run report path): identical, except no `ContextUnverified`
+/// grade is emitted — with nothing to verify against it would flag
+/// every working binding.
+pub fn reconcile_without_liveness(evidence: &LwRunEvidence) -> ReconciledLw {
+    reconcile_impl(evidence, None)
+}
+
+fn reconcile_impl(
     evidence: &LwRunEvidence,
     live_inputs: Option<&std::collections::BTreeSet<String>>,
 ) -> ReconciledLw {
@@ -1179,7 +1194,7 @@ mod tests {
             .into_iter()
             .map(String::from)
             .collect::<std::collections::BTreeSet<_>>();
-        let out = reconcile(&evidence, Some(&live));
+        let out = reconcile(&evidence, &live);
 
         // Alarm discipline: exactly the two dead wirings fire, and
         // only one finding kind is alarm-grade.
@@ -1277,7 +1292,7 @@ mod tests {
                 stat("Dual", "KeyJ", 2, 0, false),
             ];
             let evidence = LwRunEvidence { declared, stats };
-            let out = reconcile(&evidence, Some(&Default::default()));
+            let out = reconcile(&evidence, &Default::default());
             let dead: Vec<&str> = out
                 .findings
                 .iter()
@@ -1304,7 +1319,7 @@ mod tests {
             let declared = vec![decl("Dual", "KeyJ", false), decl("Dual", "KeyK", false)];
             let stats = vec![stat("Dual", "KeyJ", 2, 1, false)];
             let evidence = LwRunEvidence { declared, stats };
-            let out = reconcile(&evidence, Some(&Default::default()));
+            let out = reconcile(&evidence, &Default::default());
             assert!(
                 !out.findings.iter().any(|f| matches!(
                     f.kind,
@@ -1331,7 +1346,7 @@ mod tests {
             stats: vec![stat("Ignored", "KeyH", 1, 1, false)],
         };
         let live: std::collections::BTreeSet<String> = Default::default();
-        let out = reconcile(&evidence, Some(&live));
+        let out = reconcile(&evidence, &live);
         assert!(out.findings.iter().any(|f| matches!(
             f.kind,
             super::super::surface::DiscoveryFindingKind::ContextUnverified
@@ -1348,7 +1363,7 @@ mod tests {
             declared: vec![decl("A", "KeyJ", false), decl("B", "KeyK", true)],
             stats: vec![],
         };
-        let out = reconcile(&evidence, Some(&Default::default()));
+        let out = reconcile(&evidence, &Default::default());
         assert_eq!(out.retracted_residue, ["KeyJ", "KeyK"]);
     }
 

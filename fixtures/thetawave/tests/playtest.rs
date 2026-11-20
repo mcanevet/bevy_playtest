@@ -190,13 +190,17 @@ fn reader_demo_enumerates_real_input_maps() {
         );
     }
 
-    // RECONCILE (stamped on every lw-reader report): declared ∧ fired
-    // earns `manager_pipeline_ok`; and no driven menu action is
-    // reported dead. `retracted_residue` must cover every declared input.
-    let reconciled = report
-        .lw_reconciled
-        .clone()
-        .expect("a Leafwing game's report must carry lw_reconciled");
+    // RECONCILE: declared ∧ fired earns `manager_pipeline_ok`; and
+    // no driven menu action is reported dead. `retracted_residue`
+    // must cover every declared input (all are declared, hence any
+    // draft DiscoveredButUndeclared residue on them retracts).
+    let reconciled = bevy_playtest::discovery::lw::reconcile(
+        &bevy_playtest::discovery::lw::LwRunEvidence {
+            declared: report.lw_declared.clone(),
+            stats: report.lw_tap_stats.clone(),
+        },
+        &Default::default(),
+    );
     assert!(
         reconciled.entries.iter().any(|e| matches!(
             e.grade,

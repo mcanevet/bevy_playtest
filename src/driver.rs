@@ -2296,19 +2296,18 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     // Leafwing reconcile on EVERY run (lw-reader): declared bindings
     // joined with this run's intent-tap evidence. The alarm channel
     // (`declared_but_dead`: proven-dead wiring) needs no probe data.
-    // `None` live set: no independent liveness evidence exists, so no
+    // No independent liveness evidence exists, so no
     // `context_unverified` grade is emitted (it would otherwise flag
     // every working binding).
     #[cfg(feature = "lw-reader")]
     let lw_reconciled = if lw_declared.is_empty() && lw_tap_stats.is_empty() {
         None
     } else {
-        Some(crate::discovery::lw::reconcile(
+        Some(crate::discovery::lw::reconcile_without_liveness(
             &crate::discovery::lw::LwRunEvidence {
                 declared: lw_declared.clone(),
                 stats: lw_tap_stats.clone(),
             },
-            None,
         ))
     };
     Ok(PlaytestReport {
