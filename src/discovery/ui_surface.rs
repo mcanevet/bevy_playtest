@@ -14,7 +14,8 @@
 //! Sources of declaration, all unions (an entity may be declared
 //! interactable by several independent signals):
 //!
-//! 1. `Pickable` — the explicit `bevy_picking` opt-in marker.
+//! 1. `Pickable` — the explicit `bevy_picking` opt-in marker (hoverable
+//!    only: `Pickable::IGNORE` declares a click-through node).
 //! 2. `bevy_ui_widgets` widget components — `Button`, `Checkbox`,
 //!    `RadioButton`, `Slider`, `Tab`, `TextInput`, `ListBox`,
 //!    `MenuItem`, `MenuButton`, `ScrollArea` (see [`WidgetRole`]).
@@ -355,8 +356,18 @@ pub fn enumerate_ui(world: &World) -> UiSurfaceResult {
             .map(|mut state| state.iter(world).collect())
             .unwrap_or_default();
     widget_entities.extend(interaction_entities);
-    let pickable_entities: HashSet<Entity> = QueryState::<Entity, With<Pickable>>::try_new(world)
-        .map(|mut state| state.iter(world).collect())
+    // Only HOVERABLE `Pickable`s declare a target: `Pickable::IGNORE`
+    // (and any `is_hoverable: false`) is the opposite declaration, a
+    // node made click-through (mines puts it on revealed tiles), and
+    // aiming clicks at it wastes them.
+    let pickable_entities: HashSet<Entity> = QueryState::<(Entity, &Pickable)>::try_new(world)
+        .map(|mut state| {
+            state
+                .iter(world)
+                .filter(|(_, pickable)| pickable.is_hoverable)
+                .map(|(entity, _)| entity)
+                .collect()
+        })
         .unwrap_or_default();
     let tabindex_entities: HashSet<Entity> = QueryState::<Entity, With<TabIndex>>::try_new(world)
         .map(|mut state| state.iter(world).collect())
