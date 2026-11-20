@@ -216,6 +216,13 @@ fn assert_headless(app: &App) {
 fn assert_headless(_app: &App) {}
 
 fn take_over(app: &mut App, config: TakeoverConfig) {
+    // Silence game audio for the run. Audio keeps working (sinks are
+    // still created and played, so games that inspect their audio
+    // behave as usual); only the output volume is zero. Bevy multiplies
+    // every sink's volume by `GlobalVolume` when it creates the sink, and
+    // this plugin is added after DefaultPlugins, so this overrides the
+    // value AudioPlugin inserted.
+    app.insert_resource(bevy::audio::GlobalVolume::new(bevy::audio::Volume::SILENT));
     app.set_runner(move |mut app: App| -> AppExit {
         run_takeover(&mut app, &config);
     });
