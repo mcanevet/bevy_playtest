@@ -1,0 +1,55 @@
+{
+  "fixture": "game_menu",
+  "manifest_dir": "fixtures/game_menu",
+  "targets": [
+    {
+      "id": "G1",
+      "description": "Enter both settings sub-menus (display and sound)",
+      "check": {
+        "entered": [
+          "OnEnter(SettingsDisplay)",
+          "OnEnter(SettingsSound)"
+        ]
+      }
+    },
+    {
+      "id": "G2",
+      "description": "Change a setting (display quality or volume)",
+      "check": {
+        "resource_changed_any": [
+          "DisplayQuality",
+          "Volume"
+        ]
+      }
+    },
+    {
+      "id": "G3",
+      "description": "Start the game (GameState::Game)",
+      "check": {
+        "entered": [
+          "OnEnter(Game)"
+        ]
+      }
+    },
+    {
+      "id": "G4",
+      "description": "Visit every menu screen and the game in one run",
+      "check": {
+        "entered": [
+          "OnEnter(Main)",
+          "OnEnter(Settings)",
+          "OnEnter(SettingsDisplay)",
+          "OnEnter(SettingsSound)",
+          "OnEnter(Game)"
+        ]
+      }
+    },
+    {
+      "id": "G5",
+      "description": "Report Quit as a terminal action, never a crash",
+      "check": {
+        "unmeasurable": "phase 1: needs the explorer's own report"
+      }
+    }
+  ]
+}

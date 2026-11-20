@@ -3,6 +3,8 @@
 //! - [`source_scan`]: milliseconds-cost text scan of the game's sources
 //!   for `KeyCode::` variants; aims the battery's default chaos surface.
 //! - [`census`]: load-time capability census, default-on.
+//! - [`state_trace`]: which state schedules ran and which game
+//!   resources changed, per run (generic; no reflection needed).
 //! - [`static_scan`]: schedule walk classifying systems by the input
 //!   signals they read (by ComponentId, never by name).
 //! - `lw` (`lw-reader`): Leafwing declared tier — reader, intent-tap,
@@ -31,6 +33,7 @@ pub mod render_liveness;
 #[cfg(feature = "screen-liveness")]
 pub mod screen_liveness;
 pub mod source_scan;
+pub mod state_trace;
 pub mod static_scan;
 pub mod surface;
 #[cfg(feature = "ui-surface")]
