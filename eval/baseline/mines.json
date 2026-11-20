@@ -12,7 +12,7 @@
     {
       "seed": 1,
       "status": "Fail",
-      "wall_s": 53.0,
+      "wall_s": 61.6,
       "violation_rules": [
         "frozen_world",
         "progress_surface_empty"
@@ -22,7 +22,7 @@
     {
       "seed": 2,
       "status": "Fail",
-      "wall_s": 60.9,
+      "wall_s": 65.4,
       "violation_rules": [
         "frozen_world",
         "progress_surface_empty"
@@ -32,7 +32,7 @@
     {
       "seed": 3,
       "status": "Fail",
-      "wall_s": 69.7,
+      "wall_s": 91.0,
       "violation_rules": [
         "frozen_world",
         "progress_surface_empty"
@@ -42,7 +42,7 @@
     {
       "seed": 4,
       "status": "Fail",
-      "wall_s": 64.1,
+      "wall_s": 86.7,
       "violation_rules": [
         "frozen_world",
         "progress_surface_empty"
@@ -52,7 +52,7 @@
     {
       "seed": 5,
       "status": "Fail",
-      "wall_s": 69.0,
+      "wall_s": 92.1,
       "violation_rules": [
         "frozen_world",
         "progress_surface_empty"
@@ -74,7 +74,7 @@
       "description": "Reveal ~10 tiles: Game written >= 11 times (1 new-game click + 10 tile reveals; extra new-game clicks also count)",
       "hits": 3,
       "runs": 5,
-      "median_frame": 1581,
+      "median_frame": 3459,
       "unmeasurable_reason": null
     },
     {
@@ -88,9 +88,9 @@
     {
       "id": "M4",
       "description": "Return to the menu after playing",
-      "hits": 2,
+      "hits": 4,
       "runs": 5,
-      "median_frame": 4521,
+      "median_frame": 2979,
       "unmeasurable_reason": null
     },
     {
@@ -102,5 +102,5 @@
       "unmeasurable_reason": null
     }
   ],
-  "note": "Baseline: chaos bot before phase 1, measured by the Exploration evaluation workflow on GitHub runners (run 44752095130, commit 0722110418c15122cced3cd3c797aeac53254841); traces omitted."
+  "note": "Baseline: chaos bot (explore off) on main after the cursor fix (#110) and deterministic randomness (#111), measured by the Exploration evaluation workflow on GitHub runners (run 44776521936, commit 85ed12e817889329af586c71bd8fc04ebf692b15); traces omitted."
 }
