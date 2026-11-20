@@ -73,3 +73,5 @@
 
 sync:
     remote: "git+ssh://git@github.com/mcanevet/bevy_playtest.git"
+export:
+    auto: true
