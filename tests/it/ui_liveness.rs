@@ -16,12 +16,9 @@
 //! avoiding the `bevy` meta-crate. This allows testing the `in-process,
 //! ui-liveness` combination where the full `bevy` crate is not available.
 
-#[path = "common/mod.rs"]
-mod common;
-
 #[cfg(feature = "ui-liveness")]
 mod ui_tests {
-    use super::common;
+    use crate::common;
     use bevy_app::prelude::*;
     use bevy_app::NoopPluginGroup;
     use bevy_ecs::prelude::*;

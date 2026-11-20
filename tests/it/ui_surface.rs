@@ -9,9 +9,6 @@
 //! `bevy_ui_widgets`' plugin adds widget observers so widget-marker
 //! enumeration matches a real game's world.
 
-#[path = "common/mod.rs"]
-mod common;
-
 #[cfg(feature = "ui-surface")]
 mod ui_tests {
     use bevy_app::prelude::*;
@@ -296,7 +293,7 @@ mod ui_tests {
 // (`bevy` meta-crate), hence the dual feature gate.
 #[cfg(all(feature = "ui-surface", feature = "takeover"))]
 mod bot_seam {
-    use super::common;
+    use crate::common;
     use bevy::prelude::*;
     use bevy_camera::visibility::Visibility;
     use bevy_playtest::run_scenario;

@@ -28,8 +28,7 @@
 // before exec makes the child legitimately exit 3 with no report).
 // The run slot serializes the suite — same convention as
 // takeover_e2e.
-#[path = "common/mod.rs"]
-mod common;
+use crate::common;
 
 use bevy_playtest::discovery::probe_pool::{
     build_job_list, run_jobs, run_jobs_in, ProbeError, ProbeOutcome, ProbePoolConfig,
@@ -341,7 +340,7 @@ fn mouse_matrix_reaches_pointer_games_and_gates_determinism() {
     //    the focus-walk control. Asserting divergence here would be
     //    factually wrong; asserting equality pins the honest-inert
     //    verdict at the pool layer. The POSITIVE walker control
-    //    lives in tests/discovery_flow.rs against
+    //    lives in tests/it/discovery_flow.rs against
     //    `takeover_demo_focus` (the tab-navigation consumer).
     // 3. Presence: the walker ran at all (default-on knob).
     assert_eq!(split.focus_walk_controls.len(), 2);

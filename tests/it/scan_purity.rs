@@ -29,12 +29,9 @@
 //! signature the old post-run scan exhibited.
 
 // Shared test harness (run-slot serialization)
-#[path = "common/mod.rs"]
-mod common;
-
 #[cfg(feature = "takeover")]
 mod in_process {
-    use super::common;
+    use crate::common;
     use bevy::app::App;
     use bevy::ecs::system::Res;
     use bevy::input::keyboard::KeyCode;

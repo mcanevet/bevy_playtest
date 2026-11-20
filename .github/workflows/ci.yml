@@ -16,28 +16,32 @@ permissions:
 
 env:
   CARGO_INCREMENTAL: "0"
-  # Line tables only: keeps rlibs small (full debuginfo made each Bevy
-  # rlib 190-370 MB). Single job now, so cache-compat across jobs is
-  # moot, but keeps local dev and CI flags aligned.
-  RUSTFLAGS: "-C debuginfo=line-tables-only"
+  # Debuginfo is set in Cargo.toml profiles (line tables for our crate,
+  # none for dependencies). Do NOT set RUSTFLAGS debuginfo here: it
+  # would override the per-package profile for every crate.
 
+# Jobs: lint, fixtures and test-build run in parallel; test (3
+# partitions) runs the archive test-build produces. `ci` aggregates
+# them so the branch-protection required check stays a single stable
+# name.
+#
+# Caching (Swatinem/rust-cache): one cache per job, saved ONLY from
+# main. It keeps dependency artifacts and prunes this repo's own
+# crates, test binaries and anything no longer in Cargo.lock, so the
+# cache stays at a few GB instead of growing without bound (the old
+# hand-rolled `target/` cache reached 10.5 GB and took ~8 min to
+# restore). PR runs read main's cache but never write, so they don't
+# evict it from the 10 GB repo quota.
+#
+# Tests run under cargo-nextest: one process per test, so the
+# process-global `run_scenario` exclusivity (tests/common::run_slot)
+# no longer forces subprocess-heavy suites to run one at a time.
 jobs:
-  # One job: everything the PR gate needs, sharing one Bevy build and
-  # one cache restore. Contract coverage kept per-PR:
-  #   - unit + fault-injection oracles (negative controls)
-  #   - flagless `cargo test` UX pin (breakout)
-  #   - battery tier, all 9 fixtures (playtest feature, plain cargo test)
-  #   - release purity guard (zero bevy_playtest bytes in plain builds)
-  #   - clippy -D warnings, fmt, rustdoc
-  ci:
+  # fmt, clippy, rustdoc, feature-combination check. Check-only build
+  # (rmeta), so it has its own small cache.
+  lint:
     runs-on: ubuntu-26.04
-    # Warm-cache green runs measure 34-42m (workspace suite +
-    # battery dominate); cold-cache and slow-runner runs need
-    # headroom for the full-gate battery plus the target/ cache
-    # save (tar+zstd of several GB) at the tail. 45m proved too
-    # tight: two consecutive runs died in the cache-save step after
-    # every gate had already passed.
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       # Actions pinned to full commit SHAs (mutable major tags are a
       # supply-chain risk).
@@ -45,123 +49,181 @@ jobs:
         with:
           persist-credentials: false
 
-      # Reclaim disk before building: the stock image ships ~12 GB of
-      # Android SDK, ~6 GB of Haskell (.ghcup), ~3 GB of Swift, and other
-      # pre-installed tooling we never touch. Removing these plus Docker
-      # images leaves ample headroom for Bevy's debug build artifacts.
-      - name: Free disk space
-        run: |
-          sudo rm -rf \
-            /usr/local/lib/android \
-            /usr/share/dotnet \
-            /opt/hostedtoolcache/CodeQL \
-            /usr/local/.ghcup \
-            /opt/ghc \
-            /usr/share/swift \
-            /usr/lib/jvm \
-            /usr/local/share/powershell \
-            /usr/lib/google-cloud-sdk || true
-          sudo docker image prune --all --force || true
-          df -h /
+      - uses: ./.github/actions/setup
 
-      # Single source of truth for the toolchain version: rust-toolchain.toml.
-      # GitHub runners ship rustup, which auto-installs the pinned toolchain
-      # (plus components) on the first cargo invocation. This removes the
-      # second version source the dtolnay/rust-toolchain action introduced:
-      # its per-Rust-version tags historically desynchronized from
-      # rust-toolchain.toml, producing half-bumped PRs whose CI failed with
-      # confusing "'cargo-fmt' is not installed" errors (e.g. when renovate
-      # bumped the pin past the action tag).
-      - name: Install Rust toolchain components
-        run: rustup component add clippy rustfmt
+      - name: Format check
+        run: cargo fmt --all --check
 
-      # azure.archive.ubuntu.com periodically serves archives at ~60kB/s
-      # (actions/runner-images#14823, #15040); apt has no
-      # minimum-throughput failover, so a trickling transfer hangs for
-      # 10-20 min. Prefer the public archive and bound each attempt so
-      # a slow node fails fast and retries.
-      - name: Install Linux dependencies (bevy backends + software Vulkan)
-        run: |
-          # Put archive.ubuntu.com ahead of the Azure mirror (both the
-          # classic sources.list and the apt-mirrors.txt failover list).
-          sudo sed -i 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g' \
-            /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null || true
-          if [ -f /etc/apt/apt-mirrors.txt ]; then
-            sudo sed -i 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g' /etc/apt/apt-mirrors.txt
-            # Deduplicate, keeping the first occurrence of each mirror.
-            sudo awk '!seen[$0]++' /etc/apt/apt-mirrors.txt \
-              | sudo tee /etc/apt/apt-mirrors.txt.tmp >/dev/null
-            sudo mv /etc/apt/apt-mirrors.txt.tmp /etc/apt/apt-mirrors.txt
-          fi
-          APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
-          for i in 1 2 3; do
-            if sudo timeout 180 apt-get $APT_OPTS update -yq && \
-               sudo timeout 180 apt-get $APT_OPTS install -yq --no-install-recommends \
-                 libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev \
-                 mesa-vulkan-drivers; then
-              exit 0
-            fi
-            echo "apt attempt $i failed or timed out; retrying" >&2
-          done
-          exit 1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: lint
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+      # Feature-combination guard: the documented minimal in-process
+      # configuration must stay compilable. The state-digest module uses
+      # bevy_ecs::reflect unconditionally, so this pins that the explicit
+      # `bevy_reflect` feature on bevy_ecs (Cargo.toml) is never dropped
+      # and the in-process-only build path cannot regress silently
+      # (the --all-features gate alone would not catch it).
+      - name: Feature combination guard (no-default-features in-process)
+        run: cargo check --locked --no-default-features --features in-process
+
+      # Doc build: cheap (--no-deps documents only this crate).
+      - name: Doc build (deny rustdoc warnings)
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --locked --no-deps --all-features
+
+  # Unit + integration tests of the harness itself, including the
+  # fault-injection negative controls (tests/it/fault_injection.rs).
+  # Built ONCE here and archived; `test` runs the archive in
+  # partitions on parallel runners (the discovery suites alone are
+  # ~16 min of serialized subprocess work).
+  test-build:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup
+
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+        with:
+          tool: cargo-nextest
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: test
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build and archive tests
+        run: >
+          cargo nextest archive --locked --workspace --all-features --lib --tests
+          --archive-file nextest-archive.tar.zst
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nextest-archive
+          path: nextest-archive.tar.zst
+          retention-days: 1
+
+  test:
+    needs: test-build
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # Runtime deps only (no build here): skip the disk cleanup.
+      - uses: ./.github/actions/setup
+        with:
+          free-disk: "false"
+
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+        with:
+          tool: cargo-nextest
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: nextest-archive
+
+      # count:k/N deals tests round-robin, so the serialized discovery
+      # tests spread evenly over the partitions.
+      #
+      # Extract INTO the checkout: tests locate the demo games via
+      # env!("CARGO_BIN_EXE_*"), an absolute path baked in at build
+      # time. The archive's root is `target/`, and every job checks out
+      # to the same path, so extracting here restores those paths.
+      - name: Workspace tests (nextest, partition ${{ matrix.partition }}/3)
+        run: >
+          cargo nextest run --archive-file nextest-archive.tar.zst
+          --extract-to . --extract-overwrite --workspace-remap .
+          --partition count:${{ matrix.partition }}/3 --profile ci
+
+  # The consumer-facing contract, exercised on real Bevy games
+  # generated from the pinned upstream revision.
+  fixtures:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup
+
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+        with:
+          tool: cargo-nextest
 
       - name: Generate fixtures from pinned Bevy revision
         run: ./scripts/fetch_bevy_examples.sh
 
-      # Restore the shared target/ cache (exact key or closest
-      # fallback).
-      - name: Restore target cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      # Both workspaces share ONE physical target dir
+      # (.cargo/config.toml). Listing both lets rust-cache prune the
+      # members of each (fixture crates and bevy_playtest itself), so
+      # regenerated fixtures never land on top of stale fixture
+      # artifacts (the ENOSPC failure mode of 2026-10-31).
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          # Both workspaces share ONE physical target dir
-          # (.cargo/config.toml), so one path covers everything.
-          # The fetch-script hash is part of the key: a changed
-          # script changes what fixtures/targets get generated, and a
-          # stale cache restored on top of fresh generation is what
-          # blew the runner disk (ENOSPC, twice) on 2026-10-31.
-          path: target/
-          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml', 'scripts/fetch_bevy_examples.sh') }}-lld
-          restore-keys: |
-            ${{ runner.os }}-target-
+          shared-key: fixtures
+          workspaces: |
+            fixtures -> ../target
+            . -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      # Format check: near-free (no compile), prevents drift merging.
-      - name: Format check
-        run: cargo fmt --all --check
-
-      # Build everything ONCE, then run all test suites against the same
-      # artifacts. This avoids recompiling Bevy for each test step.
-      - name: Build everything
+      # fixtures/Cargo.lock records bevy_playtest's own version (it is a
+      # path dependency), which every release-plz bump changes without
+      # touching this lockfile. Rewrite ONLY that version line to the
+      # crate's current version, so every fixture build below can stay
+      # --locked: third-party pins remain enforced, and any other drift
+      # still fails CI.
+      - name: Sync bevy_playtest version in fixtures lockfile
         run: |
-          df -h /
-          cargo test --manifest-path fixtures/Cargo.toml --workspace --no-run
-          cargo test --locked --workspace --all-features --lib --tests --no-run
+          v=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name=="bevy_playtest") | .version')
+          sed -i "/^name = \"bevy_playtest\"\$/{n;s/^version = \".*\"\$/version = \"$v\"/}" fixtures/Cargo.lock
+          git diff --stat fixtures/Cargo.lock
+
+      # Prebuild everything the later steps run, including breakout's
+      # plain (flagless) test targets, so the UX pin's 300 s timeout
+      # bounds the run only, not compilation.
+      - name: Build fixtures
+        run: |
+          cargo nextest run --locked --manifest-path fixtures/Cargo.toml --workspace --features playtest --test playtest --no-run
+          cargo test --locked --manifest-path fixtures/breakout/Cargo.toml --no-run
 
       # UX pin: plain `cargo test` on breakout must activate the
-      # playtest feature and run the battery (not ignore it).
+      # playtest feature and run the battery (not ignore it). Stays on
+      # plain cargo on purpose: this is the command users type.
       - name: UX pin (flagless breakout cargo test)
         run: |
           set -o pipefail
-          timeout 300 cargo test --manifest-path fixtures/breakout/Cargo.toml \
+          timeout 300 cargo test --locked --manifest-path fixtures/breakout/Cargo.toml \
             | tee /tmp/breakout_flagless.log
           ! grep -Eq "[1-9][0-9]* ignored" /tmp/breakout_flagless.log
 
-      # Negative controls: prove the oracles DETECT the violations they
-      # claim to catch. Uses the already-built artifacts.
-      - name: Fault-injection oracle tests
-        run: cargo test --locked --test fault_injection
-
-      # Full unit + integration battery (no exclusions needed now).
-      # Uses cached artifacts from the "Build everything" step.
-      - name: Workspace unit tests
-        run: >
-          cargo test --locked --workspace --all-features --lib --tests
-
       # Battery tier for ALL fixtures (playtest feature). The
       # self-dev-dependency pattern activates `playtest` only for test
-      # builds; these binaries were already built above.
-      - name: Battery tier (cargo test, all fixtures)
+      # builds. nextest isolates each test in its own process, which
+      # satisfies run_scenario's one-run-per-process exclusivity
+      # without --test-threads=1. Capped at 2 concurrent games: each
+      # runs real game subprocesses on software Vulkan under wall-clock
+      # watchdogs, so saturating the 4 vCPUs invites timeout flakes.
+      - name: Battery tier (all fixtures, nextest)
         run: |
-          timeout 600 cargo test --locked --manifest-path fixtures/Cargo.toml --workspace --features playtest --test playtest -- --test-threads=1
+          timeout 600 cargo nextest run --locked --manifest-path fixtures/Cargo.toml --workspace --features playtest --test playtest --profile ci --config-file .config/nextest.toml --test-threads 2
 
       # Release-purity guard: plain bin builds must NOT resolve
       # bevy_playtest. This is a cargo check + tree walk, not a rebuild.
@@ -174,30 +236,19 @@ jobs:
             exit 1
           fi
 
-      # Feature-combination guard: the documented minimal in-process
-      # configuration must stay compilable. The state-digest module uses
-      # bevy_ecs::reflect unconditionally, so this pins that the explicit
-      # `bevy_reflect` feature on bevy_ecs (Cargo.toml) is never dropped
-      # and the in-process-only build path cannot regress silently
-      # (the --all-features gate alone would not catch it).
-      - name: Feature combination guard (no-default-features in-process)
-        run: cargo check --locked --no-default-features --features in-process
-
-      # Clippy reuses the artifacts compiled above.
-      - name: Clippy (deny warnings)
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-
-      # Doc build: cheap (--no-deps documents only this crate, ~4s warm).
-      - name: Doc build (deny rustdoc warnings)
+  # Single required status check for branch protection. Fails unless
+  # every job above succeeded (a skipped or cancelled job is a failure).
+  ci:
+    if: always()
+    needs: [lint, test-build, test, fixtures]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: All jobs passed
         env:
-          RUSTDOCFLAGS: "-D warnings"
-        run: cargo doc --locked --no-deps --all-features
-
-      # Save the cache so future runs (including PR runs restoring via
-      # restore-keys) hit the exact key. Skipped silently when the entry
-      # already exists, so routine runs cost nothing here.
-      - name: Save target cache
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: target/
-          key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}-lld
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "job results: $RESULTS"
+          for r in $RESULTS; do
+            [ "$r" = success ] || exit 1
+          done

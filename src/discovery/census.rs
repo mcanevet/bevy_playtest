@@ -16,7 +16,7 @@
 //!   report (the known anti-pattern this replaces) outputs the same
 //!   thing regardless of world content; the census derives every row
 //!   from live world state, and the negative-control test in
-//!   `tests/census.rs` pins rich-vs-minimal correspondence for
+//!   `tests/it/census.rs` pins rich-vs-minimal correspondence for
 //!   every capability.
 //! - **Honest degradation.** Component/system names are MASKED in
 //!   consumer graphs unless `bevy_ecs`'s `debug` feature is compiled

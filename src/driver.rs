@@ -1568,7 +1568,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     // (`KeyboardInput`, `ButtonInput<..>`, `Time`, ...) lives under
     // an engine `bevy_*` path the census's ownership filter
     // already excludes. Structurally neutral (pinned in
-    // tests/census.rs); the one-line summary goes to stderr, full
+    // tests/it/census.rs); the one-line summary goes to stderr, full
     // rows ride in the report artifact.
     let capability_census = {
         let census = crate::discovery::census::run_capability_census(app);

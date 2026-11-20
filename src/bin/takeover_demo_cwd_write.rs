@@ -3,7 +3,7 @@
 //! the HOME it inherited — then exits. The pool runs each probe
 //! child in its own throwaway directory with HOME repointed there
 //! (see `execute_job` in src/discovery/probe_pool.rs); the
-//! regression test tests/probe_pool.rs:
+//! regression test tests/it/probe_pool.rs:
 //! probe_children_get_their_own_cwd_and_home asserts BOTH markers
 //! land in that per-job directory, not in the parent's cwd or the
 //! developer's real home.

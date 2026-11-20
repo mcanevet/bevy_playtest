@@ -1,7 +1,7 @@
 //! Minimal runaway child for the probe-pool watchdog test: starts
 //! and then NEVER exits on its own — the stand-in for "a stuck game"
 //! that the pool's wall-clock watchdog must kill (see
-//! tests/probe_pool.rs: runaway_child_is_killed_by_the_wall_clock_watchdog).
+//! tests/it/probe_pool.rs: runaway_child_is_killed_by_the_wall_clock_watchdog).
 //!
 //! Deliberately NOT an `App` run: the demo apps advance SIMULATED
 //! time in a tight CPU loop with no pacing, so their wall-clock

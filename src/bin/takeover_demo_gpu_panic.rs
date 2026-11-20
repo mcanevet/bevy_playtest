@@ -1,5 +1,5 @@
 //! Crash-simulating child for the battery's GPU-panic diagnosis
-//! regression (tests/battery.rs:
+//! regression (tests/it/battery.rs:
 //! gpu_panic_gets_named_failure_with_remediation): reproduces —
 //! WITHOUT needing a GPU-less host — what a taken-over game prints
 //! when bevy_render's `initialize_renderer` finds no adapter, then
