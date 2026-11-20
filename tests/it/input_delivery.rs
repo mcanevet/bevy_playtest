@@ -343,6 +343,71 @@ fn scripted_clicks_reach_picking_in_process() {
     );
 }
 
+/// What a bevy_ui `Interaction` ever reported during the run.
+#[derive(Resource, Default, Debug)]
+struct InteractionProbe {
+    hovered: bool,
+    pressed: bool,
+}
+
+#[allow(deprecated)] // bevy_ui `Interaction`: deprecated in 0.20, still widely used.
+fn setup_interaction_ui(mut commands: Commands) {
+    commands.spawn((
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            ..default()
+        },
+        bevy::ui::Interaction::default(),
+    ));
+    commands.spawn(Camera2d);
+}
+
+#[allow(deprecated)]
+fn interaction_probe(nodes: Query<&bevy::ui::Interaction>, mut probe: ResMut<InteractionProbe>) {
+    for interaction in &nodes {
+        match interaction {
+            bevy::ui::Interaction::Hovered => probe.hovered = true,
+            bevy::ui::Interaction::Pressed => probe.pressed = true,
+            bevy::ui::Interaction::None => {}
+        }
+    }
+}
+
+/// bevy_ui computes `Interaction` (the `Button` hover/press state many
+/// games still use) ONLY from `Window::physical_cursor_position`, which
+/// winit sets in a real run. The takeover has no winit, so the bot must
+/// set it itself: before it did, no `Interaction` button could ever be
+/// hovered or pressed, and thetawave's main menu was unreachable.
+#[test]
+fn bot_clicks_drive_bevy_ui_interaction() {
+    let _slot = common::run_slot();
+    let scenario: Scenario = serde_json::from_str(
+        r#"{"name":"interaction-probe","bot":{"type":"synthetic_keyboard","seed":1,"raw_surface":{"keys":[],"mouse_buttons":[]},"mouse_clicks":[{"frame":10,"button":"left","x":640.0,"y":360.0,"hold_frames":3}]},"duration_s":1.0,"tps":60,"invariants":[]}"#,
+    )
+    .expect("scenario parses");
+
+    let mut app = App::new();
+    app.add_plugins(
+        bevy::DefaultPlugins
+            .build()
+            .disable::<bevy_winit::WinitPlugin>(),
+    );
+    app.insert_resource(InteractionProbe::default());
+    app.add_systems(Startup, setup_interaction_ui);
+    app.add_systems(Update, interaction_probe);
+
+    run_scenario(&mut app, &scenario).expect("run completes");
+
+    let probe = app.world().resource::<InteractionProbe>();
+    assert!(
+        probe.hovered && probe.pressed,
+        "a bot click on a fullscreen node must drive bevy_ui `Interaction` to Hovered \
+         and Pressed (probe: {probe:?}); the bot must set the window's cursor position, \
+         which is all `ui_focus_system` reads"
+    );
+}
+
 // --------------------------------------------------------------------------
 // Mouse-motion delivery tests (raw MouseMotion / AccumulatedMouseMotion)
 // --------------------------------------------------------------------------
