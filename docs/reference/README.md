@@ -86,21 +86,20 @@ The chaos bot clicks as well as types — no scenario changes required.
 On each input tick it picks a random surface button, moves a harness
 owned cursor to a random quantized position (a single draw, 16 bits
 per axis, scaled into a 1280×1280 theoretical viewport), presses, and
-releases after 2 frames (fixed, unlike chaos keys — see below). Clicks
-reach the game through real `MouseButtonInput` messages, so
-`ButtonInput<MouseButton>` and message-based input handlers both see
-them; scenario seeds replay identically.
+releases after 2 frames (fixed, unlike chaos keys — see below). A
+click reaches the game through three forms, mirroring winit's
+pipeline: the raw `MouseButtonInput` message (feeds
+`ButtonInput<MouseButton>`), the wrapped `WindowEvent` form (what
+bevy_picking's mouse backend reads), and the primary window's own
+cursor position (what bevy_ui's `ui_focus_system` reads to compute
+`Interaction`) — so button state, pointer handlers and UI hover/press
+all see the click where the bot placed it; scenario seeds replay
+identically.
 
 Opt out with an explicit empty surface:
 `"raw_surface": { "keys": [...], "mouse_buttons": [] }`. Symmetrically,
 `"keys": []` opts out of chaos keys (mouse-only chaos); omitting a
 field keeps its default. A fully-empty surface rejects at load.
-
-Known limitation (honesty first): the click position lives in a
-harness-owned resource (`driver::CursorInputResource`), not the game's
-`Window.cursor_position` — UI systems that hit-test against the window
-cursor (e.g. `bevy_ui` hover) will not see chaos clicks land where the
-bot placed them. Button state itself is fully exercised.
 
 ### Chaos keyboard (multi-slot holds)
 
@@ -286,8 +285,8 @@ Two distinct error classes, at different stages:
   `CameraOutputMode::Skip`, which may be intentional for
   compositing/prepass setups; a disabled camera's mode is
   irrelevant — it renders nothing) gains an informational
-  `render_liveness` violation. STRUCTURAL ONLY: the rule reads
-  main-world `Camera` components, never the render world or the
+  `render_liveness` violation. The rule reads only main-world
+  `Camera` components, never the render world or the
   GPU — a live camera that renders black passes. Evidence (tier,
   `cameras_seen`, `samples`, `sim_active_ever`, notes — collected
   at cadence-gated samples only, not continuously) rides the
@@ -367,6 +366,31 @@ Two distinct error classes, at different stages:
   `log_bridge_lost` violation, which is emitted when the capture
   subscriber won and not silenced by the
   `BEVY_PLAYTEST_ALLOW_MISSING_LOG_CAPTURE` escape hatch)
+- `game_build_profile` (absent on stubs and old reports): the
+  reporting GAME binary's own debug/release profile — dev-profile
+  behavior differs from release (`#[cfg(debug_assertions)]` keys)
+- `source_derived_keys` / `source_derived_notes` (present exactly
+  when the battery's source scan replaced the default chaos keys):
+  the poison-filtered key set that replaced WASD+arrows, plus
+  provenance notes (cap drops, unreadable files). `None` means no
+  replacement happened, never "the scan found nothing"
+- `lw_declared`, `lw_tap_stats` (`lw-reader` builds): the game's
+  declared Leafwing bindings as read from its `InputMap`s, and the
+  per-run intent-tap press/fire statistics
+- `state_trace` (absent on crash stubs): state schedules that ran
+  (and never ran) and game resources that changed — the evidence
+  behind the committed exploration targets
+- `randomness` (stamped by the battery parent): whether the
+  deterministic-randomness shim intercepted OS-seeded randomness,
+  and how or why not
+- `exploration` (`bot.explore` runs only): screens seen, widgets
+  never clicked, keys never pressed, and a saturation verdict
+- `capability_census` (absent on crash stubs): load-time capability
+  rows captured before bot/oracle registration — absence never
+  means "no census"
+- `ui_surface` (`ui-surface` feature): the latest snapshot of the
+  declared UI/interactable surface plus bounded delta notes —
+  absence never means "no UI"
 - `render_liveness` (present only with the `render-liveness` feature
   AND a render sub-app in the game; carries `{ cameras_seen,
   sim_active_ever, tier, samples, notes }` — the evidence behind the
@@ -380,7 +404,7 @@ Two distinct error classes, at different stages:
   "healthy")
 
 The `log_capture_available`/`log_bridge_lost` and
-`log_capture_lost` violation entries are the HUMAN-facing layer:
+`log_capture_lost` violation entries are the human-facing layer:
 silenced by the `BEVY_PLAYTEST_ALLOW_MISSING_LOG_CAPTURE` escape
 hatch (and the bridge entry requires the capture subscriber to have
 won, since `log_capture_lost` otherwise already tells the story).
@@ -473,6 +497,10 @@ disables the takeover.
 | `BEVY_PLAYTEST_REPLAY_PASS_B` | Internal: replay pass-B marker |
 | `BEVY_PLAYTEST_ALLOW_MISSING_LOG_CAPTURE` | Acknowledge a lost log subscriber instead of failing |
 | `BEVY_PLAYTEST_SEED` | Override the loaded scenario's `bot.seed` (after loading — composes with scan-layered variants). Reproduce any single battery or sweep member by hand: pair with `BEVY_PLAYTEST_SCENARIO` (the seed var alone leaves the takeover inert) |
+| `BEVY_PLAYTEST_DISCOVER_SCAN` | Internal: static input-surface scan export path (set by the probe-pool substrate; also listed as known so an inherited value is never rejected) |
+| `BEVY_PLAYTEST_DETRNG_SEED` / `BEVY_PLAYTEST_DETRNG_DISABLE` | Internal: deterministic-randomness shim control, read by the shim (`detrng/shim.rs`) the battery preloads on Linux — never by the takeover itself |
+| `BEVY_PLAYTEST_SOURCE_ROOT` / `BEVY_PLAYTEST_SOURCE_SCAN_DISABLE` | Battery-parent side (never passed to the game child): point the source scan at a non-standard source root / restore the default WASD+arrows chaos surface (see [the README](../../README.md#aiming-the-bot-at-the-games-real-input-surface)) |
+| `BEVY_PLAYTEST_FIXTURE` | Internal: test-selection var (the acceptance suite picks one fixture); inherited by the game process harmlessly |
 
 Unknown `BEVY_PLAYTEST_*` variables abort the game process with exit
 code 3 — a typo'd setting must never be mistaken for a configured option.
@@ -498,10 +526,10 @@ NOTICE covering attribution and stand-in assets.
 ## Deterministic boot
 
 [deterministic-boot.md](deterministic-boot.md) — the "why + how to
-fix" target for `replay_divergence` and `Statistical`-surface
-messages: the read-your-seed-from-the-environment pattern, what
-unseeded game RNG does to confidence, and the degradation classes
-(persisted external state, network sockets) as reported categories.
+fix" target for `replay_divergence` messages: the
+read-your-seed-from-the-environment pattern, what unseeded game RNG
+does to confidence, and common causes beyond the canonical three
+(persisted external state, network sockets).
 
 ## Compatibility
 

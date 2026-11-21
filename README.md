@@ -23,7 +23,7 @@ that activates it only for test builds:
 bevy_playtest = { version = "0.8", optional = true }
 
 [dev-dependencies]
-# Self-dependency: activates OUR OWN `playtest` feature only for
+# Self-dependency: activates our own `playtest` feature only for
 # test builds. Normal & release builds stay clean.
 my_game = { path = ".", features = ["playtest"] }
 
@@ -150,7 +150,7 @@ bot. The oracles:
 - **Panic capture** — crash → Crash
 - **Log capture** — ERROR → Fail, WARN → informational
 - **Render liveness** — with the `render-liveness` feature, a
-  sim-active run on a game that HAS a render pipeline but never had a
+  sim-active run on a game that has a render pipeline but never had a
   camera, kept every sampled camera disabled (`is_active == false`),
   or never had an active camera writing output (every sampled
   active camera sat on `CameraOutputMode::Skip`; a disabled
@@ -221,9 +221,9 @@ The repository carries two hand-maintained fixtures beyond the
 fetched showcase games. The first is hand-authored:
 `fixtures/known_answer/` — a deliberately constructed input surface
 (numbered "plants": chords, debounces, shape-only KeyCode traps)
-with committed ground truth (`ground_truth.json`) that discovery
-measurements are graded against, including asserted expected
-misses and two runtime code mutations for drift testing. See the
+with committed ground truth (`ground_truth.json`) that measurement
+lenses are graded against, including asserted expected misses and
+runtime code mutations for drift testing. See the
 [known-answer fixture reference](docs/reference/known-answer-fixture.md).
 
 The second is a real-world game: `fixtures/thetawave/` — a port of
@@ -239,7 +239,7 @@ tier observes on a production-shaped game.
 
 With no flags at all, the battery parent runs a milliseconds-cost
 source scan: it collects every `KeyCode::` variant the game's own
-sources mention and — when it finds any — REPLACES the default
+sources mention and — when it finds any — replaces the default
 WASD+arrows chaos surface with that scan-derived key set (poison
 keys like `Escape`/`Tab` filtered, capped, all decisions
 reported), concentrating the chaos presses on keys the game
@@ -296,13 +296,12 @@ assertions do not apply.
 
 ## Oracles
 
-
-Errors logged via `tracing` from ANY thread — including IoTaskPool
+Errors logged via `tracing` from any thread — including IoTaskPool
 workers (where bevy_asset reports load failures) and multi-threaded
 schedule executors — are captured into the run's report. Capturing is
 process-global and exclusive: exactly one `run_scenario` may be active
-per process; concurrent or nested calls are REJECTED immediately
-(`ScenarioError::Rejected`) — never blocked. Parallel callers (e.g. a
+per process; concurrent or nested calls are rejected immediately
+(`ScenarioError::Rejected`), never blocked. Parallel callers (e.g. a
 test battery) must serialize runs themselves.
 
 Capture depends on the harness's tracing subscriber winning the
@@ -314,7 +313,7 @@ write-once global default. Two consequences:
   console behavior (honors `RUST_LOG`).
 - If the game's `LogPlugin` is added first (plain `DefaultPlugins` plus
   `PlaytestPlugin` after it), its subscriber wins the race and log
-  capture is OFF. The plugin warns loudly at build time, the report
+  capture is off. The plugin warns loudly at build time, the report
   says so (`log_capture_available: false` plus an informational,
   non-gating `log_capture_lost` entry), and setting
   `BEVY_PLAYTEST_ALLOW_MISSING_LOG_CAPTURE=1` acknowledges the loss
@@ -334,16 +333,16 @@ One mechanism takes a run from "asserted" to "proven":
    twice against fresh Apps and compares per-frame fingerprints
    (choice draws + sorted Transform translations). Divergence is a
    `replay_divergence` Fail identifying the first divergent frame.
-   This PROVES determinism for the observable surface — it does not
+   This proves determinism for the observable surface — it does not
    prove absence of nondeterminism in unobserved state (components
    without Transform).
    On the takeover/plugin path, pass B re-runs your game binary as a
-   subprocess — whole-process determinism, the strongest form. NOTE:
+   subprocess — whole-process determinism, the strongest form.
    `verify_replay` requires `single_threaded: true` (default).
 
 ## Integration caveats (read when something surprises you)
 
-Release purity caveat: the feature activates for ANY test/example/bench
+Release purity caveat: the feature activates for any test/example/bench
 build — including `cargo test --release` / `cargo build --all-targets`.
 Only plain `cargo build` / `cargo build --release` (bins) are
 guaranteed playtest-free. To enforce that contract in CI (recommended —

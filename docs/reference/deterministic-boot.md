@@ -2,10 +2,9 @@
 
 How to make a game's boot deterministic so playtests can trust
 their verdicts. The harness can *detect* nondeterminism
-(`verify_replay` divergence, `Statistical` surface confidence) but
-only the game can *remove* it. This page is the "why + how to fix"
-target for those messages: when a run degrades, the remediation is
-in your game, not in the scenario.
+(`verify_replay` divergence) but only the game can *remove* it.
+This page is the "why + how to fix" target for that message: when a
+run degrades, the remediation is in your game, not in the scenario.
 
 ## The one-line fix: read your seed from the environment
 
@@ -49,40 +48,25 @@ is quieter and worse: the run **degrades**.
   fingerprints; the report fails with `replay_divergence` citing the
   first mismatching frame, with the canonical causes in its message:
   wall clock, unseeded RNG, or unordered iteration.
-- Input-surface discovery runs its determinism gate on doubled
-  control runs. Controls that disagree stamp the whole surface
-  `Statistical` — and a `Statistical` surface cannot certify trusted
-  negatives: a key that probed inert is reported as "probed inert
-  under Statistical controls — the negative is untrusted", never as
-  "the game does not use this key".
 
-That degradation is existing behavior, unchanged by this page. The
-remediation is the seed line above (plus, for the other canonical
-causes: a fixed virtual time instead of wall-clock reads, and
-avoiding unordered-iteration-dependent state).
+The remediation for unseeded RNG is the seed line above (plus, for the
+other canonical causes: a fixed virtual time instead of wall-clock
+reads, and avoiding unordered-iteration-dependent state).
 
-## Degradation classes, as reported categories
+## Common causes beyond the message
 
-When a control run diverges, the harness reports what it *saw* —
-categories, not guesses about your intent:
+When a replay comparison diverges, the harness reports the first
+mismatching frame and both hashes, and the violation message names
+the canonical causes (wall clock, unseeded RNG, unordered
+iteration). It does not classify beyond that — these are frequent
+culprits from experience, not harness-detected categories:
 
-- **Unseeded RNG / wall clock / unordered iteration** — the
-  `replay_divergence` and `Statistical`-surface message trinity.
-  Fix: the seed line; virtual time; deterministic iteration.
 - **Persisted external state** — a game that reads or writes state
-  outside the process (a save file, a cache) boots differently on
-  the second run even with identical code and seed. The harness
-  reports what the digests observed; deleting or isolating the state
-  between runs is a game-side fix. Known-answer fixtures document
-  their own persistence choices (e.g. the thetawave fixture keeps
-  its sqlite storage plugin off by default for exactly this reason).
-- **Network sockets** — anything opening real sockets at boot
-  introduces peer identity, latency, and external responses into
-  the boot digest. The report shows the resulting divergence; the
-  fix is to make network subsystems opt-in at boot so the playtested
+  outside the process (a save file, a cache) boots differently on the
+  second run even with identical code and seed. Delete or isolate the
+  state between runs (the thetawave fixture keeps its sqlite storage
+  plugin off by default for exactly this reason).
+- **Network sockets** — anything opening real sockets at boot pulls
+  peer identity, latency, and external responses into the boot
+  digest. Make network subsystems opt-in at boot so the playtested
   build does not dial out.
-
-These are REPORTED categories — observations attached to a degraded
-verdict, never hard failures on their own. The harness does not (and
-should not) infer intent from them; the message tells you where to
-look, and the fixes above are in the game's hands.
