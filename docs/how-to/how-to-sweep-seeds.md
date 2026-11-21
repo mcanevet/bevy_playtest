@@ -11,10 +11,10 @@ The seed sweep fixes this in two layers:
 1. **Sweep**: run the same scenario across several seeds in a bounded
    worker pool, and aggregate the findings by fingerprint
    (`rule:target` — frames, counts, and details are deliberately
-   stripped, so the same bug on two seeds is ONE finding, not two).
+   stripped, so the same bug on two seeds is one finding, not two).
 2. **Regression file**: a plain-text, human-editable, git-mergeable
-   ledger of known fingerprints. The gate fails only on NEW or
-   REGRESSED findings; known ones pass (you adjudicated them), and a
+   ledger of known fingerprints. The gate fails only on new or
+   regressed findings; known ones pass (you adjudicated them), and a
    known fingerprint that stops reproducing is reported as *healed* —
    delete its line so a comeback of the same bug gates again.
 
@@ -46,7 +46,7 @@ each new finding:
 ```text
 finding [frozen_world:world] on seeds [42, 43]
   ...
-gate: NEW OR REGRESSED findings (unknown fingerprints)
+gate: new or regressed findings (unknown fingerprints)
 ```
 
 Adjudicate the finding (is it a real bug? a pre-existing limitation
@@ -101,7 +101,7 @@ A member that panics always gates. Likewise, a recorded
 
 When a fix lands and a recorded finding no longer reproduces on any
 swept seed, the sweep prints a healed note. Delete that line from the
-regression file — leaving it in means a regression of the SAME bug
+regression file — leaving it in means a regression of the same bug
 would arrive as a known (passing) finding instead of gating.
 
 **Healed over your seed set is weak evidence.** A flaky finding can
@@ -113,7 +113,7 @@ Before deleting on a sweep-wide heal, re-sweep with a wider seed set
 
 - Blocking findings are fingerprinted as `(rule, canonicalized
   target)`. Informational rules (e.g. `log_warn`) never
-  fingerprint — BUT a member that fails outright with no
+  fingerprint — but a member that fails outright with no
   fingerprintable finding (typically an informational escalated to
   gating by scenario config, like `progress.require_surface` or
   `strict_warnings`) still blocks the gate: there is no key to

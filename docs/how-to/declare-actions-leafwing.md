@@ -31,12 +31,12 @@ During a playtest run the reader snapshots every binding from every
   at startup is indistinguishable from a code-built one — the reader
   reads the deserialized value, never the source form.
 - **Instances conflate by design.** The `action_map` on each row is
-  the reflected TYPE path, not the entity: two components of the
+  the reflected type path, not the entity: two components of the
   same `InputMap<A>` type (a per-player clone, a pause-overlay map)
-  read as ONE row set. Same-type instances carrying different
+  read as one row set. Same-type instances carrying different
   bindings union into that set, and the tap attributes a press to
   the (map type, action) pair — never to one player's instance.
-  Per-instance attribution needs distinct action-map TYPES.
+  Per-instance attribution needs distinct action-map types.
 - **Chord bindings (`ButtonlikeChord`)** are marked `chord: true` —
   they fire only with all members held, so single-key probes are
   expected misses and never alarm material.
@@ -45,9 +45,9 @@ During a playtest run the reader snapshots every binding from every
 
 The declaration snapshot is one-shot: bindings the game builds or
 loads after the reader's snapshot frame are not enumerated. Mid-run
-REBINDS are covered by the same caveat from the other side: a key
+rebinds are covered by the same caveat from the other side: a key
 rebound after the snapshot keeps reporting its snapshot-time
-binding, so the report can disagree with the game's CURRENT keybinds
+binding, so the report can disagree with the game's current keybind
 settings screen — compare against what was bound when the run
 started.
 
@@ -79,7 +79,7 @@ requires proof of dead wiring, in exactly one of two arms:
   Leafwing's `ActionState`) **and never fired** across the run — a
   firing overrides the disabled observation (a disabled-then-
   re-enabled action is alive), or
-- the driver **pressed THIS binding** and the action **never fired**
+- the driver **pressed this binding** and the action **never fired**
   across the whole run. The proof is per binding, not per action:
   an action bound to several keys only alarms for the keys that
   were actually pressed — a healthy sibling binding's press (or

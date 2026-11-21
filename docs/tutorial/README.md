@@ -23,7 +23,7 @@ only for test builds:
 bevy_playtest = { version = "0.8", optional = true }
 
 [dev-dependencies]
-# Self-dependency: activates OUR OWN `playtest` feature only for
+# Self-dependency: activates our own `playtest` feature only for
 # test builds. Normal & release builds stay clean.
 my_game = { path = ".", features = ["playtest"] }
 
@@ -63,7 +63,7 @@ fn playtest_plugins() -> () {}
 
 then use `.add_plugins(default_plugins().set(...))` where you had
 `DefaultPlugins`, and `.add_plugins(playtest_plugins())` before
-`.run()` (AFTER the group — the runner swap is last-set-wins).
+`.run()` (after the group — the runner swap is last-set-wins).
 
 `PlaytestDefaultPlugins` is a pass-through to `DefaultPlugins` normally,
 and swaps to a headless runner when `BEVY_PLAYTEST_SCENARIO` is set.

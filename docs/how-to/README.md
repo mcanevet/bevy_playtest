@@ -12,4 +12,4 @@ Task-focused recipes, one per page. Each assumes the
 - [Run playtests on a GPU-less CI host](headless-ci-gpu.md) — Fix the `Unable to find a GPU!` panic on headless CI runners
 - [Prove a scenario is deterministic](how-to-prove-a-scenario-is-deterministic.md) — Verify replay divergence
 - [Sweep your game across seeds](how-to-sweep-seeds.md) — Escape single-seed luck with a multi-seed sweep and a known-findings regression file
-- [Declare your actions with Leafwing Input Manager](declare-actions-leafwing.md) — Have discovery read `InputMap` declarations (RON maps included), tap wiring liveness, and alarm on declared-but-dead bindings
+- [Declare your actions with Leafwing Input Manager](declare-actions-leafwing.md) — Have the reader enumerate `InputMap` declarations (RON maps included), tap wiring liveness, and alarm on declared-but-dead bindings

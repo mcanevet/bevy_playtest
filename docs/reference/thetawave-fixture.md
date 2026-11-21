@@ -2,7 +2,7 @@
 
 Reference for `fixtures/thetawave/`: a REAL third-party game —
 Theta Wave — vendored into the fixture battery to prove the
-declared-tier discovery machinery (Leafwing reader, intent-tap,
+declared-tier machinery (Leafwing reader, intent-tap,
 reconciliation) against code nobody involved in bevy_playtest wrote.
 Where the [known-answer fixture](known-answer-fixture.md) checks the
 instrument against hand-derived truth, this fixture checks it against
