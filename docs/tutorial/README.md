@@ -161,7 +161,13 @@ JSON file in it (shown here as `playtests/menu.json`):
 
 Every invariant needs a unique `name` and a `rule`. Bounds are per-axis
 (`min_x`/`max_x`/`min_y`/`max_y`, plus `min_z`/`max_z` if your game moves
-in three dimensions), not a single box.
+in three dimensions), not a single box. Beyond bounds, two authored-intent
+rules check reflected resources — game-wide singletons like scores,
+economies and cooldowns: `resource_check` asserts a predicate on a
+numeric field (always, or `eventually_s` within a deadline), and
+`stagnant_resource` catches livelocks — a watched field that stops
+changing for more than `window_s` of a driving clock's advance (think: a
+scoreboard frozen at 0-0 while the match clock keeps ticking).
 
 Reference it from the same helper:
 

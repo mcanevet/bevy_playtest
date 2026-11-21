@@ -23,12 +23,14 @@ impl std::fmt::Display for BotType {
     }
 }
 
-/// Invariant rule types (nodes_in_bounds only).
+/// Invariant rule types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InvariantRule {
     NodesInBounds,
     ComponentCheck,
+    ResourceCheck,
+    StagnantResource,
 }
 
 impl std::fmt::Display for InvariantRule {
@@ -36,6 +38,8 @@ impl std::fmt::Display for InvariantRule {
         match self {
             Self::NodesInBounds => f.write_str("nodes_in_bounds"),
             Self::ComponentCheck => f.write_str("component_check"),
+            Self::ResourceCheck => f.write_str("resource_check"),
+            Self::StagnantResource => f.write_str("stagnant_resource"),
         }
     }
 }

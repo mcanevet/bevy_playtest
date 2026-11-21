@@ -434,14 +434,40 @@ pub struct Invariant {
     /// Comparison operator for `component_check`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check: Option<CheckOp>,
+    /// Registered resource type name (`resource_check` /
+    /// `stagnant_resource`): the full registered type path, or an
+    /// unambiguous short path (same resolution rules as
+    /// `target_selector.with_component`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
+    /// Rate-form (`stagnant_resource` only): reflect path to the
+    /// numeric DRIVER leaf that must strictly advance while the
+    /// watched leaf stays constant (e.g. a match clock). Defaults to
+    /// the same resource as `resource`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver_resource: Option<String>,
+    /// Rate-form (`stagnant_resource` only): reflect path to the
+    /// numeric driver leaf (on `driver_resource`, default
+    /// `resource`) that must strictly advance for the window to
+    /// accumulate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver_path: Option<String>,
+    /// Rate-form (`stagnant_resource` only): the watched leaf must
+    /// stay constant for at most this many seconds of driver time
+    /// before the invariant fires. Must fit inside the run
+    /// (a window longer than the run can never elapse).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_s: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after_s: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before_s: Option<f32>,
-    /// Eventually mode (`component_check` only): the predicate must
-    /// hold for all selected entities simultaneously at least once
-    /// within this deadline (seconds). Without it, the predicate must
-    /// hold on every frame where the selector matched anything.
+    /// Eventually mode (`component_check` and `resource_check`): the
+    /// predicate must hold for all selected entities (component) /
+    /// for the resource leaf (resource) at least once within this
+    /// deadline (seconds). Without it, the predicate must hold on
+    /// every frame where the selector matched anything / the
+    /// resource was present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eventually_s: Option<f32>,
 }
@@ -1040,9 +1066,15 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
         }
     }
     for rule in &scenario.invariants {
-        if rule.eventually_s.is_some() && rule.rule != InvariantRule::ComponentCheck {
+        if rule.eventually_s.is_some()
+            && !matches!(
+                rule.rule,
+                InvariantRule::ComponentCheck | InvariantRule::ResourceCheck
+            )
+        {
             return Err(ScenarioError::NotImplemented(format!(
-                "invariant '{}': eventually mode is only supported for component_check",
+                "invariant '{}': eventually mode is only supported for component_check \
+                 and resource_check",
                 rule.name
             )));
         }
@@ -1150,11 +1182,65 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                         )));
                     }
                 }
+                // The resource-rule vocabulary (resource, window_s,
+                // driver_resource/driver_path) extends the reserved
+                // surface: accepted here, an author would believe a
+                // component_check predicates a game-wide resource or
+                // expires after window_s — it silently does neither.
+                if rule.resource.is_some() {
+                    return Err(ScenarioError::Rejected(format!(
+                        "invariant '{}': component_check selects entities via \
+                         target_selector — 'resource' belongs to resource_check / \
+                         stagnant_resource",
+                        rule.name
+                    )));
+                }
+                if rule.window_s.is_some() {
+                    return Err(ScenarioError::Rejected(format!(
+                        "invariant '{}': component_check has no window — its \
+                         predicate must hold every matched frame (or eventually \
+                         within 'eventually_s'); 'window_s' belongs to \
+                         stagnant_resource",
+                        rule.name
+                    )));
+                }
+                if rule.driver_resource.is_some() || rule.driver_path.is_some() {
+                    return Err(ScenarioError::Rejected(format!(
+                        "invariant '{}': component_check does not use \
+                         driver_resource/driver_path — those belong to \
+                         stagnant_resource",
+                        rule.name
+                    )));
+                }
             }
             InvariantRule::NodesInBounds => {
                 if rule.value.is_some() || rule.path.is_some() || rule.check.is_some() {
                     return Err(ScenarioError::Rejected(format!(
                         "invariant '{}': nodes_in_bounds does not use value/path/check",
+                        rule.name
+                    )));
+                }
+                // Same reserved-surface honesty as above: the
+                // resource-rule fields would be silently ignored.
+                if rule.resource.is_some() {
+                    return Err(ScenarioError::Rejected(format!(
+                        "invariant '{}': nodes_in_bounds checks per-entity bounds — \
+                         'resource' belongs to resource_check / stagnant_resource",
+                        rule.name
+                    )));
+                }
+                if rule.window_s.is_some() {
+                    return Err(ScenarioError::Rejected(format!(
+                        "invariant '{}': nodes_in_bounds does not use window_s — \
+                         that belongs to stagnant_resource",
+                        rule.name
+                    )));
+                }
+                if rule.driver_resource.is_some() || rule.driver_path.is_some() {
+                    return Err(ScenarioError::Rejected(format!(
+                        "invariant '{}': nodes_in_bounds does not use \
+                         driver_resource/driver_path — those belong to \
+                         stagnant_resource",
                         rule.name
                     )));
                 }
@@ -1192,6 +1278,218 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                 // dynamically against the game's registry by the
                 // driver-loop recorder; unknown or ambiguous type
                 // names fail loudly as oracle_error at run time).
+            }
+            InvariantRule::ResourceCheck | InvariantRule::StagnantResource => {
+                // Shared shape: a named reflected RESOURCE (never a
+                // target_selector — the resource universe is keyed by
+                // type path, and reusing the component-selector
+                // vocabulary here would invite silent misuse).
+                if let Some(_selector) = rule.target_selector.as_ref() {
+                    return Err(ScenarioError::Rejected(format!(
+                        "invariant '{}': {} does not use target_selector — name the \
+                         resource via the 'resource' field instead (components would \
+                         be matched per entity; resources are game-wide singletons)",
+                        rule.name, rule.rule
+                    )));
+                }
+                let Some(resource) = rule.resource.as_deref() else {
+                    return Err(ScenarioError::Rejected(format!(
+                        "invariant '{}': {} requires 'resource' — the registered \
+                         resource type name (full path, or an unambiguous short path)",
+                        rule.name, rule.rule
+                    )));
+                };
+                if resource.trim().is_empty() {
+                    return Err(ScenarioError::Rejected(format!(
+                        "invariant '{}': 'resource' must be non-empty",
+                        rule.name
+                    )));
+                }
+                if let Some(path) = rule.path.as_deref() {
+                    if path.trim().is_empty() {
+                        return Err(ScenarioError::Rejected(format!(
+                            "invariant '{}': 'path' must be non-empty — a blank \
+                             reflect path resolves the resource root, never a \
+                             numeric leaf",
+                            rule.name
+                        )));
+                    }
+                } else {
+                    return Err(ScenarioError::Rejected(format!(
+                        "invariant '{}': {} requires 'path' — the reflect path to the \
+                         numeric leaf on the resource (e.g. \"score.home\")",
+                        rule.name, rule.rule
+                    )));
+                }
+                if rule.min_x.is_some()
+                    || rule.max_x.is_some()
+                    || rule.min_y.is_some()
+                    || rule.max_y.is_some()
+                    || rule.min_z.is_some()
+                    || rule.max_z.is_some()
+                {
+                    return Err(ScenarioError::Rejected(format!(
+                        "invariant '{}': {} does not use bounds fields — those belong \
+                         to nodes_in_bounds",
+                        rule.name, rule.rule
+                    )));
+                }
+                // window_s: required for stagnant_resource (the
+                // stagnation budget), forbidden elsewhere (it is the
+                // rule's only temporal knob).
+                let expect_window = rule.rule == InvariantRule::StagnantResource;
+                match rule.window_s {
+                    Some(_window_s) if !expect_window => {
+                        return Err(ScenarioError::Rejected(format!(
+                            "invariant '{}': window_s belongs to stagnant_resource only",
+                            rule.name
+                        )));
+                    }
+                    Some(window_s) => {
+                        if !window_s.is_finite() || window_s <= 0.0 {
+                            return Err(ScenarioError::Rejected(format!(
+                                "invariant '{}': window_s must be a finite number > 0 \
+                                 (got {window_s})",
+                                rule.name
+                            )));
+                        }
+                        if window_s > scenario.duration_s {
+                            return Err(ScenarioError::Rejected(format!(
+                                "invariant '{}': window_s ({window_s}s) exceeds the run \
+                                 duration ({duration}s) — the window can never elapse \
+                                 within the run, so the check would be unjudgeable; keep \
+                                 the window at or inside the run window",
+                                rule.name,
+                                duration = scenario.duration_s
+                            )));
+                        }
+                    }
+                    None if expect_window => {
+                        return Err(ScenarioError::Rejected(format!(
+                            "invariant '{}': stagnant_resource requires 'window_s' — the \
+                             maximum number of driver seconds the watched leaf may stay \
+                             constant before the invariant fires",
+                            rule.name
+                        )));
+                    }
+                    None => {}
+                }
+                // resource_check-only: the predicate triple
+                // (path/check/value), same requirements as
+                // component_check. stagnant_resource uses `path` as
+                // the WATCHED leaf and rejects the predicate fields:
+                // its verdict is "changed within window_s?", never a
+                // threshold comparison.
+                match rule.rule {
+                    InvariantRule::ResourceCheck => {
+                        if rule.check.is_none() {
+                            return Err(ScenarioError::Rejected(format!(
+                                "invariant '{}': resource_check requires 'check' \
+                                 (one of lt/le/gt/ge/equals/ne)",
+                                rule.name
+                            )));
+                        }
+                        match rule.value.as_ref() {
+                            Some(serde_json::Value::Number(n)) => {
+                                if n.as_f64().is_none() {
+                                    return Err(ScenarioError::Rejected(format!(
+                                        "invariant '{}': 'value' must be a finite number",
+                                        rule.name
+                                    )));
+                                }
+                            }
+                            _ => {
+                                return Err(ScenarioError::Rejected(format!(
+                                    "invariant '{}': resource_check requires a numeric \
+                                     'value' to compare against",
+                                    rule.name
+                                )));
+                            }
+                        }
+                        if rule.driver_resource.is_some() || rule.driver_path.is_some() {
+                            return Err(ScenarioError::Rejected(format!(
+                                "invariant '{}': resource_check does not use \
+                                 driver_resource/driver_path — those belong to \
+                                 stagnant_resource",
+                                rule.name
+                            )));
+                        }
+                        // Resource-check deadline judgeability: same
+                        // doctrine as component_check's eventually_s.
+                        if let Some(eventually_s) = rule.eventually_s {
+                            if !eventually_s.is_finite() || eventually_s <= 0.0 {
+                                return Err(ScenarioError::Rejected(format!(
+                                    "invariant '{}': eventually_s must be a finite \
+                                     number > 0 (got {eventually_s})",
+                                    rule.name
+                                )));
+                            }
+                            if eventually_s > scenario.duration_s {
+                                return Err(ScenarioError::Rejected(format!(
+                                    "invariant '{}': eventually_s ({eventually_s}s) \
+                                     exceeds the run duration ({duration}s) — the \
+                                     deadline can never elapse within the run, so the \
+                                     check would be unjudgeable; keep the deadline at \
+                                     or inside the run window",
+                                    rule.name,
+                                    duration = scenario.duration_s
+                                )));
+                            }
+                        }
+                    }
+                    InvariantRule::StagnantResource => {
+                        if rule.check.is_some()
+                            || rule.value.is_some()
+                            || rule.eventually_s.is_some()
+                        {
+                            return Err(ScenarioError::Rejected(format!(
+                                "invariant '{}': stagnant_resource does not use \
+                                 check/value/eventually_s — it watches whether the \
+                                 leaf changes within window_s, never a threshold",
+                                rule.name
+                            )));
+                        }
+                        match rule.driver_path.as_deref() {
+                            None => {
+                                return Err(ScenarioError::Rejected(format!(
+                                    "invariant '{}': stagnant_resource requires \
+                                 'driver_path' — the reflect path to the numeric \
+                                 driver leaf (on 'resource' by default, or on \
+                                 'driver_resource') that must strictly advance for \
+                                 the stagnation window to accumulate",
+                                    rule.name
+                                )));
+                            }
+                            Some(dp) if dp.trim().is_empty() => {
+                                return Err(ScenarioError::Rejected(format!(
+                                    "invariant '{}': 'driver_path' must be non-empty — \
+                                     a blank reflect path resolves the resource root, \
+                                     never a numeric leaf",
+                                    rule.name
+                                )));
+                            }
+                            _ => {}
+                        }
+                        if let Some(dr) = rule.driver_resource.as_deref() {
+                            if dr.trim().is_empty() {
+                                return Err(ScenarioError::Rejected(format!(
+                                    "invariant '{}': 'driver_resource' must be non-empty \
+                                     — omit it to default the driver to 'resource'",
+                                    rule.name
+                                )));
+                            }
+                        }
+                        if rule.driver_resource.is_some() && rule.driver_resource == rule.resource {
+                            return Err(ScenarioError::Rejected(format!(
+                                "invariant '{}': driver_resource is redundant when it \
+                                 names the same resource as 'resource' — omit it \
+                                 (the driver leaf defaults to the same resource)",
+                                rule.name
+                            )));
+                        }
+                    }
+                    _ => unreachable!("arm constrained by the match above"),
+                }
             }
         }
     }

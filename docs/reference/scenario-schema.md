@@ -51,6 +51,23 @@ scripted-input families, and every class of load-time rejection.
       "check": "gt",                // lt | le | gt | ge | equals | ne
       "value": number,               // threshold
       "eventually_s": number        // optional: deadline (seconds)
+    },
+    {
+      "name": "string",
+      "rule": "resource_check",      // authored intent on a game-wide resource
+      "resource": "Scoreboard",      // registered reflected resource type
+      "path": "home",                // reflect path to a numeric leaf
+      "check": "ge",                 // lt | le | gt | ge | equals | ne
+      "value": 0,                    // threshold
+      "eventually_s": 3.0            // optional: deadline (seconds)
+    },
+    {
+      "name": "string",
+      "rule": "stagnant_resource",   // rate-form livelock catcher
+      "resource": "Scoreboard",      // watched resource type
+      "driver_resource": "MatchClock", // optional: defaults to resource
+      "driver_path": "elapsed_s",     // driver leaf: must strictly advance
+      "window_s": 1.0                 // max driver advance without a change
     }
   ],
   "oracles": ["string"],          // rejected: oracle selection not implemented
@@ -185,11 +202,21 @@ Two distinct error classes, at different stages:
   immediately with a serde unknown-field error naming the offender.
 - **Known-but-unimplemented fields** parse, then reject at validation
   with `NotImplemented`: `after_s`, `before_s`,
-  `eventually_s` (except on `component_check`, where it is supported),
+  `eventually_s` (except on `component_check` and `resource_check`,
+  where it is supported),
   `oracles` selection,
   `liveness.mode: "off"`. Unknown rule values
   (e.g. `custom`) and unknown bot types (e.g. `pursuit`, `replay`) fail
-  deserialization naming the offender.
+  deserialization naming the offender. Rule-scoped reserved fields
+  reject with `Rejected` naming the invariant: the resource vocabulary
+  (`resource`, `window_s`, `driver_resource`, `driver_path`) is
+  meaningful only on `resource_check` / `stagnant_resource`, and
+  binding any of it to `component_check` or `nodes_in_bounds` fails
+  at load — a silently-ignored `window_s` on a component check
+  would masquerade as a temporal bound that never existed. Blank
+  string fields (`path`, `driver_path`, `driver_resource`,
+  `resource`) reject at load too: a blank reflect path resolves the
+  resource root, never a numeric leaf.
 - **Invalid values** reject with specific `Rejected` errors:
   `tps` outside 1..=1000; `duration_s` non-finite, ≤ 0, or > 3600;
   total ticks (`duration_s × tps`) > 10,000,000; simulated-time frame
@@ -253,3 +280,69 @@ Two distinct error classes, at different stages:
   forward input never accumulates (position oscillates near spawn)
   keeps moving and stays in bounds, so only the authored expectation
   "holding W drives the camera forward" flags it.
+- `resource_check`: the resource sibling of `component_check` — an
+  authored-predicate oracle over a game-wide singleton. Names a
+  registered reflected resource (`resource`: full registered type
+  path, or an unambiguous short path — same resolution rules as
+  `component_check`), reads a numeric leaf via a reflect `path`
+  (e.g. `"coins"`), and compares it against a numeric `value` with
+  `check` (`lt`/`le`/`gt`/`ge`/`equals`/`ne`). Without
+  `eventually_s` the predicate must hold every frame where the
+  resource was present; with `eventually_s: N` it must hold at
+  least once within N seconds of the run start (the deadline must
+  be positive, finite, and ≤ `duration_s`). Resources are the
+  natural home for economy/score invariants: a coin total that goes
+  negative (`check: "ge", value: 0`), a health pool that must
+  eventually recover. `target_selector`, bounds fields, and the
+  driver fields (`driver_resource`/`driver_path`) are rejected for
+  this rule at load. A resource that is registered and reflected but
+  never inserted over the whole run → `vacuous_invariant`; an
+  unknown/ambiguous name, a non-Resource type, or an unresolvable
+  path → `oracle_error` naming the invariant (config errors suppress
+  the vacuity/deadline audit for that invariant, so the report
+  tells one story).
+- `stagnant_resource`: the rate-form livelock oracle. Watches a
+  numeric leaf (`path` on `resource`) and requires it to CHANGE at
+  least once per `window_s`-worth of advance of a declared driver
+  leaf (`driver_path` on `driver_resource`, which defaults to the
+  same resource). The window budget is consumed by the DRIVER
+  LEAF'S OWN advance — never converted through `tps` — so the
+  author's clock domain is authoritative (a match clock counting
+  literal in-game seconds is the canonical driver; `window_s` must
+  be positive, finite, and ≤ `duration_s`). A watched leaf constant
+  for more than `window_s` of driver advance while the driver
+  strictly advances is a livelock finding, reported once per
+  stagnation episode; the value changing later clears the episode
+  and starts a fresh window — an oscillating value is "changing",
+  not stagnating. A non-advancing driver FREEZES the window: time
+  stopped (pause screens, victory states), so stagnation is not
+  provable and a paused clock may legitimately hold a frozen
+  scoreboard; a retreating driver (seek/replay) resets the window.
+  An absent driver (removed mid-run, never inserted) breaks
+  observation continuity: the first fully-observed frame afterwards
+  starts a FRESH window — driver advance across the gap is not
+  witnessable, so it may not be credited toward the budget. Likewise
+  the game removing the WATCHED resource mid-run (teardown, back to
+  menu) reads as absence — a legal runtime event, never an
+  `oracle_error` — and a non-finite sample (NaN or infinite) in
+  EITHER leaf is reported loudly (`oracle_error` naming which leaf,
+  watched or driver): a poisoned sample would otherwise disarm or
+  freeze the window forever (NaN never equals itself), and the
+  frame is treated as an observation gap so driver advance across
+  it is never credited. Later non-finite samples on either leaf are
+  covered by this one finding.
+  This is the rule that catches the bugs every generic oracle is
+  blind to: a match whose scoreboard stays 0-0 the whole game
+  while the match clock ticks — the world churns, the clock runs,
+  motion/liveness/progress oracles all stay green, only the value
+  under judgment stands still. Predicate fields
+  (`check`/`value`), `eventually_s`, `target_selector`, and bounds
+  fields are rejected at load; a redundant
+  `driver_resource` equal to `resource` is rejected as likely
+  authoring confusion (omit it — the driver defaults to the same
+  resource). Honesty doctrine matches `resource_check`:
+  never-resolved resource/leaf → `vacuous_invariant`;
+  a watched leaf that resolved while the DRIVER never did →
+  `vacuous_invariant` naming the driver (stagnation was unprovable,
+  not proven);
+  unknown/ambiguous names → `oracle_error`.

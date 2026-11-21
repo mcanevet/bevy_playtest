@@ -55,6 +55,8 @@ impl Rule {
             Self::LogLevelTampered => "The `log` crate's max level was lowered mid-run while the harness bridge owned the logger (a foreign `set_max_level`): log_error/log_warn findings are under-reported for the affected ticks. A one-time lowering is repaired within one tick by the harness's re-assert; a persistent one means game code re-blinds every tick.",
             Self::NodesInBounds => "Entity positions stay inside declared play-space bounds.",
             Self::ComponentCheck => "An authored-intent check: a numeric field on a reflected component must satisfy the declared comparison across the selected entities (always, or eventually within a deadline).",
+            Self::ResourceCheck => "An authored-intent check: a numeric field on a reflected resource must satisfy the declared comparison (always, or eventually within a deadline) — the resource sibling of component_check: game-wide state like scores, economies and cooldowns.",
+            Self::StagnantResource => "Rate-form liveness: a watched numeric leaf on a reflected resource must change at least once per window of game time while a declared driver leaf strictly advances — constant scoreboards on a running clock are livelocks, not gameplay.",
             Self::FiniteTransforms => "Every entity's Transform holds finite values (no NaN/inf).",
             #[cfg(feature = "render-liveness")]
             Self::RenderLiveness => "A structurally live render path: a sim-active run with something to draw should have at least one camera that is enabled and written out; informational — a structural rule, it sees the main-world camera components, never the rendered pixels (a live camera rendering black passes).",
@@ -101,6 +103,8 @@ declare_rules! {
     NodesInBounds => "nodes_in_bounds",
     FiniteTransforms => "finite_transforms",
     ComponentCheck => "component_check",
+    ResourceCheck => "resource_check",
+    StagnantResource => "stagnant_resource",
 
     // Structural render-path health (informational; render-liveness
     // feature). A visual game with no working camera is soft-broken,
