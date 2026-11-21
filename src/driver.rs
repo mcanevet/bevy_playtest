@@ -2084,6 +2084,15 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     {
         app.init_resource::<crate::invariant_eval::WatchedInvariants>();
     }
+    if scenario.invariants.iter().any(|i| {
+        matches!(
+            i.rule,
+            crate::enums::InvariantRule::ResourceCheck
+                | crate::enums::InvariantRule::StagnantResource
+        )
+    }) {
+        app.init_resource::<crate::invariant_eval::WatchedResources>();
+    }
     if scenario.verify_replay {
         app.insert_resource(crate::replay::ReplaySeries::default());
     }
@@ -2415,6 +2424,10 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             // nodes_in_bounds + with_component: same recorder doctrine
             // (dynamic type resolution needs &World).
             crate::invariant_eval::record_bounds_with_component(app.world_mut(), i);
+            // resource_check + stagnant_resource: same recorder
+            // doctrine (reflected resource access needs &World).
+            crate::invariant_eval::record_resource_checks(app.world_mut(), i);
+            crate::invariant_eval::record_stagnant_resources(app.world_mut(), i);
             // Progress-surface sampling: same driver-loop recorder
             // doctrine as the digest above.
             crate::progress::record_progress_sample(app.world_mut(), i);
@@ -2584,6 +2597,38 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     for entry in crate::invariant_eval::audit_component_checks(
         &scenario.invariants,
         &watched,
+        tps,
+        state.frame,
+    ) {
+        // Dedupe against post-run guards already pushed (the run-level
+        // vacuity guard names every invariant when the whole run was
+        // unobservable; do not report the same (rule, target) twice).
+        if !snap
+            .iter()
+            .any(|v| v.rule == entry.rule && v.target == entry.target)
+        {
+            snap.push(entry);
+        }
+    }
+    if status == PlaytestStatus::Pass
+        && snap
+            .iter()
+            .any(|v| !is_informational(&v.rule, scenario.strict_warnings))
+    {
+        status = PlaytestStatus::Fail;
+    }
+
+    // resource_check / stagnant_resource post-run audit: same full-run-
+    // history judgments as the component_check audit (vacuity with
+    // any-frame observability; eventually_s deadlines judgeable only
+    // at run end; stagnant_resource verdicts complete per episode).
+    let watched_resources = app
+        .world_mut()
+        .remove_resource::<crate::invariant_eval::WatchedResources>()
+        .unwrap_or_default();
+    for entry in crate::invariant_eval::audit_resource_checks(
+        &scenario.invariants,
+        &watched_resources,
         tps,
         state.frame,
     ) {

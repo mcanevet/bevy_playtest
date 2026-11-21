@@ -40,6 +40,7 @@ mod progress_liveness;
 #[cfg(feature = "render-liveness")]
 mod render_liveness;
 mod report_integrity;
+mod resource_check;
 mod scan_purity;
 mod scenario_schema;
 // Drives the capture rig and, for its GPU-positive cases, the real

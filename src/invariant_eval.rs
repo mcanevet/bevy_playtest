@@ -11,6 +11,22 @@
 //!   replay/digest recorders): `&World` cannot be combined with
 //!   `ResMut<RunViolations>` in one system, and no schedule placement
 //!   can guarantee ordering after all of the game's own systems.
+//! - `resource_check` (driver-loop RECORDER): the resource sibling
+//!   of `component_check` — the same predicate vocabulary, applied to
+//!   a numeric leaf of a named reflected RESOURCE. Resources are
+//!   game-wide singletons (scores, economies, clocks), so there is
+//!   exactly one value per frame, never a per-entity sweep.
+//! - `stagnant_resource` (driver-loop RECORDER): the rate-form
+//!   liveness invariant — a watched leaf on a reflected resource must
+//!   change at least once per `window_s` DRIVER-LEAF units while the
+//!   driver leaf strictly advances. A scoreboard frozen on a running
+//!   match clock is a livelock (the onze 0–0 kickoff), and no
+//!   change/state oracle can see it: the world churns, the clock
+//!   advances, only the VALUE under judgment stands still. The window
+//!   is measured in the DRIVER LEAF'S OWN UNITS (a match clock in
+//!   seconds makes `window_s` literal seconds of game time) — the
+//!   harness never converts through `tps`, so FixedUpdate-heavy or
+//!   time-scale-warped games measure honestly in their own clock.
 //!
 //! Vacuity is NOT checked here: like the run-level `vacuous_run` rule,
 //! it must be judged with any-frame observability (a game whose
@@ -314,6 +330,306 @@ fn bounds_of(inv: &Invariant) -> [[f32; 3]; 2] {
     ]
 }
 
+// ---------------------------------------------------------------------------
+// Reflected-resource access (resource_check / stagnant_resource)
+// ---------------------------------------------------------------------------
+
+/// Resolve a reflected resource by registered type name and return a
+/// `&dyn Reflect` view of its current value.
+///
+/// Resources are found via the same Bevy 0.20 unified lookup the
+/// digest uses (`collect_resource_reflections_locked`): the
+/// registration's `ComponentId` → the world's `resource_entities()`
+/// map → the resource entity → `ReflectComponent::reflect` on that
+/// entity. In Bevy 0.20 a reflected resource is DEFINED by its
+/// reflected-component registration (`#[derive(Reflect)]` +
+/// `#[reflect(Resource)]`), so this path is the only truthful one.
+/// Name resolution follows the component rules (full registered path,
+/// or an unambiguous short path) via [`resolve_registration`].
+///
+/// Errors are author-side CONFIG failures reported by the callers as
+/// `oracle_error` — an unevaluable authored check is an author-side
+/// failure, never a game bug. A resource that is properly reflected
+/// but simply ABSENT this frame yields [`ResourceView::Absent`]:
+/// the harness defers judgment to the post-run vacuity audit (same
+/// doctrine as component_check's zero-matched-entities frames).
+#[derive(Debug)]
+enum ResourceView<'a> {
+    /// The resource's current value.
+    Value(&'a dyn bevy_reflect::Reflect),
+    /// Properly reflected as a Resource, but not inserted (yet):
+    /// nothing to observe this frame, not an error.
+    Absent,
+}
+
+fn reflect_resource<'a>(
+    world: &'a World,
+    registry: &TypeRegistry,
+    name: &str,
+) -> Result<ResourceView<'a>, String> {
+    let registration = resolve_registration(registry, name)?;
+    // ReflectResource is only a MARKER in Bevy 0.20 (reading goes
+    // through ReflectComponent on the resource entity), but it is
+    // exactly the datum that separates "the author named a resource
+    // that has not arrived yet" from "the author named something that
+    // is not a resource at all" (e.g. a plain Component).
+    if registration
+        .data::<bevy_ecs::reflect::ReflectResource>()
+        .is_none()
+    {
+        return Err(format!(
+            "type '{name}' is registered but is not a reflected Resource — a resource \
+             needs #[derive(Reflect)] with #[reflect(Resource)] (named types that are \
+             Components or plain data cannot be checked as resources)"
+        ));
+    }
+    let reflect_component = registration
+        .data::<bevy_ecs::reflect::ReflectComponent>()
+        .ok_or_else(|| {
+            format!(
+                "type '{name}' is registered as a Resource but has no ReflectComponent \
+                 data (Bevy 0.20 reads reflected resources through the component \
+                 registration); register the type with app.register_type"
+            )
+        })?;
+    let Some(component_id) = world.components().get_valid_id(registration.type_id()) else {
+        // Registered in the game's TypeRegistry, but never inserted
+        // as a resource in this world (or inserted and removed). A
+        // late-arriving resource is legitimate; the audit decides
+        // vacuity if it NEVER arrives.
+        return Ok(ResourceView::Absent);
+    };
+    let Some(resource_entity) = world.resource_entities().get(component_id) else {
+        return Ok(ResourceView::Absent);
+    };
+    let Ok(entity_ref) = world.get_entity(resource_entity) else {
+        return Ok(ResourceView::Absent);
+    };
+    match reflect_component.reflect(entity_ref) {
+        Some(value) => Ok(ResourceView::Value(value)),
+        // The resource entity exists but no longer holds the
+        // component: the game REMOVED the resource mid-run (a legal
+        // runtime event — level teardown, returning to menu; Bevy
+        // leaves the resource_entities entry behind after
+        // remove_resource). Same doctrine as a late arrival: not an
+        // author error, not a game finding — the post-run audit
+        // decides vacuity if it never comes back.
+        None => Ok(ResourceView::Absent),
+    }
+}
+
+/// Bookkeeping for `resource_check` / `stagnant_resource` invariants
+/// across frames (same doctrine as [`WatchedInvariants`]: post-run
+/// audits need any-frame observability and full-series history).
+#[derive(Resource, Default)]
+pub struct WatchedResources {
+    /// Invariant name → the resource resolved and the leaf was read
+    /// at least once during the run. Otherwise the invariant is
+    /// vacuous — it proved nothing.
+    pub matched: std::collections::HashSet<String>,
+    /// resource_check: name → first frame the predicate held (drives
+    /// `eventually_s` satisfaction; the earliest frame wins).
+    pub first_held_frame: std::collections::HashMap<String, u64>,
+    /// stagnant_resource: name → last observed (watched value, driver
+    /// value) pair. Updated every observed frame; the delta of the
+    /// driver column feeds the window budget.
+    pub last_values: std::collections::HashMap<String, (f64, f64)>,
+    /// stagnant_resource: name → driver-leaf advance accumulated
+    /// since the watched leaf last changed (the budget consumed by
+    /// the current stagnation episode).
+    pub driver_elapsed: std::collections::HashMap<String, f64>,
+    /// stagnant_resource: name → the current stagnation episode has
+    /// already been reported (cleared when the watched leaf changes;
+    /// one finding per episode, never per frame).
+    pub fired: std::collections::HashSet<String>,
+    /// stagnant_resource: name → the watched leaf resolved at least
+    /// once even though a full (watched, driver) pair never did (the
+    /// driver resource never arrived). Distinguishes "driver never
+    /// observed" from "nothing was observed" in the vacuity audit.
+    pub watched_resolved: std::collections::HashSet<String>,
+    /// stagnant_resource: name → the last frame was not fully
+    /// observed (watched and/or driver resource absent). The window
+    /// math cannot span the gap: the next fully-observed frame must
+    /// re-seed (fresh window) instead of folding a cross-gap delta.
+    pub driver_gaps: std::collections::HashSet<String>,
+    /// Invariant name → a resolution/config failure was seen during
+    /// the run (already reported as `oracle_error`); the audit must
+    /// not also emit vacuous/deadline entries for it (N-B/N-C
+    /// doctrine: never blame the game for an author-side problem).
+    pub config_errored: std::collections::HashSet<String>,
+}
+
+/// One frame's outcome for one `resource_check` invariant. Owned data
+/// ends all world borrows before violations are written (same
+/// phase-split doctrine as [`CcOutcome`]).
+struct RcOutcome {
+    /// The resource resolved and the leaf was read.
+    matched: bool,
+    /// Predicate verdict this frame (meaningful only when matched).
+    held: bool,
+    /// Current leaf value (report evidence).
+    value: Option<f64>,
+    /// Resolution/config failure, reported instead of the check.
+    config_error: Option<String>,
+}
+
+/// Driver-loop recorder for `resource_check` invariants: the
+/// authored-predicate tier over reflected resources (always, or
+/// eventually within a deadline) — the resource sibling of
+/// [`record_component_checks`]. Resources are game-wide singletons
+/// (scores, economies, cooldowns), so there is exactly one value per
+/// frame, never a per-entity sweep.
+pub fn record_resource_checks(world: &mut World, frame: u64) {
+    // Clone the invariants out so no world borrow survives the phase
+    // split below (read phase: &World; write phase: resource_scope).
+    let invariants: Vec<Invariant> = world
+        .get_resource::<ScenarioInvariants>()
+        .map(|invariants| {
+            invariants
+                .0
+                .iter()
+                .filter(|i| i.rule == InvariantRule::ResourceCheck)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if invariants.is_empty() {
+        return;
+    }
+    let Some(atr) = world.get_resource::<AppTypeRegistry>().cloned() else {
+        world.resource_scope(|world, mut watched: Mut<WatchedResources>| {
+            let mut violations = world.resource_mut::<RunViolations>();
+            for inv in &invariants {
+                watched.config_errored.insert(inv.name.clone());
+                violations.0.report(
+                    crate::rules::Rule::OracleError.name(),
+                    &inv.name,
+                    "the game has no AppTypeRegistry: reflected resource checks are \
+                     impossible (register types with App::register_type)"
+                        .to_string(),
+                    frame,
+                );
+            }
+        });
+        return;
+    };
+
+    // Read phase: all world access immutable; outcomes are owned.
+    let registry = atr.0.read();
+    let mut outcomes: Vec<RcOutcome> = Vec::with_capacity(invariants.len());
+    for inv in &invariants {
+        outcomes.push(eval_resource_check(world, &registry, inv));
+    }
+    drop(registry);
+
+    // Write phase: fold outcomes into bookkeeping and violations.
+    world.resource_scope(|world, mut watched: Mut<WatchedResources>| {
+        let mut violations = world.resource_mut::<RunViolations>();
+        for (inv, outcome) in invariants.iter().zip(outcomes.iter()) {
+            apply_rc_outcome(inv, outcome, frame, &mut watched, &mut violations);
+        }
+    });
+}
+
+/// Read-phase evaluation of one `resource_check` invariant.
+fn eval_resource_check(world: &World, registry: &TypeRegistry, inv: &Invariant) -> RcOutcome {
+    let err = |why: String| RcOutcome {
+        matched: false,
+        held: true,
+        value: None,
+        config_error: Some(why),
+    };
+    // Validation guarantees these; the Options are defensive only.
+    let Some(name) = inv.resource.as_deref() else {
+        return err("resource_check requires 'resource' (validated)".into());
+    };
+    let Some(path) = inv.path.as_deref() else {
+        return err("resource_check requires 'path' (validated)".into());
+    };
+    let Some(check) = inv.check else {
+        return err("resource_check requires 'check' (validated)".into());
+    };
+    let Some(threshold) = cc_threshold(inv) else {
+        return err("resource_check requires a numeric 'value' (validated)".into());
+    };
+    let resource = match reflect_resource(world, registry, name) {
+        Ok(ResourceView::Value(r)) => r,
+        Ok(ResourceView::Absent) => {
+            // Late-arriving resource: nothing to observe this frame;
+            // the post-run audit decides vacuity with any-frame
+            // observability.
+            return RcOutcome {
+                matched: false,
+                held: true,
+                value: None,
+                config_error: None,
+            };
+        }
+        Err(why) => return err(why),
+    };
+    let value = match reflect_numeric_path(resource, path) {
+        Ok(v) => v,
+        Err(why) => return err(why),
+    };
+    RcOutcome {
+        matched: true,
+        held: check.holds(value, threshold),
+        value: Some(value),
+        config_error: None,
+    }
+}
+
+/// Write-phase fold of one frame's outcome (mirrors `apply_outcome`).
+fn apply_rc_outcome(
+    inv: &Invariant,
+    outcome: &RcOutcome,
+    frame: u64,
+    watched: &mut WatchedResources,
+    violations: &mut RunViolations,
+) {
+    if let Some(why) = &outcome.config_error {
+        watched.config_errored.insert(inv.name.clone());
+        violations.0.report(
+            crate::rules::Rule::OracleError.name(),
+            &inv.name,
+            format!("invariant '{}': {why}", inv.name),
+            frame,
+        );
+        return;
+    }
+    if !outcome.matched {
+        // Not necessarily vacuous: the resource may appear later
+        // (inserted after a loading state). The post-run audit
+        // decides with any-frame observability.
+        return;
+    }
+    watched.matched.insert(inv.name.clone());
+    if outcome.held {
+        // Earliest-holding frame wins: late frames cannot restart the
+        // clock (same doctrine as component_check).
+        watched
+            .first_held_frame
+            .entry(inv.name.clone())
+            .or_insert(frame);
+    } else if inv.eventually_s.is_none() {
+        // Always-mode: report immediately. Eventually-mode misses are
+        // judged only at the deadline (post-run audit).
+        let path = inv.path.as_deref().unwrap_or("?");
+        let check = inv.check.unwrap_or(crate::enums::CheckOp::Le);
+        let threshold = cc_threshold(inv).unwrap_or(f64::NAN);
+        let value = outcome.value.unwrap_or(f64::NAN);
+        violations.0.report(
+            crate::rules::Rule::ResourceCheck.name(),
+            &inv.name,
+            format!(
+                "{}.{path} = {value:.3} violates {check} {threshold:.3}",
+                inv.resource.as_deref().unwrap_or("?"),
+            ),
+            frame,
+        );
+    }
+}
+
 /// Driver-loop recorder for `component_check` invariants. Called
 /// after `app.update()` every frame (see the module docs for why a
 /// recorder and not a scheduled system).
@@ -593,28 +909,27 @@ fn resolve_registration<'a>(
     }
     // Short-path lookup: only when exactly one registered type has
     // this final path segment.
-    let mut shorts = registry
+    let paths: Vec<&bevy_reflect::TypeRegistration> = registry
         .iter()
-        .filter(|r| r.type_info().type_path_table().short_path() == name);
-    match (shorts.next(), shorts.next()) {
-        (Some(one), None) => Ok(one),
-        (None, _) => Err(format!(
+        .filter(|r| r.type_info().type_path_table().short_path() == name)
+        .collect();
+    match paths.as_slice() {
+        [one] => Ok(*one),
+        [] => Err(format!(
             "unknown component '{name}' — not registered in this game's TypeRegistry \
              (components need #[derive(Reflect)] and App::register_type, or the name \
              must be the full registered type path)"
         )),
-        (Some(first), Some(_)) => {
-            let paths: Vec<String> = registry
+        many => {
+            let full: Vec<String> = many
                 .iter()
-                .filter(|r| r.type_info().type_path_table().short_path() == name)
                 .map(|r| r.type_info().type_path_table().path().to_string())
                 .collect();
-            let _ = first;
             Err(format!(
                 "component short name '{name}' is ambiguous among {} registered types — \
                  use the full type path (one of: {})",
-                paths.len(),
-                paths.join(", ")
+                full.len(),
+                full.join(", ")
             ))
         }
     }
@@ -746,6 +1061,491 @@ fn vacuous_entry(name: &str, last_frame: u64) -> crate::state::ViolationEntry {
              the check proves nothing until there is something to check"
         ),
         last_detail: format!("invariant '{name}' matched zero entities"),
+        meta: None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// stagnant_resource: the rate-form livelock invariant
+// ---------------------------------------------------------------------------
+
+/// One frame's outcome for one `stagnant_resource` invariant (same
+/// owned-data phase-split doctrine).
+struct SrOutcome {
+    /// The watched leaf's numeric value (present when both the
+    /// resource and the watched path resolved).
+    watched: Option<f64>,
+    /// The driver leaf's numeric value (present when the driver
+    /// resource+path resolved).
+    driver: Option<f64>,
+    /// First config error this frame, if any.
+    config_error: Option<String>,
+}
+
+/// Driver-loop recorder for `stagnant_resource` invariants: the
+/// rate-form livelock catcher. A watched numeric leaf on a reflected
+/// resource must CHANGE at least once per `window_s`-worth of driver
+/// leaf advance. A scoreboard frozen on a running match clock is a
+/// livelock — the world churns, the clock advances, only the value
+/// under judgment stands still — and no motion/state oracle can see
+/// it.
+///
+/// Window mechanics (all in the DRIVER LEAF'S OWN UNITS — the
+/// harness never converts through `tps`, so the author's clock
+/// domain is authoritative):
+/// - Each observed frame records the (watched, driver) pair. The
+///   driver DELTA since the previous observed frame is added to the
+///   stagnation budget when the watched leaf is UNCHANGED, and
+///   RESET to zero when it changes (budget reset, episode ends).
+/// - When the budget exceeds `window_s`, the violation is reported
+///   ONCE per episode (one finding per stagnation episode, never
+///   per frame — same dedup-by-target discipline as the oracles).
+///   The watched leaf changing later clears the episode and starts
+///   a fresh window.
+/// - A NON-ADVANCING driver freezes the window: time stopped, so
+///   stagnation is no longer provable (pause screens, victory
+///   states) and the check holds its peace until time resumes.
+///   A paused clock may legitimately hold a frozen scoreboard.
+/// - A RETREATING driver (delta < 0) resets the budget: clock
+///   rewinds (seek, replay) rather than time flowing forward.
+pub fn record_stagnant_resources(world: &mut World, frame: u64) {
+    // Clone the invariants out so no world borrow survives the phase
+    // split below.
+    let invariants: Vec<Invariant> = world
+        .get_resource::<ScenarioInvariants>()
+        .map(|invariants| {
+            invariants
+                .0
+                .iter()
+                .filter(|i| i.rule == InvariantRule::StagnantResource)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if invariants.is_empty() {
+        return;
+    }
+    let Some(atr) = world.get_resource::<AppTypeRegistry>().cloned() else {
+        world.resource_scope(|world, mut watched: Mut<WatchedResources>| {
+            let mut violations = world.resource_mut::<RunViolations>();
+            for inv in &invariants {
+                watched.config_errored.insert(inv.name.clone());
+                violations.0.report(
+                    crate::rules::Rule::OracleError.name(),
+                    &inv.name,
+                    "the game has no AppTypeRegistry: reflected resource checks \
+                     are impossible (register types with App::register_type)"
+                        .to_string(),
+                    frame,
+                );
+            }
+        });
+        return;
+    };
+
+    // Read phase: resolve both leaves for every invariant.
+    let registry = atr.0.read();
+    let mut outcomes: Vec<SrOutcome> = Vec::with_capacity(invariants.len());
+    for inv in &invariants {
+        outcomes.push(eval_stagnant_pair(world, &registry, inv));
+    }
+    drop(registry);
+
+    // Write phase: fold into bookkeeping and violations.
+    world.resource_scope(|world, mut watched: Mut<WatchedResources>| {
+        let mut violations = world.resource_mut::<RunViolations>();
+        for (inv, outcome) in invariants.iter().zip(outcomes.iter()) {
+            apply_sr_outcome(inv, outcome, frame, &mut watched, &mut violations);
+        }
+    });
+}
+
+/// Read-phase evaluation of one `stagnant_resource` invariant:
+/// resolve the watched leaf (on `resource`) and the driver leaf (on
+/// `driver_resource`, defaulting to `resource`).
+fn eval_stagnant_pair(world: &World, registry: &TypeRegistry, inv: &Invariant) -> SrOutcome {
+    let err = |watched: Option<f64>, driver: Option<f64>, why: Option<String>| SrOutcome {
+        watched,
+        driver,
+        config_error: why,
+    };
+    // Validation guarantees these; the Options are defensive only.
+    let Some(resource_name) = inv.resource.as_deref() else {
+        return err(
+            None,
+            None,
+            Some("stagnant_resource requires 'resource' (validated)".into()),
+        );
+    };
+    let Some(watched_path) = inv.path.as_deref() else {
+        return err(
+            None,
+            None,
+            Some("stagnant_resource requires 'path' (validated)".into()),
+        );
+    };
+    let Some(driver_path) = inv.driver_path.as_deref() else {
+        return err(
+            None,
+            None,
+            Some("stagnant_resource requires 'driver_path' (validated)".into()),
+        );
+    };
+    let driver_resource_name = inv.driver_resource.as_deref().unwrap_or(resource_name);
+    let resource = match reflect_resource(world, registry, resource_name) {
+        Ok(ResourceView::Value(r)) => r,
+        Ok(ResourceView::Absent) => {
+            // Late-arriving resource: no observation this frame; the
+            // post-run audit decides vacuity.
+            return SrOutcome {
+                watched: None,
+                driver: None,
+                config_error: None,
+            };
+        }
+        Err(why) => return err(None, None, Some(why)),
+    };
+    let watched = match reflect_numeric_path(resource, watched_path) {
+        Ok(v) => v,
+        Err(why) => return err(None, None, Some(why)),
+    };
+    let driver = if driver_resource_name == resource_name {
+        // Same resource: already resolved.
+        match reflect_numeric_path(resource, driver_path) {
+            Ok(v) => v,
+            Err(why) => return err(Some(watched), None, Some(why)),
+        }
+    } else {
+        let driver_resource = match reflect_resource(world, registry, driver_resource_name) {
+            Ok(ResourceView::Value(r)) => r,
+            Ok(ResourceView::Absent) => {
+                // The driver resource is absent this frame (late
+                // arrival, mid-run removal, teardown): the watched
+                // sample CANNOT be judged — no driver means no
+                // provable window math. Return it UNconsumed so the
+                // fold marks a gap; the next fully-observed frame
+                // starts a fresh window instead of folding a
+                // cross-gap delta (finding: gaps corrupted budgets and
+                // hid changes).
+                return SrOutcome {
+                    watched: Some(watched),
+                    driver: None,
+                    config_error: None,
+                };
+            }
+            Err(why) => return err(Some(watched), None, Some(why)),
+        };
+        match reflect_numeric_path(driver_resource, driver_path) {
+            Ok(v) => v,
+            Err(why) => return err(Some(watched), None, Some(why)),
+        }
+    };
+    SrOutcome {
+        watched: Some(watched),
+        driver: Some(driver),
+        config_error: None,
+    }
+}
+
+/// Write-phase fold of one frame's stagnation outcome.
+fn apply_sr_outcome(
+    inv: &Invariant,
+    outcome: &SrOutcome,
+    frame: u64,
+    watched: &mut WatchedResources,
+    violations: &mut RunViolations,
+) {
+    if let Some(why) = &outcome.config_error {
+        watched.config_errored.insert(inv.name.clone());
+        violations.0.report(
+            crate::rules::Rule::OracleError.name(),
+            &inv.name,
+            format!("invariant '{}': {why}", inv.name),
+            frame,
+        );
+        return;
+    }
+    let (Some(watched_value), Some(driver_value)) = (outcome.watched, outcome.driver) else {
+        // Partial observation (driver absent, watched present): mark
+        // a GAP — the stagnation window math cannot span it. Also
+        // record that the watched leaf DID resolve, so the vacuity
+        // audit can distinguish "driver never observed" from
+        // "nothing was observed". Fully absent (watched None): a
+        // possibly late-arriving resource, also a gap.
+        if outcome.watched.is_some() {
+            watched.watched_resolved.insert(inv.name.clone());
+        }
+        watched.driver_gaps.insert(inv.name.clone());
+        return;
+    };
+    watched.matched.insert(inv.name.clone());
+    let window_s = inv.window_s.map(|w| w as f64).unwrap_or(f64::INFINITY);
+    if !watched_value.is_finite() || !driver_value.is_finite() {
+        // A non-finite sample — NaN or infinity in EITHER leaf — is
+        // an arithmetic fault in the game and an unattributable
+        // observation. Letting it through poisons the state machine
+        // from both sides: a NaN watched leaf reads as a "change"
+        // every frame (NaN != NaN) and permanently disarms the
+        // window; a NaN driver seeds a NaN baseline so every later
+        // delta is NaN and the window freezes forever in silence.
+        // Folding across the frame would also credit driver advance
+        // that was never witnessed. Judge it loudly (once) and treat
+        // the frame as a GAP: the next clean sample re-seeds a fresh
+        // window (same doctrine as a resource-absence gap).
+        watched.driver_gaps.insert(inv.name.clone());
+        if !watched.config_errored.contains(&inv.name) {
+            watched.config_errored.insert(inv.name.clone());
+            let (owner, path) = if !watched_value.is_finite() {
+                (
+                    inv.resource.as_deref().unwrap_or("?"),
+                    inv.path.as_deref().unwrap_or("?"),
+                )
+            } else {
+                (
+                    inv.driver_resource
+                        .as_deref()
+                        .unwrap_or_else(|| inv.resource.as_deref().unwrap_or("?")),
+                    inv.driver_path.as_deref().unwrap_or("?"),
+                )
+            };
+            violations.0.report(
+                crate::rules::Rule::OracleError.name(),
+                &inv.name,
+                format!(
+                    "invariant '{}': {} leaf {}.{} went non-finite — the \
+                     stagnation check cannot judge it (investigate the game's \
+                     arithmetic: division by zero, uninitialized accumulator). \
+                     Later non-finite samples on either leaf are covered by \
+                     this one finding.",
+                    inv.name,
+                    if !watched_value.is_finite() {
+                        "watched"
+                    } else {
+                        "driver"
+                    },
+                    owner,
+                    path
+                ),
+                frame,
+            );
+        }
+        return;
+    }
+    if watched.driver_gaps.remove(&inv.name) {
+        // A prior frame was only partially observed: continuity is
+        // broken. Whatever happened during the gap is unknowable —
+        // changes may have been missed, driver advance is not
+        // attributable. Start a FRESH window from this frame instead
+        // of folding a cross-gap delta (a falsely large budget, a
+        // falsely claimed "stayed X for Y" episode).
+        watched
+            .last_values
+            .insert(inv.name.clone(), (watched_value, driver_value));
+        watched.driver_elapsed.remove(&inv.name);
+        watched.fired.remove(&inv.name);
+        return;
+    }
+    match watched.last_values.get_mut(&inv.name) {
+        Some((last_watched, last_driver)) => {
+            let driver_delta = driver_value - *last_driver;
+            if watched_value != *last_watched {
+                // Change observed: episode over, budget reset, a
+                // fresh window begins this frame.
+                *last_watched = watched_value;
+                *last_driver = driver_value;
+                watched.driver_elapsed.remove(&inv.name);
+                watched.fired.remove(&inv.name);
+            } else {
+                match driver_delta.partial_cmp(&0.0) {
+                    Some(std::cmp::Ordering::Greater) => {
+                        // Forward time: consume budget. Overshoot past
+                        // window_s is irrelevant once the finding is
+                        // out — one report per episode.
+                        let budget = watched
+                            .driver_elapsed
+                            .entry(inv.name.clone())
+                            .or_insert(0.0);
+                        *budget += driver_delta;
+                        // Consume the observed driver value: the next
+                        // frame's delta must be measured from HERE.
+                        *last_driver = driver_value;
+                        if *budget > window_s && !watched.fired.contains(&inv.name) {
+                            watched.fired.insert(inv.name.clone());
+                            violations.0.report(
+                                crate::rules::Rule::StagnantResource.name(),
+                                &inv.name,
+                                format!(
+                                    "{}.{path} stayed {value:.3} for {elapsed:.3} of \
+                                     driver advance on {driver_res}.{driver_path}",
+                                    inv.resource.as_deref().unwrap_or("?"),
+                                    path = inv.path.as_deref().unwrap_or("?"),
+                                    value = *last_watched,
+                                    elapsed = *budget,
+                                    driver_res = inv
+                                        .driver_resource
+                                        .as_deref()
+                                        .unwrap_or_else(|| inv.resource.as_deref().unwrap_or("?")),
+                                    driver_path = inv.driver_path.as_deref().unwrap_or("?"),
+                                ),
+                                frame,
+                            );
+                        }
+                    }
+                    Some(std::cmp::Ordering::Less) => {
+                        // Retreating driver (seek/replay): rewind
+                        // implies time is not flowing forward; treat
+                        // as a fresh window.
+                        *last_watched = watched_value;
+                        *last_driver = driver_value;
+                        watched.driver_elapsed.remove(&inv.name);
+                        watched.fired.remove(&inv.name);
+                    }
+                    _ => {
+                        // Non-advancing driver (delta exactly 0):
+                        // time stopped, window frozen. (A non-finite
+                        // sample never reaches the state machine —
+                        // guarded above as an unattributable gap.) A
+                        // paused clock may hold a frozen scoreboard
+                        // (the deliberate distinction from
+                        // frozen-world).
+                    }
+                }
+            }
+        }
+        None => {
+            // First observed frame of the window.
+            watched
+                .last_values
+                .insert(inv.name.clone(), (watched_value, driver_value));
+            watched.driver_elapsed.remove(&inv.name);
+            watched.fired.remove(&inv.name);
+        }
+    }
+}
+
+/// Post-run audit for `resource_check` and `stagnant_resource`
+/// invariants (mirrors [`audit_component_checks`]): full-run-history
+/// judgments the per-frame recorders cannot make.
+///
+/// - An invariant whose resource/leaf never resolved across the
+///   whole run is vacuous (reported as `vacuous_invariant`, per
+///   invariant name).
+/// - A `resource_check` with `eventually_s` that never held within
+///   the deadline: `resource_check` violation, deadline-miss shape
+///   (same message doctrine as component_check).
+///
+/// `stagnant_resource` needs no deadline audit: its verdict is
+/// complete per episode (fired episodes were reported during the
+/// run; episodes still under budget at run end simply never reached
+/// the bar — which is the property holding, not a miss).
+pub fn audit_resource_checks(
+    invariants: &[Invariant],
+    watched: &WatchedResources,
+    tps: u64,
+    last_frame: u64,
+) -> Vec<crate::state::ViolationEntry> {
+    let mut entries = Vec::new();
+    for inv in invariants.iter().filter(|i| {
+        i.rule == InvariantRule::ResourceCheck || i.rule == InvariantRule::StagnantResource
+    }) {
+        // Config errors were already reported during the run; emitting
+        // vacuous/deadline entries on top would blame the game for an
+        // author-side/evaluability problem (N-B/N-C doctrine).
+        if watched.config_errored.contains(&inv.name) {
+            continue;
+        }
+        if !watched.matched.contains(&inv.name) {
+            if inv.rule == InvariantRule::StagnantResource
+                && watched.watched_resolved.contains(&inv.name)
+            {
+                // The watched leaf resolved; the DRIVER never did.
+                // Factually distinct from full vacuity — and
+                // deliberately different in verdict from a PRESENT
+                // but non-advancing driver (freeze semantics: a
+                // paused clock holds the invariant's peace). An
+                // absent driver proves nothing either way, so the
+                // run still fails as unproven, but the message must
+                // name the real culprit.
+                let driver = inv
+                    .driver_resource
+                    .as_deref()
+                    .unwrap_or_else(|| inv.resource.as_deref().unwrap_or("?"));
+                let driver_path = inv.driver_path.as_deref().unwrap_or("?");
+                entries.push(crate::state::ViolationEntry {
+                    rule: crate::rules::Rule::VacuousInvariant.name().to_string(),
+                    target: inv.name.clone(),
+                    first_frame: 0,
+                    last_frame,
+                    count: 1,
+                    detail: format!(
+                        "invariant '{}' watched its leaf resolve but its driver \
+                         {driver}.{driver_path} never did — no window could elapse, \
+                         so stagnation is unprovable (a driver that is PRESENT but \
+                         frozen legitimately holds the invariant's peace; one that \
+                         never arrives proves nothing)",
+                        inv.name
+                    ),
+                    last_detail: format!(
+                        "invariant '{}': driver {driver}.{driver_path} never resolved",
+                        inv.name
+                    ),
+                    meta: None,
+                });
+            } else {
+                entries.push(vacuous_resource_entry(&inv.name, last_frame));
+            }
+            continue;
+        }
+        if inv.rule == InvariantRule::ResourceCheck {
+            if let Some(deadline_s) = inv.eventually_s {
+                let deadline_frames = (deadline_s * tps as f32).ceil() as u64;
+                let held_in_time = watched
+                    .first_held_frame
+                    .get(&inv.name)
+                    .is_some_and(|frame| *frame <= deadline_frames);
+                if !held_in_time {
+                    let held_note = match watched.first_held_frame.get(&inv.name) {
+                        Some(frame) => format!(
+                            "the predicate first held only at frame {frame}, past the \
+                             ~{deadline_frames}-frame deadline"
+                        ),
+                        None => "the predicate never held".to_string(),
+                    };
+                    entries.push(crate::state::ViolationEntry {
+                        rule: crate::rules::Rule::ResourceCheck.name().to_string(),
+                        target: inv.name.clone(),
+                        first_frame: 0,
+                        last_frame: deadline_frames.min(last_frame),
+                        count: 1,
+                        detail: format!(
+                            "authored intent missed its {deadline_s}s deadline \
+                             (~{deadline_frames} frames): {held_note}. The check was \
+                             authored as game intent and the game failed to fulfill it \
+                             in time"
+                        ),
+                        last_detail: format!("{held_note} within the {deadline_s}s deadline"),
+                        meta: None,
+                    });
+                }
+            }
+        }
+    }
+    entries
+}
+
+/// Vacuity entry for a resource invariant whose leaf never resolved.
+fn vacuous_resource_entry(name: &str, last_frame: u64) -> crate::state::ViolationEntry {
+    crate::state::ViolationEntry {
+        rule: crate::rules::Rule::VacuousInvariant.name().to_string(),
+        target: name.to_string(),
+        first_frame: 0,
+        last_frame,
+        count: 1,
+        detail: format!(
+            "invariant '{name}' never resolved its resource/leaf over the whole run; \
+             the check proves nothing until there is something to check"
+        ),
+        last_detail: format!("invariant '{name}' never resolved its resource/leaf"),
         meta: None,
     }
 }
