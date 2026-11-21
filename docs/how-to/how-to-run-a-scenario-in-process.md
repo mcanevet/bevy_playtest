@@ -32,5 +32,5 @@ Two traps to avoid:
   `--test-threads=1`.
 
 The alternative for full-fidelity runs against a real game binary is
-[`battery::run`](../reference/README.md#battery), which drives the
+[`battery::run`](../reference/battery.md#battery), which drives the
 compiled game as a subprocess.

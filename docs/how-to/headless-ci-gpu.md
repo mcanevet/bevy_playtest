@@ -71,15 +71,18 @@ camera ever spawned, every sampled camera disabled, or no active
 camera writing output — every sampled active camera sat on
 `CameraOutputMode::Skip`; a disabled camera's mode is irrelevant —
 see the
-[report reference](../reference/README.md#oracles)). Even on a
-`lavapipe` host, that verdict is STRUCTURAL: it reads the main-world
+[report reference](../reference/report.md) and
+[the oracles list](../reference/README.md#oracles)). Even on a
+`lavapipe` host, that verdict is structural: it reads the main-world
 `Camera` components, never the render world or the GPU. A camera can
 be present, enabled, and writing — and still produce a black image
 (bad clear color, broken pipeline, empty scene); `render_liveness`
-cannot tell. Pixel-level liveness NOW EXISTS: with the
+cannot tell. Pixel-level liveness exists as
+`screen-liveness`: with the
 `screen-liveness` feature the harness captures its own `Camera2d`'s
 frames and hashes the pixels (see
-[screen liveness](../reference/README.md#oracles)) — but note that
+[screen liveness](../reference/README.md#oracles)) — but note
+that
 rule's own honest boundary: it is 2D-only (purely-3D scenes are
 labeled `not_evaluated_3d`, not guessed), informational-only (a
 frozen screen never gates a run), and needs a working GPU readback
@@ -92,6 +95,6 @@ tier as adapter-limited — not as a game finding. bevy_playtest's
 own content-pinning tests self-skip on `DeviceType::Cpu` adapters
 for the same reason.
 
-[`PlaytestDefaultPlugins`]: ../reference/README.md#plugins
+[`PlaytestDefaultPlugins`]: ../reference/battery.md#plugins
 [`initialize_renderer`]: https://github.com/bevyengine/bevy/blob/v0.20.1/crates/bevy_render/src/renderer/mod.rs
 [linux_dependencies.md]: https://github.com/bevyengine/bevy/blob/latest/docs/linux_dependencies.md

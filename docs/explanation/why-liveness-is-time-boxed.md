@@ -24,7 +24,7 @@ exist. The machine-readable verdict rides in `_meta.stepping`
 legacy "soft-lock?" wording and the oracle attaches no `_meta` at
 all — the oracle cannot know, and says so honestly.
 
-A flat digest does NOT rewrite the detail: the digest sees Transforms,
+A flat digest does not rewrite the detail: the digest sees Transforms,
 UI transforms, spawns/despawns and reflected resources, but is blind to
 e.g. sprite-color or material mutations, so "digest flat too" only
 corroborates (`_meta.stepping: false`) — it cannot prove a deadlock.

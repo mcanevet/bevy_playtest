@@ -15,9 +15,9 @@ deterministic.
    (`finite_transforms`, `nodes_in_bounds`, `frozen_world`…), a target
    (whose meaning depends on the rule — the invariant `name`, the entity
    id, or `"world"` for frozen-world; see the
-   [reference](../reference/README.md#report)), and the first/last frame it
+   [report reference](../reference/report.md)), and the first/last frame it
    was observed — start the debugger at `first_frame`, not at the end.
-4. **If the failure does NOT reproduce with the same seed** — suspect hidden
+4. **If the failure does not reproduce with the same seed** — suspect hidden
    nondeterminism in the game, not harness flakiness. Turn on
    `"verify_replay": true` to get the first divergent frame.
 5. **Pin it once understood.** If the finding is a known issue you're

@@ -20,10 +20,10 @@ only for test builds:
 
 ```toml
 [dependencies]
-bevy_playtest = { version = "0.8", optional = true }
+bevy_playtest = { version = "0.13", optional = true }
 
 [dev-dependencies]
-# Self-dependency: activates OUR OWN `playtest` feature only for
+# Self-dependency: activates our own `playtest` feature only for
 # test builds. Normal & release builds stay clean.
 my_game = { path = ".", features = ["playtest"] }
 
@@ -63,7 +63,7 @@ fn playtest_plugins() -> () {}
 
 then use `.add_plugins(default_plugins().set(...))` where you had
 `DefaultPlugins`, and `.add_plugins(playtest_plugins())` before
-`.run()` (AFTER the group — the runner swap is last-set-wins).
+`.run()` (after the group — the runner swap is last-set-wins).
 
 `PlaytestDefaultPlugins` is a pass-through to `DefaultPlugins` normally,
 and swaps to a headless runner when `BEVY_PLAYTEST_SCENARIO` is set.
@@ -136,7 +136,7 @@ One qualification: the seed controls the bot's choices, not game-side
 randomness or wall-clock reads, so an unchanged game can still produce
 a different verdict. The battery leaves replay verification off; to
 prove determinism itself, see
-[the verification-depth section of the README](../../README.md#verification-depth-what-is-proven-vs-what-is-asserted).
+[prove a scenario is deterministic](../how-to/how-to-prove-a-scenario-is-deterministic.md).
 
 The chaos bot is seeded internally, so declaring nothing is sufficient
 for reproducible bot behavior. When you need a specific seed, you can
@@ -178,7 +178,7 @@ fn menu_scenario() {
 To opt out of mouse clicks, add `"mouse_buttons": []` to the scenario's
 `bot.raw_surface`. To opt out of chaos keys entirely, add
 `"keys": []` (mouse-only chaos). See the
-[scenario reference](../reference/README.md) for the full JSON schema,
+[scenario reference](../reference/scenario-schema.md) for the full JSON schema,
 and [script keys instead of chaos](../how-to/how-to-script-keys-instead-of-chaos.md)
 for scripted input.
 
