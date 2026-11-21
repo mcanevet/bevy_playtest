@@ -1,15 +1,15 @@
 # Thetawave fixture (real-world port)
 
-Reference for `fixtures/thetawave/`: a REAL third-party game —
+Reference for `fixtures/thetawave/`: a real third-party game —
 Theta Wave — vendored into the fixture battery to prove the
-declared-tier discovery machinery (Leafwing reader, intent-tap,
+declared-tier machinery (Leafwing reader, intent-tap,
 reconciliation) against code nobody involved in bevy_playtest wrote.
 Where the [known-answer fixture](known-answer-fixture.md) checks the
 instrument against hand-derived truth, this fixture checks it against
 reality: RON-loaded `InputMap`s, multiple `Actionlike` types, real
 gameplay actions, and zero knowledge of the harness.
 
-It is deliberately NOT a known-answer oracle: there is no ground-truth
+It is deliberately not a known-answer oracle: there is no ground-truth
 file, no truth rows, and no accuracy claim. The battery proves the
 game boots headless under takeover and reacts to a real declared
 action; the demo-level assertions prove the reader enumerates the

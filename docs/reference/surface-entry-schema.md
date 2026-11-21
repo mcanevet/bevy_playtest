@@ -1,17 +1,18 @@
-# SurfaceEntry schema (discovery IR)
+# SurfaceEntry schema (report IR)
 
 The canonical intermediate representation for input-surface
-discovery results: `bevy_playtest::discovery::surface::SurfaceEntry`,
+observations: `bevy_playtest::discovery::surface::SurfaceEntry`,
 plus the provenance grades, context witnesses, evidence kinds and
-finding vocabulary that surround it. Written against the code as of
-this slice: the schema is **forward-complete** (grades and witnesses
-exist that no producer emits yet — D1+ producers are filling them in),
-so every name below is contract, none of it provisional.
+finding vocabulary that surround it. The schema is
+**forward-complete**: grades and witnesses exist that no producer
+emits yet, so every name below is contract, none of it provisional.
+Today the sole producer is the Leafwing reconcile (reported as
+`lw_reconciled` on `lw-reader` runs), which emits `declared` /
+`manager_pipeline_ok` grades in a `Boot` context; the other grades
+and evidence kinds await their producers.
 
-The two-sentence honest-claim discipline this page follows: a datum
-says what was observed and nothing more; silence about a claim is
-never an upgrade of it. Every grade below carries exactly what it
-asserts and what it never asserts.
+The honest-claim rule for this page: a datum says what was observed
+and nothing more; silence about a claim is never an upgrade of it.
 
 ## SurfaceEntry
 
@@ -19,7 +20,7 @@ One input, one context, one observed effect:
 
 ```rust
 pub struct SurfaceEntry {
-    pub input: String,                       // normalized name (same space as KeyFinding.key)
+    pub input: String,                       // normalized name (the scenario schema's key spelling)
     pub grade: ProvenanceGrade,
     pub action_label: Option<String>,         // declared intent name, None for raw discoveries
     pub context: ContextWitness,
@@ -31,27 +32,14 @@ pub struct SurfaceEntry {
 }
 ```
 
-Entries live on `DiscoveredSurface.entries` — additive and
-default-empty. The legacy `keys` / `mouse_buttons` lists are untouched
-and remain the D0 wire format; `DiscoveredSurface::to_entries()`
-projects them mechanically (effective findings become
-`ProbeVerified` entries in an unfingerprinted `Boot` context).
-The projection is lossy by design — entries are richer; there is no
-reverse mapping. Negatives (inert, inferred-no-effect keys) stay
-legacy-only *in the D0 projection*, and per-key probe frames are not
-retained by the legacy shape — so every projected entry carries a
-`notes` caveat saying its `ProbeRun` evidence frame is the surface's
-first probe point, not this input's. The disclosure travels with the
-artifact.
-
-The D1-c sweep draft extends this: a probed-and-inert candidate ALSO
-becomes an entry, because a drafted surface that omits inert keys
-hides the residue problem and makes curation impossible. Such an
-entry keeps `grade: probe_verified` (the probe method vouched for
-the observation) but says so honestly: `effect_signature: null`,
-evidence `probe_run_inert` (ran to completion, no divergence), and a
-note "probed inert under Exact controls". Nothing was verified live;
-the entry records a ruled-out candidate, not a binding.
+Entries live on `ReconciledLw.entries` — inside the report's
+`lw_reconciled` field, additive and default-absent. The reconcile
+builds one entry per declared binding: grade `declared`
+(`Evidence::DeclaredIn` only) or `manager_pipeline_ok` (the tap
+corroborated), `context: Boot`, `effect_signature: None` (no effect
+signature observation exists yet). Negatives — ruled-out candidates —
+are not produced today: the `ProbeRun`/`ProbeRunInert` evidence kinds
+that would back them await their producer.
 
 ### `mutable` and `profile`
 
@@ -67,15 +55,14 @@ the entry records a ruled-out candidate, not a binding.
 
 ## ProvenanceGrade
 
-How the entry earned its place. The wire names are the roadmap
-vocabulary, snake_case:
+How the entry earned its place. Wire names are snake_case:
 
 | Grade | Asserts | Never asserts |
 |---|---|---|
-| `declared` | the game code declares this binding (Leafwing `InputMap`, bespoke resource) | that the binding is live — declared + refuted is the `declared_but_dead` alarm |
-| `source_cited` | a file:line source location references this input | that the referenced code runs (run conditions, dead code) |
-| `probe_verified` | pressing the input changed game state at the probed point, under the probe build profile and context; an inert entry with `probe_run_inert` evidence asserts the opposite fact — the probe RAN and observed no divergence, i.e. the input was ruled out at that context, never that it is dead elsewhere | *what* changed (hash-only MVP), or persistence in other contexts |
-| `suspect_shape` | nothing mechanical — a shape-detected candidate, not yet scan-linked | anything: reportable, **never alarm-grade** |
+| `declared` | the game code declares this binding (Leafwing `InputMap`, bespoke resource) — what the reconcile emits when no tap corroborates the wiring | that the binding is live — declared + refuted is the `declared_but_dead` alarm |
+| `source_cited` | a file:line source location references this input | that the referenced code runs (run conditions, dead code) — no producer emits it yet |
+| `probe_verified` | pressing the input changed game state at the probed point, under the probe build profile and context; an inert entry with `probe_run_inert` evidence asserts the opposite fact — the probe RAN and observed no divergence, i.e. the input was ruled out at that context, never that it is dead elsewhere | *what* changed (hash-only MVP), or persistence in other contexts — no producer emits it yet |
+| `suspect_shape` | nothing mechanical — a shape-detected candidate, not yet scan-linked | anything: reportable, **never alarm-grade** — no producer emits it yet |
 | `llm_claimed` | nothing about the game — a model's claim, grounded in `SourceRef` citations a mechanical checker verifies | authority of any kind; no producer exists (opt-in prep step, deferred) |
 | `manager_pipeline_ok` | the driver's input reached the input manager and matched a binding (**wiring** liveness) | game liveness: a wiring-forgotten binding fires the action with zero world effect |
 
@@ -89,17 +76,17 @@ truthful" — that is the mutation harness's job.
 
 ## ContextWitness
 
-POSITIVE-ONLY witness predicates (R3-C): a witness records when an
-entry **is** live, and never encodes "dead when not". Focus present
-does not imply gameplay-dead when absent — radial menus, gameplay
-without focusable entities, one global `InputFocus`.
+A witness records when an entry **is** live, and never encodes
+"dead when not" — focus present does not imply gameplay-dead when
+absent (radial menus, gameplay without focusable entities, one
+global `InputFocus`).
 
 | Witness | Meaning |
 |---|---|
-| `Boot` | observed at boot context, **without** a recorded fingerprint — genuinely uncharacterized beyond "ordinary startup state" (legacy shape; what `to_entries` emits) |
-| `Focused { widget_kind }` | live when a focusable entity of `widget_kind` is focused (bevy_input_focus witness channel) |
-| `Fingerprinted { snapshot }` | observed under a described state: (resource → rendered value) pairs captured **at probe time**, serialized as a plain JSON map (sorted). "Boot context" without a fingerprint is a euphemism; this is the requirement it satisfies |
-| `Scanned { condition_hint }` | source-scan-linked run-condition description (D2+ producer; forward-complete now) |
+| `Boot` | observed at boot context, **without** a recorded fingerprint — genuinely uncharacterized beyond "ordinary startup state" (what the Leafwing reconcile emits) |
+| `Focused { widget_kind }` | live when a focusable entity of `widget_kind` is focused (bevy_input_focus witness channel) — no producer emits it yet |
+| `Fingerprinted { snapshot }` | observed under a described state: (resource → rendered value) pairs captured **at probe time**, serialized as a plain JSON map (sorted) — what a bare `Boot` witness cannot honestly claim; no producer emits it yet |
+| `Scanned { condition_hint }` | source-scan-linked run-condition description — no producer emits it yet |
 
 `ContextWitness::describe()` renders a non-empty human string for
 reports — which context, or "uncharacterized", never silence.
@@ -107,38 +94,34 @@ reports — which context, or "uncharacterized", never silence.
 ## Evidence
 
 Structured and extensible; an entry's evidence list is how it earned
-its grade:
+its grade. Produced today: `DeclaredIn` and `TapObserved` (the
+Leafwing reconcile). The others await their producers:
 
-- `ProbeRun { frame, effect }` — differential divergence against the
-  control baseline (frame is absolute, matching `probed_at`).
+- `ProbeRun { frame, effect }` — differential divergence against a
+  control baseline (frame is absolute).
 - `ProbeRunInert { frame }` — the probe ran to completion at `frame`
-  and observed NO divergence: evidence for a negative. The inert
-  counterpart of `ProbeRun` (D1-c sweep); backs inert entries'
-  `probe_verified` grade so ruled-out candidates can appear as
-  entries without ever claiming liveness.
+  and observed no divergence: evidence for a negative. The inert
+  counterpart of `ProbeRun`; backs inert entries' `probe_verified`
+  grade so ruled-out candidates can appear as entries without ever
+  claiming liveness.
 - `TapObserved { stage }` — intent-tap observed at a named pipeline
-  stage. Example: the Leafwing reader's post-update tap records
+  stage. The Leafwing reader's post-update tap records
   `TapObserved { stage: "manager_pipeline" }` on a binding whose
   driver press fired the action — **wiring** liveness, never game
-  liveness (see `manager_pipeline_ok` above). Reconcile (every
-  `lw-reader` run, reported as `lw_reconciled`): declared inputs
-  upgrade to `manager_pipeline_ok` when the tap corroborates, while
-  proven-dead wiring (disabled-without-a-firing, or
-  pressed-never-fired) alarms
-  `declared_but_dead` and nothing else ever does.
-- `SourceRef { file, line, enclosing }` — the mechanically-checkable
-  citation format. Reserved for the source-derived tier
+  liveness (see `manager_pipeline_ok` above). This is the evidence
+  behind every `manager_pipeline_ok` grade.
+- `SourceRef { file, line, enclosing }` — a mechanically-checkable
+  citation. Reserved for the source-derived tier
   (`discovery::source_scan`): the scan already collects its hits in
-  exactly this shape (file, line, enclosing item), but no producer
-  emits `SourceRef`-backed entries yet — the planned wiring turns
-  scan hits into schema entries.
+  this shape for the chaos-key layering, but no producer emits
+  `SourceRef`-backed entries yet.
 - `DeclaredIn { source_kind }` — e.g. `"leafwing_input_map"`.
 
 ## Discovery findings
 
-The disagreement channel between methods — findings annotate the
-surface (`DiscoveredSurface.findings`, additive, skip-serialized
-when empty), they never mutate the entries they discuss:
+The disagreement channel between methods — findings annotate
+(`ReconciledLw.findings`, inside `lw_reconciled`), they never mutate
+the entries they discuss:
 
 - `declared_but_dead` — **alarm grade**: declared, no live evidence at
   the characterized context. The one alarm-grade finding; the
@@ -153,7 +136,9 @@ when empty), they never mutate the entries they discuss:
 - `context_unverified` — declared and tap-ok but never verified
   outside `Boot`: the honest coverage grade for context-gated
   actions (a context-gated action cannot false-alarm frozen-world,
-  and the report must not silently call it `verified`).
+  and the report must not silently call it `verified`). Emitted only
+  by `reconcile` when independent liveness evidence exists; the
+  per-run path (`reconcile_without_liveness`) never emits it.
 
 Each finding is `{ kind, input, detail }` — the structured fact is
 the kind + the entry it discusses; `detail` is the human one-liner.
