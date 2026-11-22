@@ -465,14 +465,45 @@ fn run_lint(
     // nothing to probe). Findings append to the same aggregate list:
     // the author fixes stage 1 first when both stages fire, exactly
     // like fixing the first error before seeing the second today.
-    if findings.is_empty() {
-        findings.extend(lint_registry_probe(app, scenario));
-        for err in &findings {
-            eprintln!("bevy_playtest: {err}");
+    //
+    // The probe runs REAL game schedules (plugin finishing plus one
+    // warm-up frame) and shares the run's crash contract exactly: a
+    // game that panics at boot must not turn a lint invocation into
+    // an uncompilable-looking exit-101 crash with no report. The
+    // panic hook, run guard, and catch_unwind mirror run_scenario's
+    // doctrine — the game crashed, the config was never linted —
+    // and the report says so in lint's schema (exit CRASH).
+    let probe_crashed = if findings.is_empty() && lint_probe_wanted(scenario) {
+        crate::driver::install_panic_hook();
+        let guard = crate::sinks::try_acquire_run().ok();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            lint_registry_probe(app, scenario)
+        }));
+        drop(guard);
+        match result {
+            Ok(found) => {
+                findings.extend(found);
+                false
+            }
+            Err(_) => true,
         }
+    } else {
+        false
+    };
+    for err in &findings {
+        eprintln!("bevy_playtest: {err}");
+    }
+    if probe_crashed {
+        eprintln!(
+            "bevy_playtest: the game panicked during the lint warm-up frame — \
+             this is a game boot crash, not a lint finding; the scenario was \
+             not probed"
+        );
     }
     let mut report = crate::state::PlaytestReport::crashed_empty();
-    report.status = if findings.is_empty() {
+    report.status = if probe_crashed {
+        crate::enums::PlaytestStatus::Crash
+    } else if findings.is_empty() {
         crate::enums::PlaytestStatus::Pass
     } else {
         crate::enums::PlaytestStatus::Fail
@@ -505,6 +536,25 @@ fn run_lint(
     std::process::exit(code)
 }
 
+/// Whether the scenario has any invariant the type-registry probe
+/// could ever find a DEFINITE error for. When it does not, the
+/// probe's cost and risk (plugin finishing, one real warm-up frame —
+/// asset loads, saves, anything a game does at Startup) would buy
+/// nothing: the probe cannot produce a finding. Skipping the boot
+/// keeps linting a probe-free scenario side-effect-free.
+fn lint_probe_wanted(scenario: &crate::scenario::Scenario) -> bool {
+    use crate::enums::InvariantRule;
+    scenario.invariants.iter().any(|inv| {
+        matches!(
+            inv.rule,
+            InvariantRule::ComponentCheck
+                | InvariantRule::NodesInBounds
+                | InvariantRule::ResourceCheck
+                | InvariantRule::StagnantResource
+        )
+    })
+}
+
 /// Stage 2: the type-registry probe. Booted-App checks stage 1 cannot
 /// do — names and reflect paths resolve against the game's ACTUAL
 /// TypeRegistry, not just the config's internal coherence.
@@ -531,10 +581,11 @@ fn run_lint(
 ///   about it rather than guessing (a "cannot confirm" line for every
 ///   unprovable thing would bury the definite errors in noise).
 ///
-/// Every stage-2 finding mirrors the message the normal run's oracle
-/// would emit at frame 0 — the probe reuses `invariant_eval`'s
-/// resolution machinery (`resolve_registration`, `reflect_resource`,
-/// `reflect_numeric_path`) so the two cannot drift.
+/// Every stage-2 finding mirrors the run's resolution machinery —
+/// the probe reuses `invariant_eval`'s builders
+/// (`resolve_registration`, `resolve_entity_numeric_path`,
+/// `reflect_resource`, `reflect_numeric_path`) so the wording
+/// cannot drift between lint and run.
 fn lint_registry_probe(
     app: &mut App,
     scenario: &crate::scenario::Scenario,
@@ -561,13 +612,25 @@ fn lint_registry_probe(
         .cloned()
     else {
         // No registry at all: the same definite infra error the run's
-        // oracle would raise at frame 0 — front-load it. Game-wide,
-        // not per-invariant (nothing reflected can ever resolve).
-        findings.push(ScenarioError::Rejected(
-            "the game has no AppTypeRegistry: reflected invariant checks are \
-             impossible (register types with App::register_type)"
-                .to_string(),
-        ));
+        // oracle raises at frame 0 — front-load it. One finding per
+        // probeable invariant, each naming its own tier, mirroring
+        // the run's per-invariant oracle_error wording exactly (the
+        // shared builder guarantees the match).
+        for inv in &scenario.invariants {
+            use crate::enums::InvariantRule;
+            let tier = match inv.rule {
+                InvariantRule::NodesInBounds => "with_component bounds checks",
+                InvariantRule::ComponentCheck => "reflected component checks",
+                InvariantRule::ResourceCheck | InvariantRule::StagnantResource => {
+                    "reflected resource checks"
+                }
+            };
+            findings.push(ScenarioError::Rejected(format!(
+                "invariant '{}': {}",
+                inv.name,
+                crate::invariant_eval::no_atr_message(tier)
+            )));
+        }
         return findings;
     };
     let registry = atr.read();
@@ -598,7 +661,9 @@ fn lint_registry_probe(
                 {
                     // Only the TYPE needs to resolve for bounds
                     // recording; there is no numeric path to confirm.
-                    if let Err(why) = crate::invariant_eval::resolve_registration(&registry, name) {
+                    if let Err(why) =
+                        crate::invariant_eval::resolve_registration(&registry, name)
+                    {
                         findings.push(ScenarioError::Rejected(inv_name(&why)));
                     }
                 }
@@ -662,41 +727,28 @@ fn probe_component_check(
 ) -> Vec<crate::scenario::ScenarioError> {
     use crate::scenario::ScenarioError;
     let mut findings = Vec::new();
-    let registration = match crate::invariant_eval::resolve_registration(registry, name) {
-        Err(why) => {
-            findings.push(ScenarioError::Rejected(inv_name(&why)));
-            return findings;
-        }
-        Ok(r) => r,
-    };
+    let registration =
+        match crate::invariant_eval::resolve_registration(registry, name) {
+            Err(why) => {
+                findings.push(ScenarioError::Rejected(inv_name(&why)));
+                return findings;
+            }
+            Ok(r) => r,
+        };
     let Some(reflect_component) = registration.data::<bevy_ecs::reflect::ReflectComponent>() else {
-        findings.push(ScenarioError::Rejected(inv_name(&format!(
-            "type '{name}' is registered in the game's TypeRegistry but is not a \
-             reflected component (missing ReflectComponent data — is it a Resource?)"
-        ))));
+        findings.push(ScenarioError::Rejected(inv_name(
+            &crate::invariant_eval::not_a_reflected_component_message(name),
+        )));
         return findings;
     };
     for entity_ref in world.iter_entities() {
         let Some(reflect) = reflect_component.reflect(entity_ref) else {
             continue;
         };
-        // Selector first, Transform fallback — eval_one's doctrine.
-        let value = crate::invariant_eval::reflect_numeric_path(reflect, path, "component")
-            .or_else(|sel_err| {
-                entity_ref
-                    .get::<bevy_transform::prelude::Transform>()
-                    .map(|t| t as &dyn bevy_reflect::Reflect)
-                    .ok_or_else(|| format!("entity {:?} has no Transform", entity_ref.id()))
-                    .and_then(|tf| {
-                        crate::invariant_eval::reflect_numeric_path(tf, path, "component")
-                    })
-                    .map_err(|tf_err| {
-                        format!(
-                            "path '{path}' resolves on neither the selector component \
-                             ({sel_err}) nor the entity's Transform ({tf_err})"
-                        )
-                    })
-            });
+        // Selector first, Transform fallback — the shared resolver
+        // guarantees the message matches eval_one's word-for-word,
+        // including the entity annotation.
+        let value = crate::invariant_eval::resolve_entity_numeric_path(reflect, &entity_ref, path);
         if let Err(why) = value {
             // One definite instance-level failure is enough: the run
             // hits it on the first matched frame.
@@ -712,8 +764,9 @@ pub const SMOKE_LITERAL: &str = "smoke";
 
 /// `harness_mode` marker for lint-mode reports. Distinct from
 /// `"takeover"` (a real driven run) and `"in_process"` (library API):
-/// a lint report is a config-coherence artifact about a scenario
-/// that never executed a frame.
+/// a lint report is a config-coherence artifact about a scenario —
+/// a crash-marked lint report means the GAME crashed at boot, not
+/// that the scenario was executed.
 pub const HARNESS_MODE_LINT: &str = "lint";
 
 /// Case-sensitive magic literal for the built-in default battery:

@@ -149,10 +149,14 @@ know:
   caught (typo'd resource/component names, numeric paths that
   cannot resolve on the booted App). The probe is silent about
   what it cannot confirm (a component with no instances yet);
-  its findings mirror the message the run's oracle would emit at
-  its first matched frame, so lint clean-ness transfers.
+  its findings mirror the run's resolution machinery and message
+  builders (`resolve_registration`, `reflect_resource`,
+  `reflect_numeric_path`), so lint clean-ness transfers: a
+  scenario that lints clean stays clean for the resolution errors
+  the probe checks.
 - `status: "fail"` in a lint report says the *config* is incoherent.
   It is never a statement about the game: lint passes mean "the
   scenario is coherent", not "the game will pass". Exit codes
-  follow the normal contract (0 coherent / 1 findings / 3
-  infrastructure failure).
+  follow the normal contract (0 coherent / 1 findings / 2 the game
+  panicked during the probe's warm-up frame — a boot crash, not a
+  lint verdict / 3 infrastructure failure).

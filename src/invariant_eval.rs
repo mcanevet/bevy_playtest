@@ -270,8 +270,7 @@ pub fn record_bounds_with_component(world: &mut World, frame: u64) {
             let mut violations = world.resource_mut::<RunViolations>();
             for inv in &invariants {
                 watched.config_errored.insert(inv.name.clone());
-                let why = "the game has no AppTypeRegistry: with_component bounds \
-                     checks are impossible (register types with App::register_type)";
+                let why = &no_atr_message("with_component bounds checks");
                 report_config_error_once(
                     &mut violations.0,
                     &mut watched.oracle_error_seen,
@@ -593,8 +592,7 @@ pub fn record_resource_checks(world: &mut World, frame: u64) {
             let mut violations = world.resource_mut::<RunViolations>();
             for inv in &invariants {
                 watched.config_errored.insert(inv.name.clone());
-                let why = "the game has no AppTypeRegistry: reflected resource checks are \
-                     impossible (register types with App::register_type)";
+                let why = &no_atr_message("reflected resource checks");
                 report_config_error_once(
                     &mut violations.0,
                     &mut watched.oracle_error_seen,
@@ -777,8 +775,7 @@ pub fn record_component_checks(world: &mut World, frame: u64) {
             let mut violations = world.resource_mut::<RunViolations>();
             for inv in &cc_invariants {
                 watched.config_errored.insert(inv.name.clone());
-                let why = "the game has no AppTypeRegistry: reflected component checks are \
-                     impossible (register types with App::register_type)";
+                let why = &no_atr_message("reflected component checks");
                 report_config_error_once(
                     &mut violations.0,
                     &mut watched.oracle_error_seen,
@@ -930,10 +927,7 @@ fn eval_one(world: &World, registry: &TypeRegistry, inv: &Invariant) -> CcOutcom
             matched: 0,
             all_held: true,
             example_bad: None,
-            config_error: Some(format!(
-                "type '{name}' is registered in the game's TypeRegistry but is not a \
-                 reflected component (missing ReflectComponent data — is it a Resource?)"
-            )),
+            config_error: Some(not_a_reflected_component_message(name)),
         };
     };
 
@@ -956,22 +950,7 @@ fn eval_one(world: &World, registry: &TypeRegistry, inv: &Invariant) -> CcOutcom
         // `Camera3d` select while the check reads `translation.z`.
         // The error names BOTH attempted roots so the author can see
         // which one (or both) failed and on WHICH entity.
-        let value = reflect_numeric_path(reflect, path, "component").or_else(|selector_err| {
-            let tf_result = entity_ref
-                .get::<Transform>()
-                .map(|t| t as &dyn bevy_reflect::Reflect)
-                .ok_or_else(|| format!("entity {:?} has no Transform", entity_ref.id()))
-                .and_then(|tf| reflect_numeric_path(tf, path, "component"));
-            match tf_result {
-                Err(tf_err) => Err(format!(
-                    "path '{path}' resolves on neither the selector component \
-                     ({selector_err}) nor the entity's Transform ({tf_err}) \
-                     [entity {:?}]",
-                    entity_ref.id()
-                )),
-                ok => ok,
-            }
-        });
+        let value = resolve_entity_numeric_path(reflect, &entity_ref, path);
         match value {
             Ok(current) => {
                 if !check.holds(current, threshold) {
@@ -1047,22 +1026,37 @@ pub(crate) fn resolve_registration<'a>(
             // only, so "Time" is technically "unknown" (not
             // "ambiguous") even though Time<()>, Time<Real>,
             // Time<Virtual> and Time<Fixed> are all sitting right
-            // there. Listing the substring-matching short paths turns
-            // that unhelpful-but-correct "unknown" into an actionable
-            // next step without changing resolution semantics at all
-            // (short names that DO match exactly and uniquely keep
-            // resolving as before).
-            let similar: Vec<String> = registry
+            // there. Typos ("Kils" for "Kills", "Playre" for
+            // "Player") get a Levenshtein ≤ 2 suggestion — the same
+            // capped-distance helper the config validator uses for
+            // key/button names — with a substring fallback for
+            // prefixes and truncations ("Kill" for "Kills"). Purely
+            // advisory: resolution semantics never change.
+            let shorts: Vec<String> = registry
                 .iter()
                 .map(|r| r.type_info().type_path_table().short_path().to_string())
+                .collect();
+            // Prefix/truncation first: a name that is a PREFIX of
+            // several registered types ("Time" for Time<()>,
+            // Time<Real>, …) is best served by listing those exact
+            // generic spellings — an unrelated Levenshtein near-match
+            // ("Timer") would shadow the author's real target.
+            let similar: Vec<String> = shorts
+                .iter()
                 .filter(|short| short.contains(name))
                 .take(4)
+                .cloned()
                 .collect();
             if !similar.is_empty() {
                 msg.push_str(&format!(
                     "; known similar registered types: {}",
                     similar.join(", ")
                 ));
+            } else if let Some(best) = crate::scenario::suggest_similar(name, &shorts) {
+                // Pure typo ("Kils" for "Kills"): no substring hit,
+                // but the capped-distance helper the config
+                // validator uses for keys/buttons catches it.
+                msg.push_str(&format!("; did you mean '{best}'?"));
             }
             Err(msg)
         }
@@ -1094,6 +1088,58 @@ pub(crate) fn resolve_registration<'a>(
 /// component" — true for two of the three call sites, misleading for
 /// the resource ones. The caller owns the noun; there is no
 /// blanket default to drift again.
+/// The message the run's oracles emit when the game has no
+/// AppTypeRegistry, parameterized by the tier of checks it makes
+/// impossible. One builder shared by every emitter (resource oracle,
+/// component oracle, bounds recorder, lint's registry probe) so the
+/// wording cannot drift between them. `tier` phrases to complete
+/// "the game has no AppTypeRegistry: {tier} are impossible …" —
+/// e.g. "reflected resource checks", "with_component bounds checks".
+pub(crate) fn no_atr_message(tier: &str) -> String {
+    format!(
+        "the game has no AppTypeRegistry: {tier} are \
+         impossible (register types with App::register_type)"
+    )
+}
+
+/// The message for a type that IS registered but lacks component
+/// reflection data. Shared by the component oracle and lint's
+/// registry probe so the wording cannot drift.
+pub(crate) fn not_a_reflected_component_message(name: &str) -> String {
+    format!(
+        "type '{name}' is registered in the game's TypeRegistry but is not a \
+         reflected component (missing ReflectComponent data — is it a Resource?)"
+    )
+}
+
+/// Resolve a numeric path on a matched entity: selector component
+/// first, Transform fallback — the doctrine BOTH the run's
+/// component oracle and lint's registry probe follow, extracted so
+/// the message (which names both attempted roots AND the entity)
+/// cannot drift between them.
+pub(crate) fn resolve_entity_numeric_path(
+    reflect: &dyn bevy_reflect::Reflect,
+    entity_ref: &bevy_ecs::world::EntityRef,
+    path: &str,
+) -> Result<f64, String> {
+    reflect_numeric_path(reflect, path, "component").or_else(|selector_err| {
+        let tf_result = entity_ref
+            .get::<Transform>()
+            .map(|t| t as &dyn bevy_reflect::Reflect)
+            .ok_or_else(|| format!("entity {:?} has no Transform", entity_ref.id()))
+            .and_then(|tf| reflect_numeric_path(tf, path, "component"));
+        match tf_result {
+            Err(tf_err) => Err(format!(
+                "path '{path}' resolves on neither the selector component \
+                 ({selector_err}) nor the entity's Transform ({tf_err}) \
+                 [entity {:?}]",
+                entity_ref.id()
+            )),
+            ok => ok,
+        }
+    })
+}
+
 pub(crate) fn reflect_numeric_path(
     root: &dyn bevy_reflect::Reflect,
     path: &str,
@@ -1289,8 +1335,7 @@ pub fn record_stagnant_resources(world: &mut World, frame: u64) {
             let mut violations = world.resource_mut::<RunViolations>();
             for inv in &invariants {
                 watched.config_errored.insert(inv.name.clone());
-                let why = "the game has no AppTypeRegistry: reflected resource checks \
-                     are impossible (register types with App::register_type)";
+                let why = &no_atr_message("reflected resource checks");
                 report_config_error_once(
                     &mut violations.0,
                     &mut watched.oracle_error_seen,

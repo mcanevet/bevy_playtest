@@ -175,6 +175,11 @@ path = "src/bin/takeover_demo_nondet_resource.rs"
 required-features = ["takeover"]
 
 [[bin]]
+name = "takeover_demo_unspawned"
+path = "src/bin/takeover_demo_unspawned.rs"
+required-features = ["takeover"]
+
+[[bin]]
 name = "takeover_demo_default"
 path = "src/bin/takeover_demo_default.rs"
 required-features = ["takeover"]
