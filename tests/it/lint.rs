@@ -1,4 +1,4 @@
-//! Lint-mode tests (`BEVY_PLAYTEST_LINT`, spec §4): the aggregate
+//! Lint-mode tests (`BEVY_PLAYTEST_LINT`): the aggregate
 //! scenario validator and its takeover integration.
 //!
 //! Doctrine: lint must front-load EXACTLY the rejections a normal run
