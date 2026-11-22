@@ -1592,8 +1592,14 @@ fn apply_sr_outcome(
                 // Change observed: episode over, budget reset, a
                 // fresh window begins this frame. Forward driver
                 // motion still counts toward the run total (the
-                // elision audit asks "did the driver EVER pass the
-                // window", not "did it pass it during one episode").
+                // elision audit compares the run's NET forward
+                // advance against the window — forward deltas
+                // accumulate across episodes and retreats do not
+                // debit the total, so an oscillating driver can
+                // reach the window on paper without ever passing it
+                // within one continuous stretch; the stagnation
+                // oracle itself resets on retreat, so a value that
+                // keeps moving never fires regardless).
                 if driver_delta > 0.0 {
                     *watched
                         .driver_total_advance
@@ -1820,13 +1826,25 @@ pub fn audit_resource_checks(
                     first_frame: 0,
                     last_frame,
                     count: 1,
-                    detail: format!(
-                        "invariant '{}': window ({window} driver units) never elapsed — \
-                         the driver '{driver}.{driver_path}' advanced only \
-                         {total_advance:.3} units over the whole run; the check was \
-                         unjudgeable (lengthen the run or shrink the window)",
-                        inv.name
-                    ),
+                    detail: if total_advance == 0.0 {
+                        format!(
+                            "invariant '{}': window ({window} driver units) never elapsed — \
+                             the driver '{driver}.{driver_path}' never advanced over the \
+                             whole run (frozen or paused the entire time; if that is \
+                             expected game behavior this note can be ignored) — the \
+                             check was unjudgeable (otherwise: lengthen the run or \
+                             shrink the window)",
+                            inv.name
+                        )
+                    } else {
+                        format!(
+                            "invariant '{}': window ({window} driver units) never elapsed — \
+                             the driver '{driver}.{driver_path}' advanced only \
+                             {total_advance:.3} units over the whole run; the check was \
+                             unjudgeable (lengthen the run or shrink the window)",
+                            inv.name
+                        )
+                    },
                     last_detail: format!(
                         "invariant '{}': driver advanced {total_advance:.3} of the \
                          {window}-unit window",

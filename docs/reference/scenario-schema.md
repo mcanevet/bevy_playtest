@@ -265,12 +265,17 @@ without the watched leaf changing?", and the wall-clock duration of
 the window is an emergent property:
 `wall_seconds ≈ window_s / driver_advance_per_wall_second`.
 
-Load validation checks `window_s` as a plain number against
-`duration_s` (positive, finite, ≤ the run duration) — it does not
-(and today cannot) reason about the driver's rate, so an accelerated
-driver with a large `window_s` can pass validation yet cost far more
-wall time than the number suggests. Reason in driver units first,
-then sanity-check the wall cost once by dividing by the clock scale.
+Load validation checks `window_s` as a positive, finite number.
+When the scenario declares the driver's rate
+(`driver_units_per_second` — the scale-annotating field), the
+loader additionally checks the window's *wall cost*: a window
+larger than what the run can deliver (`window_s /
+driver_units_per_second > duration_s`) rejects at load with the
+rate quoted in the error, so the author learns the mismatch
+before paying for a run. Without a declared rate the loader does
+not (and cannot) reason about the driver's speed — reason in
+driver units first, then sanity-check the wall cost once by
+dividing by the clock scale.
 
 Three scales, worked:
 
@@ -322,13 +327,15 @@ appears in the JSON, so the conversion is the author's: "~10 seconds
 of grace" → 10 / 0.05 = 200 ticks. Written the other way — thinking
 seconds, writing `10.0` — the window would grant half a second and
 fire constantly. Converting intent into driver units is the whole
-exercise; the harness never converts for you.
-
-One rough edge of the current validation: `window_s` is compared
-against `duration_s` as plain numbers, even though the window elapses
-in driver units — so the 200-tick window above (10 s of game time)
-is only accepted by a run declared at ≥ 200 `duration_s` seconds.
-Budget accordingly when the driver's unit is smaller than a second.
+exercise; the harness never converts for you. Declare
+`driver_units_per_second: 20` on this invariant and the loader does
+the arithmetic for you: 200 ticks at 20/s costs ~10 wall seconds,
+and a 4-second run rejects the window at load citing the declared
+rate instead of silently starving the window mid-run. An undeclared
+rate is audited at run time instead: if the run ends with the window
+never fully elapsing, the report carries a `window_unelapsed`
+informational note ("the check was unjudgeable") rather than
+guessing a verdict.
 
 ## Chaos mouse (default on)
 
@@ -565,9 +572,15 @@ Two distinct error classes, at different stages:
   driver's TOTAL observed advance never reached is reported as an
   informational `window_unelapsed` note at run end (naming the
   observed advance) — never a failure. Two invariants sharing one
-  driver leaf must declare the same rate or the scenario rejects.
+  driver leaf must declare the same rate or the scenario rejects
+  (full-path and short-name declarations of the same type count as
+  one driver).
   (`stagnant_resource` rejects `eventually_s` at load, so the
-  elision audit never interacts with deadlines.) The finding is
+  elision audit never interacts with deadlines.) Note:
+  `strict_warnings` does NOT escalate `window_unelapsed` — a
+  driver that legitimately pauses is game behavior, so there is no
+  knob to make an unjudgeable window fail the run; shrink the
+  window or lengthen the run instead. The finding is
   reported once per stagnation episode; the value changing later clears the episode
   and starts a fresh window — an oscillating value is "changing",
   not stagnating. A non-advancing driver FREEZES the window: time

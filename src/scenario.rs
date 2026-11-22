@@ -1145,7 +1145,13 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
     // (driver_resource, driver_path) pair may not declare different
     // `driver_units_per_second` values (a lie about the game's clock
     // either way; the pair with the wrong rate gets silently
-    // mis-fit validation).
+    // mis-fit validation). The key is the FINAL PATH SEGMENT of the
+    // driver resource — the same normalization `reflect_resource`
+    // uses to accept both full paths and unambiguous short names —
+    // so `my_game::clock::TickCount` and `TickCount` are one driver,
+    // not two (raw-string keying would let aliased declarations
+    // smuggle conflicting rates past this check).
+    let final_segment = |path: &str| path.rsplit("::").next().unwrap_or(path).to_string();
     let mut declared_rates: HashMap<(String, String), f32> = HashMap::new();
     for rule in &scenario.invariants {
         if let Some(rate) = rule.driver_units_per_second {
@@ -1154,6 +1160,7 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                 .clone()
                 .or_else(|| rule.resource.clone())
                 .unwrap_or_default();
+            let driver_resource = final_segment(&driver_resource);
             let driver_path = rule.driver_path.clone().unwrap_or_default();
             let key = (driver_resource, driver_path);
             match declared_rates.get(&key) {
@@ -1480,18 +1487,23 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                                      finite number > 0 (got {rate})",
                                     rule.name
                                 )));
-                            }
-                            let effective_wall_s = (window_s / rate) as f64;
-                            if effective_wall_s > scenario.duration_s as f64 {
-                                errors.push(ScenarioError::Rejected(format!(
-                                    "invariant '{}': window ({window_s} driver units at \
-                                     declared {rate} units/s = {effective_wall_s:.1}s) \
-                                     exceeds the run duration ({duration}s) — either \
-                                     the window or the declared rate makes it \
-                                     unjudgeable; check driver_units_per_second",
-                                    rule.name,
-                                    duration = scenario.duration_s
-                                )));
+                                // Unusable rate: skip the fit
+                                // arithmetic rather than emitting a
+                                // second, spurious "= inf" error for
+                                // the same defect in this lint pass.
+                            } else {
+                                let effective_wall_s = (window_s / rate) as f64;
+                                if effective_wall_s > scenario.duration_s as f64 {
+                                    errors.push(ScenarioError::Rejected(format!(
+                                        "invariant '{}': window ({window_s} driver units at \
+                                         declared {rate} units/s = {effective_wall_s:.1}s) \
+                                         exceeds the run duration ({duration}s) — either \
+                                         the window or the declared rate makes it \
+                                         unjudgeable; check driver_units_per_second",
+                                        rule.name,
+                                        duration = scenario.duration_s
+                                    )));
+                                }
                             }
                         }
                     }
