@@ -64,7 +64,6 @@ use crate::scenario::Invariant;
 /// fields never bump the schema (older readers deserialize them as
 /// defaults; older writers simply omit them).
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct HeldInvariant {
     /// Author's invariant name (same key violations use as target).
     pub name: String,
