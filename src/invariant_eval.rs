@@ -305,7 +305,7 @@ pub fn record_bounds_with_component(world: &mut World, frame: u64) {
             continue;
         };
         let bounds = bounds_of(inv);
-        match resolve_registration(&registry, name) {
+        match resolve_registration(&registry, name, "component") {
             Ok(type_reg) => {
                 // Iterate matching entities: the type's ComponentId
                 // must exist in this world (only registered-component
@@ -445,7 +445,7 @@ pub(crate) fn reflect_resource<'a>(
     registry: &TypeRegistry,
     name: &str,
 ) -> Result<ResourceView<'a>, String> {
-    let registration = resolve_registration(registry, name)?;
+    let registration = resolve_registration(registry, name, "resource")?;
     // ReflectResource is only a MARKER in Bevy 0.20 (reading goes
     // through ReflectComponent on the resource entity), but it is
     // exactly the datum that separates "the author named a resource
@@ -911,7 +911,7 @@ fn eval_one(world: &World, registry: &TypeRegistry, inv: &Invariant) -> CcOutcom
             ),
         };
     };
-    let registration = match resolve_registration(registry, name) {
+    let registration = match resolve_registration(registry, name, "component") {
         Ok(r) => r,
         Err(why) => {
             return CcOutcome {
@@ -1000,9 +1000,17 @@ fn eval_one(world: &World, registry: &TypeRegistry, inv: &Invariant) -> CcOutcom
 /// segment) when it is unambiguous — a short name matching several
 /// registered types is rejected loudly instead of silently picking
 /// one, because the author's intent would be ambiguous.
+///
+/// `noun` names WHAT the author was resolving — "component" for
+/// per-entity selectors (component_check / nodes_in_bounds),
+/// "resource" for reflected resources (resource_check /
+/// stagnant_resource). The author of a typo'd resource name must
+/// not be told to register a component; the caller owns the noun
+/// for the same reason `reflect_numeric_path` takes one.
 pub(crate) fn resolve_registration<'a>(
     registry: &'a TypeRegistry,
     name: &str,
+    noun: &str,
 ) -> Result<&'a bevy_reflect::TypeRegistration, String> {
     // Full-path lookup first: registry-keyed, unique by construction.
     if let Some(full) = registry.get_with_type_path(name) {
@@ -1018,8 +1026,8 @@ pub(crate) fn resolve_registration<'a>(
         [one] => Ok(*one),
         [] => {
             let mut msg = format!(
-                "unknown component '{name}' — not registered in this game's TypeRegistry \
-                 (components need #[derive(Reflect)] and App::register_type, or the name \
+                "unknown {noun} '{name}' — not registered in this game's TypeRegistry \
+                 ({noun}s need #[derive(Reflect)] and App::register_type, or the name \
                  must be the full registered type path)"
             );
             // Did-you-mean: the short-name scan above is exact-match
@@ -1066,7 +1074,7 @@ pub(crate) fn resolve_registration<'a>(
                 .map(|r| r.type_info().type_path_table().path().to_string())
                 .collect();
             Err(format!(
-                "component short name '{name}' is ambiguous among {} registered types — \
+                "{noun} short name '{name}' is ambiguous among {} registered types — \
                  use the full type path (one of: {})",
                 full.len(),
                 full.join(", ")
