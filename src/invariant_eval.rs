@@ -210,7 +210,8 @@ pub struct WatchedInvariants {
     /// (invariant name, error class) pairs already reported as
     /// `oracle_error` this run — the once-per-distinct-error dedup
     /// that keeps static authoring failures from inflating `count`
-    /// to the frame count. See [`report_config_error_once`].
+    /// to the frame count. Recorded via the shared report-once
+    /// helper for `oracle_error` entries.
     pub oracle_error_seen: std::collections::HashSet<String>,
 }
 
@@ -538,7 +539,8 @@ pub struct WatchedResources {
     /// (invariant name, error class) pairs already reported as
     /// `oracle_error` this run — the once-per-distinct-error dedup
     /// that keeps static authoring failures from inflating `count`
-    /// to the frame count. See [`report_config_error_once`].
+    /// to the frame count. Recorded via the shared report-once
+    /// helper for `oracle_error` entries.
     pub oracle_error_seen: std::collections::HashSet<String>,
 }
 
