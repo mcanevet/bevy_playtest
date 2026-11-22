@@ -138,6 +138,18 @@ pub struct PlaytestReport {
     /// progress verdict; comparable across runs.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub progress_samples: Vec<crate::progress::ProgressSample>,
+    /// Per-invariant pass-side evidence (spec 0.14.1 §2): one
+    /// compact object per PASSING resource_check/stagnant_resource
+    /// invariant — observed extrema, the margin frame, frames
+    /// matched, and eventually/stagnant timing. The pass-side mirror
+    /// of the violations list: a comfortable `ge 0` and a
+    /// deadline-met-at-frame-299 previously left NO trace on a
+    /// passing report. Constant size (no per-frame arrays), default
+    /// one entry per passing invariant. Skipped when empty (runs
+    /// without resource-tier invariants); additive field — older
+    /// readers deserialize it as empty, so `schema_version` stays 1.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub held_invariants: Vec<crate::held::HeldInvariant>,
     /// Build profile of the GAME binary that produced this report.
     /// In-process and takeover runs alike stamp the reporting
     /// process's own `cfg!(debug_assertions)` — the report-writing
@@ -279,6 +291,7 @@ impl PlaytestReport {
             game_build_profile: None,
             state_digest: vec![],
             progress_samples: vec![],
+            held_invariants: vec![],
             source_derived_keys: None,
             source_derived_notes: None,
             #[cfg(feature = "lw-reader")]

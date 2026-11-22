@@ -524,10 +524,19 @@ pub fn record_resource_checks(world: &mut World, frame: u64) {
 
     // Write phase: fold outcomes into bookkeeping and violations.
     world.resource_scope(|world, mut watched: Mut<WatchedResources>| {
-        let mut violations = world.resource_mut::<RunViolations>();
-        for (inv, outcome) in invariants.iter().zip(outcomes.iter()) {
-            apply_rc_outcome(inv, outcome, frame, &mut watched, &mut violations);
-        }
+        world.resource_scope(|world, mut held: Mut<crate::held::HeldBookkeeping>| {
+            let mut violations = world.resource_mut::<RunViolations>();
+            for (inv, outcome) in invariants.iter().zip(outcomes.iter()) {
+                apply_rc_outcome(
+                    inv,
+                    outcome,
+                    frame,
+                    &mut watched,
+                    &mut violations,
+                    &mut held,
+                );
+            }
+        });
     });
 }
 
@@ -586,6 +595,7 @@ fn apply_rc_outcome(
     frame: u64,
     watched: &mut WatchedResources,
     violations: &mut RunViolations,
+    held: &mut crate::held::HeldBookkeeping,
 ) {
     if let Some(why) = &outcome.config_error {
         watched.config_errored.insert(inv.name.clone());
@@ -604,6 +614,14 @@ fn apply_rc_outcome(
         return;
     }
     watched.matched.insert(inv.name.clone());
+    // Held-invariant evidence (spec 0.14.1 §2): a pure read of this
+    // frame's observation — no verdict logic, nothing consumed.
+    // Config-errored and unresolved frames never reach here, so the
+    // extrema and resolution count describe exactly the frames the
+    // audit would call observable.
+    if let Some(value) = outcome.value {
+        held.observe_resource_leaf(&inv.name, value, frame);
+    }
     if outcome.held {
         // Earliest-holding frame wins: late frames cannot restart the
         // clock (same doctrine as component_check).
@@ -755,7 +773,7 @@ fn apply_outcome(
 
 /// Threshold from the scenario's reserved `value` field. Validated to
 /// be a JSON number at load; the Option is defensive only.
-fn cc_threshold(inv: &Invariant) -> Option<f64> {
+pub(crate) fn cc_threshold(inv: &Invariant) -> Option<f64> {
     inv.value.as_ref().and_then(|v| v.as_f64())
 }
 
@@ -1153,10 +1171,19 @@ pub fn record_stagnant_resources(world: &mut World, frame: u64) {
 
     // Write phase: fold into bookkeeping and violations.
     world.resource_scope(|world, mut watched: Mut<WatchedResources>| {
-        let mut violations = world.resource_mut::<RunViolations>();
-        for (inv, outcome) in invariants.iter().zip(outcomes.iter()) {
-            apply_sr_outcome(inv, outcome, frame, &mut watched, &mut violations);
-        }
+        world.resource_scope(|world, mut held: Mut<crate::held::HeldBookkeeping>| {
+            let mut violations = world.resource_mut::<RunViolations>();
+            for (inv, outcome) in invariants.iter().zip(outcomes.iter()) {
+                apply_sr_outcome(
+                    inv,
+                    outcome,
+                    frame,
+                    &mut watched,
+                    &mut violations,
+                    &mut held,
+                );
+            }
+        });
     });
 }
 
@@ -1254,6 +1281,7 @@ fn apply_sr_outcome(
     frame: u64,
     watched: &mut WatchedResources,
     violations: &mut RunViolations,
+    held: &mut crate::held::HeldBookkeeping,
 ) {
     if let Some(why) = &outcome.config_error {
         watched.config_errored.insert(inv.name.clone());
@@ -1279,6 +1307,22 @@ fn apply_sr_outcome(
         return;
     };
     watched.matched.insert(inv.name.clone());
+    // Held-invariant evidence (spec 0.14.1 §2): resolution count
+    // plus run-total driver advance. The delta fed here mirrors the
+    // window state machine's own attribution exactly — computed
+    // BEFORE it consumes the observed values, so gaps and re-seeds
+    // are excluded from the total by the same rules.
+    let held_delta: Option<f64> = if watched.driver_gaps.contains(&inv.name) {
+        // Gap-resume frame: continuity broken, no attributable
+        // advance (the state machine re-seeds below).
+        None
+    } else {
+        watched
+            .last_values
+            .get(&inv.name)
+            .map(|(_, last_driver)| driver_value - last_driver)
+    };
+    held.observe_stagnant_frame(&inv.name, held_delta);
     let window_s = inv.window_s.map(|w| w as f64).unwrap_or(f64::INFINITY);
     if !watched_value.is_finite() || !driver_value.is_finite() {
         // A non-finite sample — NaN or infinity in EITHER leaf — is

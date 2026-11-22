@@ -10,6 +10,7 @@ pub mod enums;
 #[cfg(feature = "takeover")]
 pub mod evaluation;
 pub mod explorer;
+pub mod held;
 pub mod injected;
 pub mod invariant_eval;
 pub mod junit;
