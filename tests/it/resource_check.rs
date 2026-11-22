@@ -6,7 +6,7 @@
 //!   resource sibling of `component_check`. Game-wide state like
 //!   scores, economies and cooldowns.
 //! - `stagnant_resource`: the rate-form livelock oracle born from the
-//!   onze kickoff bug — a match whose scoreboard stays [0,0] the
+//!   canonical livelock fixture: a match whose scoreboard stays [0,0] the
 //!   whole game while the match clock advances IS a livelock, but
 //!   every motion/state oracle stays green: the world churns, the
 //!   clock runs, only the value under judgment stands still.
@@ -29,7 +29,7 @@ use bevy_transform::prelude::Transform;
 // Game-side resources
 // ---------------------------------------------------------------------------
 
-/// The onze shape: a scoreboard that never changes while the clock
+/// The livelock shape: a scoreboard that never changes while the clock
 /// runs.
 #[derive(Resource, Reflect, Default)]
 #[reflect(Resource)]
@@ -46,7 +46,7 @@ struct RcMatchClock {
     elapsed_s: f32,
 }
 
-/// RcEconomy from the camelback money-non-conservation shape.
+/// RcEconomy: the money-non-conservation shape.
 #[derive(Resource, Reflect, Default)]
 #[reflect(Resource)]
 struct RcEconomy {
@@ -64,7 +64,7 @@ fn tick_clock(mut clock: ResMut<RcMatchClock>) {
 }
 
 /// The livelock: players wander (world churns), but the scoreboard
-/// NEVER changes. Exactly onze's bug.
+/// NEVER changes — the livelock that motion oracles cannot see.
 fn wander_players(mut q: Query<&mut Transform>) {
     for mut t in q.iter_mut() {
         t.translation.x = t.translation.x.sin() + 0.01;
@@ -136,7 +136,7 @@ const STAGNANT_SCORE: &str = r#"
 // stagnant_resource
 // ---------------------------------------------------------------------------
 
-/// THE onze shape: a "match" that churns forever, clock running,
+/// THE livelock shape: a "match" that churns forever, clock running,
 /// score frozen at 0-0. Motion, liveness, progress oracles stay
 /// green; only the rate-form invariant catches the livelock.
 #[test]
@@ -327,7 +327,7 @@ const COINS_NONNEGATIVE: &str = r#"
     "check": "ge",
     "value": 0"#;
 
-/// The camelback money shape: coins going negative violates the
+/// The money shape: coins going negative violates the
 /// authored always-intent.
 #[test]
 fn negative_coins_fail_always_check() {
@@ -1230,20 +1230,15 @@ fn window_boundary_is_strictly_greater() {
 }
 
 // ---------------------------------------------------------------------------
-// oracle_error count semantics (spec 0.14.1 §3 / reproducer R4)
+// oracle_error count semantics: once per error class
 // ---------------------------------------------------------------------------
 
-/// R4, quoted from the spec corpus: one typo'd path under
+/// A dogfooded authoring failure: one typo'd path under
 /// `resource_check` used to inflate `count` to the frame count
-/// (observed: `count: 300` on the spec's 5 s run; onze's 20 s runs
-/// hit 1200). Under the once-per-error-class doctrine the entry is
-/// reported exactly once per frame of the run it was present on,
+/// (observed `count: 300` on a 5 s run; a 20 s run hit 1200).
+/// Under the once-per-error-class doctrine the entry is
+/// reported exactly once per run it was present on,
 /// `count` pinned to 1, and the recurrence folded into the detail.
-///
-/// The spec quotes overmind's real resource (`overmind::economy::
-/// Economy.path: "lumens"`); this suite's twin shape is the
-/// `RcEconomy` fixture with the same typo (`"lumens"` for
-/// `"lumen"`) — the dogfooded path that produced the finding.
 #[test]
 fn r4_one_typo_path_is_counted_once_not_per_frame() {
     let _slot = common::run_slot();

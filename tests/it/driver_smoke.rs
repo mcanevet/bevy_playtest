@@ -944,7 +944,7 @@ fn chaos_same_frame_retap_observes_both_edges() {
 }
 
 // ---------------------------------------------------------------------------
-// Passive mode: the observe-only escape hatch (spec 0.14.1 §passive)
+// Passive mode: the observe-only escape hatch
 // ---------------------------------------------------------------------------
 
 /// `"passive": true` must mean what it says at RUNTIME, not just at

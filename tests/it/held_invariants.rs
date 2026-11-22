@@ -1,4 +1,4 @@
-//! `held_invariants` report section (spec 0.14.1 §2): the
+//! `held_invariants` report section (the passing-invariant trace): the
 //! pass-side evidence trace — one compact object per PASSING
 //! resource_check / stagnant_resource invariant.
 //!
@@ -356,7 +356,7 @@ fn twenty_held_invariants_serialize_under_4kb() {
         entries.push(HeldInvariant {
             name: format!("lumen_never_negative_{i}"),
             rule: "resource_check".to_string(),
-            target: "overmind::economy::Economy.lumen".to_string(),
+            target: "demo_game::economy::Economy.lumen".to_string(),
             predicate: Some("ge 0".to_string()),
             frames_matched: 1200,
             observed_min: Some(25.0),

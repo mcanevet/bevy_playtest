@@ -1,5 +1,5 @@
 //! Held-invariant evidence: the per-invariant pass-side companion to
-//! the violation list (spec 0.14.1 §2, "passing-invariant trace").
+//! the violation list (the "passing-invariant trace").
 //!
 //! A passing run previously carried ZERO per-invariant evidence: a
 //! deadline met at frame 299 of 300 was indistinguishable from one met
