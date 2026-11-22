@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.14.0](https://github.com/mcanevet/bevy_playtest/compare/v0.13.0...v0.14.0) - 2026-11-22
+
+### Added
+
+- *(invariants)* resource_check and stagnant_resource rules
+
+### Other
+
+- ci Update taiki-e/install-action action to v2.90.8
+- align documentation with the post-removal code
+- ci Update taiki-e/install-action action to v2.90.7
+
 ## [0.13.0](https://github.com/mcanevet/bevy_playtest/compare/v0.12.0...v0.13.0) - 2026-11-21
 
 ### Added
