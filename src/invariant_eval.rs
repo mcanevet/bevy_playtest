@@ -433,7 +433,7 @@ fn bounds_of(inv: &Invariant) -> [[f32; 3]; 2] {
 /// the harness defers judgment to the post-run vacuity audit (same
 /// doctrine as component_check's zero-matched-entities frames).
 #[derive(Debug)]
-enum ResourceView<'a> {
+pub(crate) enum ResourceView<'a> {
     /// The resource's current value.
     Value(&'a dyn bevy_reflect::Reflect),
     /// Properly reflected as a Resource, but not inserted (yet):
@@ -441,7 +441,7 @@ enum ResourceView<'a> {
     Absent,
 }
 
-fn reflect_resource<'a>(
+pub(crate) fn reflect_resource<'a>(
     world: &'a World,
     registry: &TypeRegistry,
     name: &str,
@@ -1021,7 +1021,7 @@ fn eval_one(world: &World, registry: &TypeRegistry, inv: &Invariant) -> CcOutcom
 /// segment) when it is unambiguous — a short name matching several
 /// registered types is rejected loudly instead of silently picking
 /// one, because the author's intent would be ambiguous.
-fn resolve_registration<'a>(
+pub(crate) fn resolve_registration<'a>(
     registry: &'a TypeRegistry,
     name: &str,
 ) -> Result<&'a bevy_reflect::TypeRegistration, String> {
@@ -1094,7 +1094,7 @@ fn resolve_registration<'a>(
 /// component" — true for two of the three call sites, misleading for
 /// the resource ones. The caller owns the noun; there is no
 /// blanket default to drift again.
-fn reflect_numeric_path(
+pub(crate) fn reflect_numeric_path(
     root: &dyn bevy_reflect::Reflect,
     path: &str,
     noun: &str,

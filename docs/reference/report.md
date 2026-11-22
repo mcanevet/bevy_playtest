@@ -141,11 +141,16 @@ uses this same schema, with three distinctions a consumer must
 know:
 
 - `harness_mode` is `"lint"`, not `"in_process"` — the game's frame
-  loop never executed.
+  loop never executed (but plugins build and ONE warm-up frame
+  runs, so the registry probe sees a booted world).
 - Every finding rides `violations` as an entry whose `rule` is
-  `lint_finding` (one per aggregated scenario validation error);
-  the details are the validation messages a normal run would have
-  rejected the scenario with, delivered one per full run.
+  `lint_finding` — one per aggregated scenario validation error,
+  plus one per definite resolution error the type-registry probe
+  caught (typo'd resource/component names, numeric paths that
+  cannot resolve on the booted App). The probe is silent about
+  what it cannot confirm (a component with no instances yet);
+  its findings mirror the message the run's oracle would emit at
+  its first matched frame, so lint clean-ness transfers.
 - `status: "fail"` in a lint report says the *config* is incoherent.
   It is never a statement about the game: lint passes mean "the
   scenario is coherent", not "the game will pass". Exit codes
