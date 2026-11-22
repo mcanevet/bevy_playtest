@@ -1365,3 +1365,58 @@ fn bounds_recorder_config_error_is_counted_once() {
         "bounds-recorder config error counted once: {entry:?}"
     );
 }
+
+/// Resolving the bare short name "Time" as a driver_resource is
+/// technically "unknown" (the short-name scan is exact-match, and
+/// Time<()>/Time<Real>/Time<Virtual>/Time<Fixed> are all distinct
+/// registered short paths) — but that verdict alone is helpless.
+/// The did-you-mean hint must list the substring-matching short
+/// paths so the author sees the concrete generic spellings to
+/// choose from, without resolution semantics changing at all.
+#[test]
+fn unknown_short_name_lists_similar_registered_types() {
+    let _slot = common::run_slot();
+    let mut app = match_app();
+    // The engine clocks are registered by TimePlugin; without it
+    // "Time" has nothing to match against.
+    app.add_plugins(bevy_time::TimePlugin);
+    let report = run_scenario(
+        &mut app,
+        &scenario_with_invariants(
+            r#"
+    "name": "time_hint",
+    "rule": "stagnant_resource",
+    "resource": "RcScoreboard",
+    "path": "home",
+    "driver_resource": "Time",
+    "driver_path": "elapsed",
+    "window_s": 1.0"#,
+        ),
+    )
+    .unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
+    let entry = report
+        .violations
+        .iter()
+        .find(|v| v.rule == "oracle_error" && v.target == "time_hint")
+        .unwrap_or_else(|| {
+            panic!(
+                "expected oracle_error, got: {:?}",
+                report
+                    .violations
+                    .iter()
+                    .map(|v| format!("{}: {}", v.rule, v.detail))
+                    .collect::<Vec<_>>()
+            )
+        });
+    assert!(
+        entry.detail.contains("known similar registered types"),
+        "missing did-you-mean hint in: {}",
+        entry.detail
+    );
+    assert!(
+        entry.detail.contains("Time<Fixed>"),
+        "hint should name the Time<*> generic spellings: {}",
+        entry.detail
+    );
+}
