@@ -221,8 +221,11 @@ reflects as an **opaque** value — no fields, no subpaths — so
 
 ```
 path 'elapsed' resolves to non-numeric type 'core::time::Duration'
-— component_check compares numeric leaves only
+— checks over this resource compare numeric leaves only
 ```
+
+(the noun in the quoted message reads `resource` or `component`
+depending on which kind of target the invariant watches)
 
 The workaround is built into bevy_time: `Time` carries a redundant
 float twin of its elapsed time (`elapsed_secs_f64` — the field
