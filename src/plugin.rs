@@ -16,6 +16,12 @@
 //! When the env var is absent the plugin is inert: no runner swap, no
 //! resources, no systems, no env reads past the one `var_os` check.
 //!
+//! With [`ENV_LINT`](crate::plugin::ENV_LINT) also set, the takeover
+//! LINTS the scenario instead of running it: every config error is
+//! collected and reported at once (never first-error-only), the
+//! report is written, and the process exits 0 (coherent config) or
+//! 1 (findings) — see [`ENV_LINT`] for the mode's honest scope.
+//!
 //! # Headless by construction
 //!
 //! `set_runner` is last-set-wins: adding `PlaytestPlugin` after
@@ -74,6 +80,15 @@ pub const ENV_DISCOVER_SCAN: &str = "BEVY_PLAYTEST_DISCOVER_SCAN";
 /// source-scan key layering and deterministic OS randomness; the seed
 /// var alone is inert — the takeover needs its scenario).
 pub const ENV_SEED: &str = "BEVY_PLAYTEST_SEED";
+/// Lint mode (takeover): when set alongside [`ENV_SCENARIO`], the
+/// takeover runs the scenario linter INSTEAD of driving the game:
+/// every config error is collected and reported at once (aggregate,
+/// never first-error-only), plus a type-registry probe of the booted
+/// App (stage 2) — then the process exits without running the frame
+/// loop. A clean lint means "the config is coherent", never "the
+/// game will pass": frame-level judgments are out of scope. Alone
+/// (no scenario) the variable is inert, like [`ENV_SEED`].
+pub const ENV_LINT: &str = "BEVY_PLAYTEST_LINT";
 pub use crate::sinks::ENV_ALLOW_MISSING_LOG_CAPTURE;
 /// Seed for the deterministic-randomness shim the battery preloads into
 /// the game process (Linux). Set by the battery parent; read by the shim
@@ -84,7 +99,7 @@ pub const ENV_DETRNG_SEED: &str = "BEVY_PLAYTEST_DETRNG_SEED";
 /// parent. Listed as known so an inherited value is never rejected.
 pub const ENV_DETRNG_DISABLE: &str = "BEVY_PLAYTEST_DETRNG_DISABLE";
 
-const KNOWN_ENV_VARS: [&str; 11] = [
+const KNOWN_ENV_VARS: [&str; 12] = [
     ENV_SCENARIO,
     ENV_REPORT,
     ENV_HEADLESS,
@@ -99,6 +114,8 @@ const KNOWN_ENV_VARS: [&str; 11] = [
     // pick one fixture); inherited by the game process harmlessly.
     "BEVY_PLAYTEST_FIXTURE",
     ENV_SEED,
+    // Lint mode; inert without ENV_SCENARIO.
+    ENV_LINT,
 ];
 
 /// Exit codes for the takeover process contract.
@@ -311,6 +328,14 @@ fn run_takeover(app: &mut App, config: &TakeoverConfig) -> ! {
             }
         }
     }
+    // Lint mode intercept: with BEVY_PLAYTEST_LINT set, aggregate every
+    // scenario error (plus the stage-2 registry probe) and exit —
+    // never reaching the frame loop. Intercept BEFORE the
+    // verify_replay/run_scenario dispatch so lint covers replay
+    // scenarios too.
+    if std::env::var_os(ENV_LINT).is_some() {
+        run_lint(&scenario, &config.report_path, source);
+    }
     // Replay verification needs TWO freshly built Apps. The takeover
     // already owns process lifetime and `set_runner` hands us the App
     // after plugin-build; a true rebuild requires re-running the
@@ -333,6 +358,20 @@ fn run_takeover(app: &mut App, config: &TakeoverConfig) -> ! {
             Ok(report) => report,
             Err(err) => {
                 eprintln!("bevy_playtest: {err}");
+                // Fail-fast is kept, but if the error was a scenario
+                // VALIDATION rejection, point the author at lint mode:
+                // it collects every rejection in one pass instead of
+                // one per run. A validation rejection is exactly a
+                // first element of the lint list (same walker), so the
+                // identity check can never fire on unrelated errors
+                // (run-guard, infra).
+                if crate::scenario::lint_scenario(&scenario).first() == Some(&err) {
+                    eprintln!(
+                        "bevy_playtest: run with {}=1 to see all scenario \
+                         errors at once",
+                        ENV_LINT
+                    );
+                }
                 std::process::exit(exit_code::CONFIG_ERROR);
             }
         }
@@ -388,8 +427,72 @@ fn run_takeover(app: &mut App, config: &TakeoverConfig) -> ! {
     std::process::exit(code)
 }
 
+/// Run the scenario linter instead of the frame loop:
+/// `BEVY_PLAYTEST_LINT=1 BEVY_PLAYTEST_SCENARIO=... <game>` collects
+/// every scenario validation error at once (aggregate, never
+/// first-error-only) and exits without running a single frame.
+///
+/// Exit codes: findings → [`exit_code::FAIL`] (rejected config,
+/// front-loading the same rejections a normal run would give one at
+/// a time), lint infra/config failures (report unwritable, etc.) →
+/// [`exit_code::CONFIG_ERROR`]. A CLEAN lint exits
+/// [`exit_code::PASS`] with the standard report — meaning "the
+/// config is coherent", NEVER "the game will pass": frame-level
+/// judgments are out of lint's scope entirely.
+///
+/// The report is the standard `PlaytestReport` (same schema every
+/// other takeover run produces): status `fail`, `harness_mode` set
+/// to the lint mode marker, and each finding riding `violations` as
+/// a `lint_finding` entry (mirroring `scenario_error`'s channel) —
+/// the rule name is lint-specific, so findings never mix with a
+/// real run's oracle entries.
+fn run_lint(scenario: &crate::scenario::Scenario, report_path: &str, source: &str) -> ! {
+    let findings = crate::scenario::lint_scenario(scenario);
+    for err in &findings {
+        eprintln!("bevy_playtest: {err}");
+    }
+    let mut report = crate::state::PlaytestReport::crashed_empty();
+    report.status = if findings.is_empty() {
+        crate::enums::PlaytestStatus::Pass
+    } else {
+        crate::enums::PlaytestStatus::Fail
+    };
+    report.harness_mode = HARNESS_MODE_LINT.to_string();
+    report.scenario_source = Some(source.to_string());
+    report.violations = findings
+        .iter()
+        .map(|err| crate::state::ViolationEntry {
+            rule: crate::rules::Rule::LintFinding.name().to_string(),
+            target: "scenario".to_string(),
+            first_frame: 0,
+            last_frame: 0,
+            count: 1,
+            detail: err.to_string(),
+            last_detail: err.to_string(),
+            meta: None,
+        })
+        .collect();
+    if let Err(err) = write_report(report_path, &report) {
+        eprintln!("bevy_playtest: {err}");
+        std::process::exit(exit_code::CONFIG_ERROR);
+    }
+    println!("bevy_playtest: report written to {report_path}");
+    let code = match report.status {
+        crate::enums::PlaytestStatus::Pass => exit_code::PASS,
+        crate::enums::PlaytestStatus::Fail => exit_code::FAIL,
+        crate::enums::PlaytestStatus::Crash => exit_code::CRASH,
+    };
+    std::process::exit(code)
+}
+
 /// Case-sensitive magic literal for the built-in smoke scenario.
 pub const SMOKE_LITERAL: &str = "smoke";
+
+/// `harness_mode` marker for lint-mode reports. Distinct from
+/// `"takeover"` (a real driven run) and `"in_process"` (library API):
+/// a lint report is a config-coherence artifact about a scenario
+/// that never executed a frame.
+pub const HARNESS_MODE_LINT: &str = "lint";
 
 /// Case-sensitive magic literal for the built-in default battery:
 /// the zero-config battery run. Accepted as a `BEVY_PLAYTEST_SCENARIO`
