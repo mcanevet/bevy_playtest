@@ -2669,9 +2669,9 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     // oracle_error recurrence annotation: config-class errors are
     // reported once per distinct error class (invariant_eval), but
     // their entry's first/last frame still spans every frame the
-    // mistake was observed. Fold that span into the detail (spec §3
-    // wording) so the once-count is self-explaining: `count: 1` with
-    // "present every frame, frames 0–299; counted once" — recurrence
+    // mistake was observed. Fold that span into the detail so the
+    // once-count is self-explaining: `count: 1` with
+    // "recurred across frames 0–299; counted once" — recurrence
     // documented, not inflated. Scope: entries that went through
     // the once-guard (tracked in `oracle_error_seen`) — NOT the
     // NaN-family oracle_errors, which may onset mid-run and already
@@ -2691,7 +2691,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             && was_deduped(&v.target)
         {
             v.detail.push_str(&format!(
-                " (present every frame, frames {}\u{2013}{}; counted once)",
+                " (recurred across frames {}\u{2013}{}; counted once)",
                 v.first_frame, v.last_frame
             ));
             v.last_detail.push_str(" (counted once)");

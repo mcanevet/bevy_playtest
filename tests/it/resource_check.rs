@@ -1240,7 +1240,7 @@ fn window_boundary_is_strictly_greater() {
 /// reported exactly once per run it was present on,
 /// `count` pinned to 1, and the recurrence folded into the detail.
 #[test]
-fn r4_one_typo_path_is_counted_once_not_per_frame() {
+fn one_typo_path_is_counted_once_not_per_frame() {
     let _slot = common::run_slot();
     let mut app = economy_app(freeze_economy);
     let report = run_scenario(
@@ -1274,7 +1274,7 @@ fn r4_one_typo_path_is_counted_once_not_per_frame() {
     assert!(
         entry
             .detail
-            .contains("present every frame, frames 0\u{2013}239; counted once"),
+            .contains("recurred across frames 0\u{2013}239; counted once"),
         "recurrence must be folded into the detail: {}",
         entry.detail
     );
