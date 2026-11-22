@@ -59,7 +59,8 @@
     a passing run) and the run-total driver-leaf advance (sum of
     positive deltas across fully-observed frames; gaps and rewinds
     are never credited), plus the driver reflect path
-- `harness_mode`: `"in_process"`
+- `harness_mode`: `"in_process"` for a real run, or `"lint"` for a
+  lint-mode artifact (see below)
 - `scenario_source`: `"file"`, `"builtin_smoke"`, or `"builtin_battery"`
 - `log_capture_available` (absent when not applicable; `log_capture_available: false` also produces an
   informational `log_capture_lost` violation — see the
@@ -130,3 +131,23 @@ Report helpers on `PlaytestReport`:
 Reports from `lw-reader` builds also carry `lw_reconciled`, whose
 entries and findings use the IR specified in
 [the SurfaceEntry schema page](surface-entry-schema.md).
+
+## Lint-mode reports
+
+Setting `BEVY_PLAYTEST_LINT` alongside `BEVY_PLAYTEST_SCENARIO`
+makes the takeover lint the scenario instead of running it (see
+the environment-variable reference). The report a lint produces
+uses this same schema, with three distinctions a consumer must
+know:
+
+- `harness_mode` is `"lint"`, not `"in_process"` — the game's frame
+  loop never executed.
+- Every finding rides `violations` as an entry whose `rule` is
+  `lint_finding` (one per aggregated scenario validation error);
+  the details are the validation messages a normal run would have
+  rejected the scenario with, delivered one per full run.
+- `status: "fail"` in a lint report says the *config* is incoherent.
+  It is never a statement about the game: lint passes mean "the
+  scenario is coherent", not "the game will pass". Exit codes
+  follow the normal contract (0 coherent / 1 findings / 3
+  infrastructure failure).
