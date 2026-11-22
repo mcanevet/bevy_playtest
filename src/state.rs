@@ -138,7 +138,7 @@ pub struct PlaytestReport {
     /// progress verdict; comparable across runs.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub progress_samples: Vec<crate::progress::ProgressSample>,
-    /// Per-invariant pass-side evidence (spec 0.14.1 §2): one
+    /// Per-invariant pass-side evidence (passing-invariant trace): one
     /// compact object per PASSING resource_check/stagnant_resource
     /// invariant — observed extrema, the margin frame, frames
     /// matched, and eventually/stagnant timing. The pass-side mirror

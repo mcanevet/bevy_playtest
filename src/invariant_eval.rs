@@ -20,7 +20,7 @@
 //!   liveness invariant — a watched leaf on a reflected resource must
 //!   change at least once per `window_s` DRIVER-LEAF units while the
 //!   driver leaf strictly advances. A scoreboard frozen on a running
-//!   match clock is a livelock (the onze 0–0 kickoff), and no
+//!   match clock is a livelock (a 0–0 scoreboard), and no
 //!   change/state oracle can see it: the world churns, the clock
 //!   advances, only the VALUE under judgment stands still. The window
 //!   is measured in the DRIVER LEAF'S OWN UNITS (a match clock in
@@ -44,7 +44,7 @@ use crate::scenario::Invariant;
 
 /// Report a static authoring failure (`oracle_error`) once per
 /// distinct error class, folding recurrence into the entry instead
-/// of inflating `count` (dogfood finding: one typo'd path produced
+/// of inflating `count` (observed: one typo'd path produced
 /// `count: 300` on a 5 s run — the mechanism behind a 1200-count
 /// report on a 20 s run elsewhere). A config error is a property of
 /// the SCENARIO, not of time: `count` stays 1 and the entry's
@@ -684,7 +684,7 @@ fn apply_rc_outcome(
     if let Some(why) = &outcome.config_error {
         watched.config_errored.insert(inv.name.clone());
         // Scenario-property doctrine: once per distinct error class,
-        // never per frame (the R4 dogfood finding — one typo'd
+        // never per frame (the dogfooded finding — one typo'd
         // resource_check path produced `count: 300` on a 5 s run;
         // the same mechanism scaled to 1200 on a 20 s run).
         report_config_error_once(
@@ -703,7 +703,7 @@ fn apply_rc_outcome(
         return;
     }
     watched.matched.insert(inv.name.clone());
-    // Held-invariant evidence (spec 0.14.1 §2): a pure read of this
+    // Held-invariant evidence (passing-invariant trace): a pure read of this
     // frame's observation — no verdict logic, nothing consumed.
     // Config-errored and unresolved frames never reach here, so the
     // extrema and resolution count describe exactly the frames the
@@ -1441,7 +1441,7 @@ fn apply_sr_outcome(
         return;
     };
     watched.matched.insert(inv.name.clone());
-    // Held-invariant evidence (spec 0.14.1 §2): resolution count
+    // Held-invariant evidence (passing-invariant trace): resolution count
     // plus run-total driver advance. The delta fed here mirrors the
     // window state machine's own attribution exactly — computed
     // BEFORE it consumes the observed values, so gaps and re-seeds

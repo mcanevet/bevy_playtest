@@ -2104,7 +2104,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         )
     }) {
         app.init_resource::<crate::invariant_eval::WatchedResources>();
-        // Held-invariant evidence accumulators (spec 0.14.1 §2): the
+        // Held-invariant evidence accumulators (passing-invariant trace): the
         // resource_check/stagnant_resource recorders fold into this
         // on every observed frame.
         app.init_resource::<crate::held::HeldBookkeeping>();
@@ -2968,7 +2968,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             },
         ))
     };
-    // Held-invariant evidence (spec 0.14.1 §2): collected from the
+    // Held-invariant evidence (passing-invariant trace): collected from the
     // accumulator resource plus the watched bookkeeping AFTER the
     // post-run audits (so `failed` judges against the final, audited
     // violation snapshot — an invariant demoted to Fail by a

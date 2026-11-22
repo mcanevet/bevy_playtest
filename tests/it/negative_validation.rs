@@ -120,7 +120,7 @@ fn empty_synthetic_keyboard_still_rejects_without_passive() {
 
 /// `"passive": true` permits the empty input lists: observe-only
 /// scenarios become expressible instead of unparseable. The
-/// dogfooding shape (doom-fps round 1): judge a boot/menu/attract
+/// authoring shape this guards: judge a boot/menu/attract
 /// screen with no inputs at all.
 #[test]
 fn passive_allows_empty_synthetic_keyboard() {
