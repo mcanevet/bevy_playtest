@@ -253,7 +253,7 @@ impl BatteryConfig {
     /// built-in battery scenario ([`BUILTIN_BATTERY`]), the standard
     /// [`DEFAULT_TIMEOUT_SECS`] kill switch, and no seed override
     /// (the scenario's declared seed is honored). The constructor
-    /// counterpart to [`ProbePoolConfig::new`]: an associated
+    /// counterpart to [`ProbePoolConfig::new`](crate::discovery::probe_pool::ProbePoolConfig::new): an associated
     /// function, deliberately NOT a `Default` impl — `binary` has
     /// no sensible default, so the type stays
     /// explicit-construction-only while the common path gets

@@ -12,7 +12,7 @@
 //!
 //! The accumulators live in their own [`HeldBookkeeping`] ECS
 //! resource, deliberately SEPARATE from
-//! [`crate::invariant_eval::WatchedResources`]/[`WatchedInvariants`]:
+//! [`crate::invariant_eval::WatchedResources`]/[`crate::invariant_eval::WatchedInvariants`]:
 //! the existing watched state encodes verdict logic (episode firing,
 //! budget resets, earliest-held doctrine), while this module owns
 //! only additive, per-invariant descriptive statistics. Keeping them

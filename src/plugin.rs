@@ -16,7 +16,7 @@
 //! When the env var is absent the plugin is inert: no runner swap, no
 //! resources, no systems, no env reads past the one `var_os` check.
 //!
-//! With [`ENV_LINT`](crate::plugin::ENV_LINT) also set, the takeover
+//! With [`ENV_LINT`] also set, the takeover
 //! LINTS the scenario instead of running it: every config error is
 //! collected and reported at once (never first-error-only), the
 //! report is written, and the process exits 0 (coherent config) or
