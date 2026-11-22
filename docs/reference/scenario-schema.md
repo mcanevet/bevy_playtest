@@ -513,8 +513,15 @@ Two distinct error classes, at different stages:
   (e.g. `"coins"`, `"score[0]"` — see [Paths to numeric
   leaves](#paths-to-numeric-leaves)), and compares it against a
   numeric `value` with `check` (`lt`/`le`/`gt`/`ge`/`equals`/`ne`).
+  NOTE on spelling when grepping reports: the schema accepts the
+  word forms (`le`, `ge`, `lt`, `gt`), but violation details RENDER
+  the comparison with its symbol (`<=`, `>=`, `<`, `>` — `equals`
+  and `ne` render as `==`/`!=`) — a `resource_check` miss reads
+  `Scoreboard.home = 1.000 violates <= 2.000`, never
+  `violates le 2.000`. Authors writing test needles (or greps)
+  against report detail strings must use the rendered symbol
+  spelling, not the schema spelling.
   Without `eventually_s` the predicate must hold every frame where
-  the resource was present; with `eventually_s: N` it must hold at
   least once within N seconds of the run start (the deadline must
   be positive, finite, and ≤ `duration_s`). Resources are the
   natural home for economy/score invariants: a coin total that goes
