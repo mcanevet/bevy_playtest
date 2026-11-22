@@ -2,10 +2,6 @@
 
 ## [Unreleased]
 
-### Added
-
-- *(takeover)* lint mode: `BEVY_PLAYTEST_LINT=1` aggregates every scenario validation error in one pass instead of surfacing them one full run at a time; scenario rejections in normal runs now hint at the flag
-
 ## [0.14.0](https://github.com/mcanevet/bevy_playtest/compare/v0.13.0...v0.14.0) - 2026-11-22
 
 ### Added
