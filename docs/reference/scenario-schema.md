@@ -27,6 +27,10 @@ scripted-input families, and every class of load-time rejection.
       "mouse_buttons": ["Left", "Right"]   // default: all three primary buttons
     },
     "explore": true               // optional, chaos only: exploring bot (see below)
+    "passive": true               // optional, any bot: emit NO inputs — intentional
+                                   // observe-only run; permits the empty input lists
+                                   // (which otherwise reject) and rejects any declared
+                                   // inputs alongside it
   },
   "tps": number,                  // default 60; range 1..=1000
   "simulated_time": boolean,      // default true

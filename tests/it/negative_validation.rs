@@ -100,8 +100,85 @@ fn removed_surface_kinds_reject_at_parse_time() {
 }
 
 // ---------------------------------------------------------------------------
-// Oracle selection
+// Passive mode: the observe-only escape hatch
 // ---------------------------------------------------------------------------
+
+/// Without the opt-in, the empty-input guard keeps firing (an empty
+/// synthetic_keyboard is usually a typo, not an intent).
+#[test]
+fn empty_synthetic_keyboard_still_rejects_without_passive() {
+    let json = minimal_scenario("synthetic_keyboard");
+    let s = parse(json);
+    assert!(
+        matches!(validate_scenario(&s), Err(ScenarioError::Rejected(msg))
+            if msg.contains("\"passive\": true")),
+        "empty synthetic_keyboard must keep rejecting and must point at \
+         the escape hatch: {:?}",
+        validate_scenario(&s)
+    );
+}
+
+/// `"passive": true` permits the empty input lists: observe-only
+/// scenarios become expressible instead of unparseable. The
+/// dogfooding shape (doom-fps round 1): judge a boot/menu/attract
+/// screen with no inputs at all.
+#[test]
+fn passive_allows_empty_synthetic_keyboard() {
+    let mut json = minimal_scenario("synthetic_keyboard");
+    json["bot"]["passive"] = serde_json::json!(true);
+    let s = parse(json);
+    assert!(
+        validate_scenario(&s).is_ok(),
+        "passive must permit an observe-only run: {:?}",
+        validate_scenario(&s)
+    );
+}
+
+/// Passive chaos: an empty surface opts into observation instead of the
+/// vacuous-bot rejection.
+#[test]
+fn passive_allows_empty_chaos_surface() {
+    let mut json = minimal_scenario("chaos");
+    json["bot"]["raw_surface"] = serde_json::json!({ "keys": [], "mouse_buttons": [] });
+    json["bot"]["passive"] = serde_json::json!(true);
+    let s = parse(json);
+    assert!(
+        validate_scenario(&s).is_ok(),
+        "passive must permit a no-surface chaos run: {:?}",
+        validate_scenario(&s)
+    );
+}
+
+/// Reserved-surface honesty: passive promises no inputs, so declared
+/// inputs alongside it are a contradiction that must reject, never
+/// parse and be silently skipped.
+#[test]
+fn passive_with_scripted_inputs_rejects() {
+    // synthetic_keyboard with a declared key press.
+    let mut json = minimal_scenario("synthetic_keyboard");
+    json["bot"]["passive"] = serde_json::json!(true);
+    json["bot"]["key_presses"] =
+        serde_json::json!([{ "frame": 0, "key": "Space", "hold_frames": 1 }]);
+    let s = parse(json);
+    match validate_scenario(&s) {
+        Err(ScenarioError::Rejected(msg)) => {
+            assert!(msg.contains("passive"), "{msg}")
+        }
+        other => panic!("passive + key_presses must reject: {other:?}"),
+    }
+
+    // chaos with a declared surface.
+    let mut json = minimal_scenario("chaos");
+    json["bot"]["passive"] = serde_json::json!(true);
+    json["bot"]["raw_surface"] = serde_json::json!({ "keys": ["Space"], "mouse_buttons": [] });
+    let s = parse(json);
+    match validate_scenario(&s) {
+        Err(ScenarioError::Rejected(msg)) => {
+            assert!(msg.contains("passive"), "{msg}")
+        }
+        other => panic!("passive + raw_surface must reject: {other:?}"),
+    }
+}
 
 /// `"oracles": []` parses to "run all" — the same meaning as `None`. A
 /// user writing `[]` almost certainly intends "none", which is not

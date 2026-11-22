@@ -315,6 +315,12 @@ fn chaos_bot_system(
     if !state.frame.is_multiple_of(interval) {
         return;
     }
+    // Passive opt-in: the bot promised no inputs — emit none (the
+    // empty-surface arms below cover declared-surface passivity;
+    // this covers the default-surface case).
+    if scenario.0.bot.passive {
+        return;
+    }
     // Explore mode: the keyboard presses on its own tick only (see
     // `explorer::HIT_CREDIT_FRAMES`), or borrows the mouse's tick while a
     // drag holds the mouse (declared keys only then: a probe could never
@@ -1123,6 +1129,12 @@ fn chaos_mouse_system(
     }
 
     if hold_state.chaos_pending.is_some() || !state.frame.is_multiple_of(interval) {
+        return;
+    }
+    // Passive opt-in: the bot promised no inputs — emit none (the
+    // empty-surface arm below covers declared-surface passivity;
+    // this covers the default-surface case).
+    if scenario.0.bot.passive {
         return;
     }
     // Explore mode: the mouse presses on its own tick, or takes the
