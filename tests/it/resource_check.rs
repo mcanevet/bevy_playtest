@@ -1686,3 +1686,185 @@ fn conflicting_declared_rates_on_one_driver_reject() {
         "conflicting rates must reject: {err}"
     );
 }
+
+/// The rate-consistency key normalizes to the FINAL path segment:
+/// a full-path declaration and a short-name declaration name the
+/// SAME driver leaf, so conflicting rates through that alias must
+/// still reject (raw-string keying would let them smuggle past).
+#[test]
+fn conflicting_declared_rates_through_full_path_alias_reject() {
+    let _slot = common::run_slot();
+    let json = r#"{"bot":{"type":"chaos","seed":42},"duration_s":4.0,"tps":60,
+        "invariants":[
+          {"name":"a","rule":"stagnant_resource","resource":"R","path":"x",
+           "driver_resource":"my_game::clock::TickCount","driver_path":"ticks",
+           "window_s":10.0,"driver_units_per_second":20.0},
+          {"name":"b","rule":"stagnant_resource","resource":"Q","path":"z",
+           "driver_resource":"TickCount","driver_path":"ticks","window_s":10.0,
+           "driver_units_per_second":60.0}
+        ]}"#;
+    let scenario: bevy_playtest::scenario::Scenario = serde_json::from_str(json).unwrap();
+    let err = bevy_playtest::scenario::validate_scenario(&scenario).unwrap_err();
+    assert!(
+        err.to_string().contains("one driver leaf has one rate"),
+        "aliased conflicting rates must reject: {err}"
+    );
+}
+
+/// Load-time exact fit is ACCEPTED: window/rate == duration_s sits
+/// inside the strict-greater rejection, so a window that elapses
+/// precisely as the run ends loads cleanly.
+#[test]
+fn declared_rate_exact_fit_loads() {
+    let _slot = common::run_slot();
+    let scenario = scenario_with_invariants(
+        r#"
+    "name": "exact_fit",
+    "rule": "stagnant_resource",
+    "resource": "R",
+    "path": "x",
+    "driver_path": "y",
+    "window_s": 80.0,
+    "driver_units_per_second": 20.0"#,
+    );
+    // Suite scale: duration is 4 s, 80 units at 20/s = 4.0 s exactly.
+    bevy_playtest::scenario::validate_scenario(&scenario)
+        .expect("exact fit must load: 80/20 == duration 4.0");
+}
+
+/// Runtime boundary: total driver advance EXACTLY equal to the
+/// window is the deliberate in-between — the stagnation oracle
+/// fires strictly greater (`budget > window`), the elision audit
+/// fires strictly less (`advance < window`), so equality yields a
+/// silent pass with neither finding nor note. Pinned so the two
+/// strict comparisons cannot silently become inclusive.
+#[test]
+fn total_advance_exactly_equal_to_window_passes_silently() {
+    let _slot = common::run_slot();
+    // Hand-built app: the clock advances EXACTLY 1.0/frame in f32
+    // (integer-valued arithmetic cannot wobble), and the harness's
+    // oracle samples once per frame, observing N deltas over a run
+    // of N frames. window == N (239 observed frames worth of advance
+    // in the suite's 4 s / 60 tps run) puts total advance exactly AT
+    // the window: the oracle's `budget > window` never fires and the
+    // audit's `advance < window` never fires — the deliberate
+    // silent-pass boundary between the two strict comparisons.
+    let mut app = App::new();
+    app.register_type::<RcScoreboard>();
+    app.register_type::<RcMatchClock>();
+    app.register_type::<Transform>();
+    app.insert_resource(RcScoreboard::default());
+    app.insert_resource(RcMatchClock::default());
+    app.add_systems(Update, |mut clock: ResMut<RcMatchClock>| {
+        clock.elapsed_s += 1.0;
+    });
+    app.add_systems(Update, wander_players);
+    app.world_mut().spawn(Transform::from_xyz(0.0, 1.0, 0.0));
+    let report = run_scenario(
+        &mut app,
+        &scenario_with_invariants(
+            r#"
+    "name": "boundary",
+    "rule": "stagnant_resource",
+    "resource": "RcScoreboard",
+    "path": "home",
+    "driver_resource": "RcMatchClock",
+    "driver_path": "elapsed_s",
+    "window_s": 239.0"#,
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        report.status,
+        bevy_playtest::enums::PlaytestStatus::Pass,
+        "violations: {:?}",
+        report
+            .violations
+            .iter()
+            .map(|v| format!("{}|{}|{}", v.rule, v.target, v.detail))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !report
+            .violations
+            .iter()
+            .any(|v| v.rule == "stagnant_resource"),
+        "advance == window must not fire: {:?}",
+        report
+            .violations
+            .iter()
+            .map(|v| format!("{}|{}|{}", v.rule, v.target, v.detail))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !report
+            .violations
+            .iter()
+            .any(|v| v.rule == "window_unelapsed"),
+        "advance == window must not emit the unelapsed note either: {:?}",
+        report
+            .violations
+            .iter()
+            .map(|v| format!("{}|{}|{}", v.rule, v.target, v.detail))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// NaN declared rates reject at load — the fit arithmetic must not
+/// silently swallow a NaN comparison. (Built programmatically:
+/// JSON cannot spell NaN.)
+#[test]
+fn declared_nan_rate_rejects() {
+    let _slot = common::run_slot();
+    let mut scen = scenario_with_invariants(
+        r#"
+    "name": "a",
+    "rule": "stagnant_resource",
+    "resource": "R",
+    "path": "x",
+    "driver_path": "y",
+    "window_s": 10.0,
+    "driver_units_per_second": 20.0"#,
+    );
+    scen.invariants[0].driver_units_per_second = Some(f32::NAN);
+    let err = bevy_playtest::scenario::validate_scenario(&scen).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("driver_units_per_second must be a finite number"),
+        "NaN rate must reject: {err}"
+    );
+}
+
+/// Frozen driver + window_unelapsed: the never-advanced audit DOES
+/// attach its informational note (total_advance == 0.0 < window),
+/// with the frozen-aware wording — and still never gates the run.
+#[test]
+fn frozen_driver_window_unelapsed_note_pins_frozen_wording() {
+    let _slot = common::run_slot();
+    let mut frozen = App::new();
+    frozen.register_type::<RcScoreboard>();
+    frozen.register_type::<RcMatchClock>();
+    frozen.register_type::<Transform>();
+    frozen.insert_resource(RcScoreboard::default());
+    frozen.insert_resource(RcMatchClock::default());
+    frozen.add_systems(Update, wander_players);
+    frozen.world_mut().spawn(Transform::from_xyz(0.0, 1.0, 0.0));
+    let report = run_scenario(&mut frozen, &scenario_with_invariants(STAGNANT_SCORE)).unwrap();
+    let note = report
+        .violations
+        .iter()
+        .find(|v| v.rule == "window_unelapsed")
+        .expect("frozen driver must carry the window_unelapsed note");
+    assert!(
+        note.detail.contains("never advanced"),
+        "frozen wording must say the driver never advanced: {}",
+        note.detail
+    );
+    assert!(
+        note.detail.contains("frozen or paused"),
+        "frozen wording must name the pause hypothesis: {}",
+        note.detail
+    );
+    // Informational: the run passes despite the note.
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+}

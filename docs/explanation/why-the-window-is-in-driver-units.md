@@ -2,8 +2,9 @@
 
 The `stagnant_resource` window (`window_s`) is consumed in the
 **driver leaf's own unit**, never converted to wall seconds — and
-until 0.14.1 the loader pretended otherwise. This page records the
-trap, the fix, and what a scenario author must know when migrating.
+until the 0.15 line the loader pretended otherwise. This page records
+the trap, the fix, and what a scenario author must know when
+migrating.
 
 ## The trap
 
