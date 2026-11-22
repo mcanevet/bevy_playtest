@@ -42,9 +42,9 @@
 //!   from the per-episode `driver_elapsed` budget, which resets
 //!   every episode: the run-total answers "how much time did the
 //!   clock actually spend moving this run". A parallel run-total
-//!   accumulator may appear in the window rework (spec §1) inside
-//!   the watched state; integration will reconcile the two, which is
-//!   exactly why this lives in its own module.
+//!   accumulator may appear in a future window-semantics rework
+//!   inside the watched state; integration will reconcile the two,
+//!   which is exactly why this lives in its own module.
 //! - `met_at_frame`/`deadline_frame`: eventually-mode only, mirroring
 //!   the audited deadline formula `(eventually_s * tps).ceil()`.
 //!
