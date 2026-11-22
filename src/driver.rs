@@ -43,7 +43,11 @@ pub struct RunChoices(pub(crate) crate::choice::ChoiceStream);
 // Panic hook (global, one-time install via core's sinks)
 // ---------------------------------------------------------------------------
 
-fn install_panic_hook() {
+/// Install the crash-capturing panic hook (idempotent). Shared by
+/// the driven run (`run_scenario`) and lint mode's warm-up frame so a
+/// boot panic produces a report in both modes, never a bare exit-101
+/// crash.
+pub(crate) fn install_panic_hook() {
     sinks::install_panic_hook();
 }
 

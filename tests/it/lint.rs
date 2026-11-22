@@ -488,3 +488,177 @@ fn lint_e2e_stage2_component_check_clean_on_startup_entity() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+// ---------------------------------------------------------------------------
+// Stage-2 e2e: the warm-up-frame instance doctrines
+// ---------------------------------------------------------------------------
+
+/// The game for the instance-doctrine tests: ships a reflected
+/// component that is registered but NEVER spawned (`GhostArmor`)
+/// and one that the Startup schedule does spawn (`SpawnedMarker`,
+/// field `0`).
+fn unspawned_game_binary() -> PathBuf {
+    let path = PathBuf::from(env!("CARGO_BIN_EXE_takeover_demo_unspawned"));
+    assert!(path.is_file(), "demo binary missing: {path:?}");
+    path
+}
+
+fn spawn_unspawned_game_lint_child(
+    scenario_contents: &str,
+    dir: &std::path::Path,
+    tag: &str,
+) -> (std::process::Output, PathBuf) {
+    let scenario_path = dir.join(format!("{tag}.json"));
+    let report_path = dir.join(format!("{tag}.report.json"));
+    std::fs::write(&scenario_path, scenario_contents).unwrap();
+    let out = Command::new(unspawned_game_binary())
+        .env_remove(ENV_SCENARIO)
+        .env_remove(ENV_REPORT)
+        .env_remove(ENV_LINT)
+        .env(ENV_SCENARIO, scenario_path.to_str().unwrap())
+        .env(ENV_REPORT, report_path.to_str().unwrap())
+        .env(ENV_LINT, "1")
+        .output()
+        .expect("spawn unspawned-game lint child");
+    (out, report_path)
+}
+
+/// A registered component with ZERO instances is never a lint
+/// finding — absence is not an error, the entities may spawn after
+/// the warm-up frame. The definitive absence test for the doctrine
+/// the docs lead with.
+#[test]
+fn lint_e2e_stage2_registered_but_unspawned_component_lints_clean() {
+    let _slot = common::run_slot();
+    let dir = unique_dir("e2e_s2_unspawned_clean");
+    let (out, report_path) = spawn_unspawned_game_lint_child(
+        r#"{"bot":{"type":"chaos","seed":42},"duration_s":1.0,"tps":60,
+            "invariants":[{"name":"ghost_watch","rule":"component_check",
+                           "target_selector":{"with_component":{"name":"GhostArmor"}},
+                           "path":"0","check":"gt","value":-1.0}]}"#,
+        &dir,
+        "s2_unspawned_clean",
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(exit_code::PASS),
+        "zero instances must lint clean: stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
+    assert_eq!(report["status"], "pass", "{report}");
+}
+
+/// The NodesInBounds probe arm: a stage-1-clean
+/// `nodes_in_bounds` whose with_component names an unknown type is
+/// caught by the registry probe, not deferred to the first run.
+#[test]
+fn lint_e2e_stage2_nodes_in_bounds_unknown_selector_is_a_finding() {
+    let _slot = common::run_slot();
+    let dir = unique_dir("e2e_s2_nib_unknown");
+    let (out, report_path) = spawn_unspawned_game_lint_child(
+        r#"{"bot":{"type":"chaos","seed":42},"duration_s":1.0,"tps":60,
+            "invariants":[{"name":"bounds","rule":"nodes_in_bounds",
+                           "target_selector":{"with_component":{"name":"NoSuchMarker"}},
+                           "min_x":-10.0,"max_x":10.0}]}"#,
+        &dir,
+        "s2_nib_unknown",
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(exit_code::FAIL),
+        "unknown selector must exit 1: stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
+    assert_eq!(report["status"], "fail", "{report}");
+    assert!(
+        report["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v["rule"] == "lint_finding"
+                && v["detail"]
+                    .as_str()
+                    .is_some_and(|d| d.contains("NoSuchMarker"))),
+        "the finding must name the unknown selector: {report}"
+    );
+}
+
+/// A `nodes_in_bounds` scenario whose selector matches zero entities
+/// at the warm-up frame lints clean: the probe registers nothing to
+/// report — with_component bounds checks are vacuously satisfiable
+/// when no entity matches yet (entities may spawn later), exactly
+/// like a never-inserted resource.
+#[test]
+fn lint_e2e_stage2_nodes_in_bounds_zero_matches_lints_clean() {
+    let _slot = common::run_slot();
+    let dir = unique_dir("e2e_s2_nib_zero");
+    let (out, _report_path) = spawn_unspawned_game_lint_child(
+        r#"{"bot":{"type":"chaos","seed":42},"duration_s":1.0,"tps":60,
+            "invariants":[{"name":"bounds","rule":"nodes_in_bounds",
+                           "target_selector":{"with_component":{"name":"GhostArmor"}},
+                           "min_x":-10.0,"max_x":10.0}]}"#,
+        &dir,
+        "s2_nib_zero",
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(exit_code::PASS),
+        "zero matched bounds entities must lint clean: stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Stage 1 firing suppresses stage 2 — and that is report-visible,
+/// not silent: a scenario with BOTH a stage-1 error (missing
+/// `check` on a component_check) and a stage-2 error (a typo'd
+/// selector in a different, stage-1-clean invariant) reports the
+/// stage-1 finding and defers the probe. The author fixes the first
+/// batch and re-lints to discover the second, exactly as documented.
+#[test]
+fn lint_e2e_stage1_findings_defer_the_probe() {
+    let _slot = common::run_slot();
+    let dir = unique_dir("e2e_s2_gated");
+    let (out, report_path) = spawn_unspawned_game_lint_child(
+        r#"{"bot":{"type":"chaos","seed":42},"duration_s":1.0,"tps":60,
+            "invariants":[
+              {"name":"shape_broken","rule":"component_check",
+               "target_selector":{"with_component":{"name":"SpawnedMarker"}}},
+              {"name":"typo_selector","rule":"nodes_in_bounds",
+               "target_selector":{"with_component":{"name":"NoSuchMarker"}},
+               "min_x":-10.0,"max_x":10.0}]}"#,
+        &dir,
+        "s2_gated",
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(exit_code::FAIL),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
+    let violations = report["violations"].as_array().unwrap();
+    // The stage-1 finding rides; the stage-2 typo is DEFERRED
+    // (absent) — documented staged disclosure.
+    assert!(
+        violations.iter().any(|v| v["rule"] == "lint_finding"
+            && v["detail"]
+                .as_str()
+                .is_some_and(|d| d.contains("shape_broken"))),
+        "stage-1 finding must ride: {report}"
+    );
+    assert!(
+        !violations.iter().any(|v| v["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("NoSuchMarker"))),
+        "stage-2 probe must be deferred while stage 1 fires: {report}"
+    );
+}
