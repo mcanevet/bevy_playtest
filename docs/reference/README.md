@@ -4,7 +4,9 @@ Public API surface for integrators.
 
 - [Scenario (JSON schema)](scenario-schema.md) — the full grammar:
   bot types, liveness, invariants, chaos mouse/keyboard behavior,
-  and every class of load-time rejection
+  path and driver authoring (composite leaf paths, engine clock
+  drivers, opaque leaves, window units), and every class of
+  load-time rejection
 - [Oracles](#oracles) — what watches a run, and each rule's evidence
   and honest boundary
 - [Report](report.md) — every `PlaytestReport` JSON field, what each
@@ -156,3 +158,21 @@ Public API surface for integrators.
 ## Compatibility
 
 Targets Bevy 0.20.
+
+## Keeping this reference current
+
+These pages document the shipped grammar, not a plan. Two
+disciplines keep them from drifting:
+
+- The scenario reference carries an **applies-to stamp**; update the
+  stamp — and the page — in the same PR that changes the behavior it
+  documents, the same rule the changelog follows. A released rule
+  whose documented example no longer loads is a bug.
+- Every strict JSON example in these pages is **parsed and
+  validated against the current grammar** by a CI test
+  (`doc_examples`), so prose examples cannot rot silently. Mark a
+  fence that is illustrative-only with `<!-- doc-lint: skip -->` and
+  one that teaches a load rejection with
+  `<!-- doc-lint: rejected -->` (renders unchanged in markdown).
+  Quoted failure texts are not machine-checked; keep them short and
+  grep-distinctive so drift is easy to spot.
