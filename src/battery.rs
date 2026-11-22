@@ -220,8 +220,10 @@ pub fn run(binary: &str, scenario: &str) -> Result<PlaytestReport, BatteryError>
 ///
 /// NOTE: deliberately NOT `Default` — the `binary` field has no
 /// sensible default (an empty path can only ever fail to spawn).
-/// Construct explicitly; `run`/`run_and_expect_clean` cover the
-/// common paths.
+/// Construct explicitly, via [`BatteryConfig::new`] (built-in
+/// battery, default timeout, honoring the scenario's seed), or the
+/// per-field literals; `run`/`run_and_expect_clean` cover the common
+/// paths.
 #[derive(Debug, Clone)]
 pub struct BatteryConfig {
     /// Path to the feature-enabled game binary
@@ -244,6 +246,26 @@ pub struct BatteryConfig {
     /// `BEVY_PLAYTEST_SCENARIO=battery BEVY_PLAYTEST_SEED=<seed> cargo run --features playtest --bin <game>`
     /// approximates it without the key layering and the randomness.
     pub seed_override: Option<u64>,
+}
+
+impl BatteryConfig {
+    /// Config for a default battery run against `binary`: the
+    /// built-in battery scenario ([`BUILTIN_BATTERY`]), the standard
+    /// [`DEFAULT_TIMEOUT_SECS`] kill switch, and no seed override
+    /// (the scenario's declared seed is honored). The constructor
+    /// counterpart to [`ProbePoolConfig::new`]: an associated
+    /// function, deliberately NOT a `Default` impl — `binary` has
+    /// no sensible default, so the type stays
+    /// explicit-construction-only while the common path gets
+    /// convenient.
+    pub fn new(binary: impl Into<String>) -> Self {
+        Self {
+            binary: binary.into(),
+            scenario: BUILTIN_BATTERY.to_string(),
+            timeout_secs: DEFAULT_TIMEOUT_SECS,
+            seed_override: None,
+        }
+    }
 }
 
 /// Battery failure modes that are NOT game findings (infrastructure
