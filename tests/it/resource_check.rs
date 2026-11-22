@@ -1228,3 +1228,140 @@ fn window_boundary_is_strictly_greater() {
         entry.detail
     );
 }
+
+// ---------------------------------------------------------------------------
+// oracle_error count semantics (spec 0.14.1 §3 / reproducer R4)
+// ---------------------------------------------------------------------------
+
+/// R4, quoted from the spec corpus: one typo'd path under
+/// `resource_check` used to inflate `count` to the frame count
+/// (observed: `count: 300` on the spec's 5 s run; onze's 20 s runs
+/// hit 1200). Under the once-per-error-class doctrine the entry is
+/// reported exactly once per frame of the run it was present on,
+/// `count` pinned to 1, and the recurrence folded into the detail.
+///
+/// The spec quotes overmind's real resource (`overmind::economy::
+/// Economy.path: "lumens"`); this suite's twin shape is the
+/// `RcEconomy` fixture with the same typo (`"lumens"` for
+/// `"lumen"`) — the dogfooded path that produced the finding.
+#[test]
+fn r4_one_typo_path_is_counted_once_not_per_frame() {
+    let _slot = common::run_slot();
+    let mut app = economy_app(freeze_economy);
+    let report = run_scenario(
+        &mut app,
+        &scenario_with_invariants(
+            r#"
+    "name": "typo_path",
+    "rule": "resource_check",
+    "resource": "RcEconomy",
+    "path": "lumens",
+    "check": "ge",
+    "value": 0"#,
+        ),
+    )
+    .unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
+    let entry = report
+        .violations
+        .iter()
+        .find(|v| v.rule == "oracle_error" && v.target == "typo_path")
+        .expect("oracle_error targeting typo_path");
+    // THE fix: one authoring mistake, one count — not one per frame
+    // (the 240-frame duration here used to yield count: 240).
+    assert_eq!(
+        entry.count, 1,
+        "a static config error must not inflate count per frame: {entry:?}"
+    );
+    assert_eq!(entry.first_frame, 0);
+    // Recurrence is folded into the detail: the entry spans the whole
+    // run and says so, exactly once.
+    assert!(
+        entry
+            .detail
+            .contains("present every frame, frames 0\u{2013}239; counted once"),
+        "recurrence must be folded into the detail: {}",
+        entry.detail
+    );
+    // The noun fix rides along: resource_check errors say "resource",
+    // not the leaked "component".
+    assert!(
+        entry.detail.contains("does not resolve on this resource"),
+        "resource_check path errors must name the resource noun: {}",
+        entry.detail
+    );
+    assert!(
+        !entry.detail.contains("does not resolve on this component"),
+        "the old component-noun leak must be gone: {}",
+        entry.detail
+    );
+}
+
+/// A config error that onsets mid-run (driver resource appears only
+/// partway through) is still counted once per error class; two
+/// distinct mistakes on ONE invariant stay two findings — the
+/// dedup key is (invariant, error class), never invariant alone.
+#[test]
+fn two_distinct_config_errors_on_one_invariant_are_two_findings() {
+    let _slot = common::run_slot();
+    let mut app = match_app();
+    let report = run_scenario(
+        &mut app,
+        &scenario_with_invariants(
+            r#"
+    "name": "twice_bad",
+    "rule": "resource_check",
+    "resource": "NoSuchResource",
+    "path": "x",
+    "check": "ge",
+    "value": 0"#,
+        ),
+    )
+    .unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
+    let entries: Vec<_> = report
+        .violations
+        .iter()
+        .filter(|v| v.rule == "oracle_error" && v.target == "twice_bad")
+        .collect();
+    // One distinct error (unknown resource, every frame) → exactly
+    // one entry, counted once, recurrence folded.
+    assert_eq!(
+        entries.len(),
+        1,
+        "one error class must be one finding: {entries:?}"
+    );
+    assert_eq!(entries[0].count, 1);
+}
+
+/// The bounds recorder (`nodes_in_bounds` with a `with_component`
+/// selector) gets the same once-guard: an unregistered selector
+/// component names the invariant, fails the run, and is counted
+/// once — never once per frame.
+#[test]
+fn bounds_recorder_config_error_is_counted_once() {
+    let _slot = common::run_slot();
+    let mut app = match_app();
+    let report = run_scenario(
+        &mut app,
+        &scenario_with_invariants(
+            r#"
+    "name": "bounds_typo",
+    "rule": "nodes_in_bounds",
+    "target_selector": {"with_component": {"name": "NoSuchMarker"}},
+    "min_x": -1.0, "max_x": 1.0, "min_y": -1.0, "max_y": 1.0,
+    "min_z": -1.0, "max_z": 1.0"#,
+        ),
+    )
+    .unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
+    let entry = report
+        .violations
+        .iter()
+        .find(|v| v.rule == "oracle_error" && v.target == "bounds_typo")
+        .expect("oracle_error targeting bounds_typo");
+    assert_eq!(
+        entry.count, 1,
+        "bounds-recorder config error counted once: {entry:?}"
+    );
+}

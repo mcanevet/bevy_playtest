@@ -2654,6 +2654,38 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         status = PlaytestStatus::Fail;
     }
 
+    // oracle_error recurrence annotation: config-class errors are
+    // reported once per distinct error class (invariant_eval), but
+    // their entry's first/last frame still spans every frame the
+    // mistake was observed. Fold that span into the detail (spec §3
+    // wording) so the once-count is self-explaining: `count: 1` with
+    // "present every frame, frames 0–299; counted once" — recurrence
+    // documented, not inflated. Scope: entries that went through
+    // the once-guard (tracked in `oracle_error_seen`) — NOT the
+    // NaN-family oracle_errors, which may onset mid-run and already
+    // carry their own "later samples" clause. Entries with count > 1
+    // carry TWO distinct error classes on one invariant (each
+    // counted once); leave their details as-is.
+    let was_deduped = |target: &str| {
+        watched
+            .oracle_error_seen
+            .iter()
+            .chain(watched_resources.oracle_error_seen.iter())
+            .any(|k| k.starts_with(target) && k.as_bytes().get(target.len()) == Some(&1))
+    };
+    for v in snap.iter_mut() {
+        if v.rule == crate::rules::Rule::OracleError.name()
+            && v.count == 1
+            && was_deduped(&v.target)
+        {
+            v.detail.push_str(&format!(
+                " (present every frame, frames {}\u{2013}{}; counted once)",
+                v.first_frame, v.last_frame
+            ));
+            v.last_detail.push_str(" (counted once)");
+        }
+    }
+
     // Progress-liveness post-run audit: per-window verdicts need the
     // FULL sample series, not any single frame (same doctrine as the
     // component_check audit above). Escalation of

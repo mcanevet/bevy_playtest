@@ -42,6 +42,76 @@ use crate::driver::{RunState, RunViolations};
 use crate::enums::{InvariantRule, TargetSelector};
 use crate::scenario::Invariant;
 
+/// Report a static authoring failure (`oracle_error`) once per
+/// distinct error class, folding recurrence into the entry instead
+/// of inflating `count` (dogfood finding: one typo'd path produced
+/// `count: 300` on a 5 s run — the mechanism behind a 1200-count
+/// report on a 20 s run elsewhere). A config error is a property of
+/// the SCENARIO, not of time: `count` stays 1 and the entry's
+/// `last_frame` advances so the report still shows the failure's
+/// full span.
+///
+/// `error_class` is the message with dynamic values elided (digits,
+/// entity ids, frames — the interpolations that differ between
+/// frames of the SAME mistake) via [`error_class_of`]. Words, path
+/// strings, type names and punctuation carry the mistake's
+/// identity, so two genuinely different mistakes on one invariant
+/// stay two findings, each reported once.
+fn report_config_error_once(
+    violations: &mut crate::state::Violations,
+    seen: &mut std::collections::HashSet<String>,
+    inv_name: &str,
+    detail: &str,
+    frame: u64,
+) {
+    let key = format!("{inv_name}\u{1}{}", error_class_of(detail));
+    if !seen.insert(key) {
+        // Recurrence of the same error class: fold. Push last_frame
+        // forward so the entry spans the failure; leave count and
+        // first_detail alone — they already tell the story once.
+        if let Some(entry) = violations.entries.get_mut(&(
+            crate::rules::Rule::OracleError.name().to_string(),
+            inv_name.to_string(),
+        )) {
+            entry.last_frame = entry.last_frame.max(frame);
+        }
+        return;
+    }
+    violations.report(
+        crate::rules::Rule::OracleError.name(),
+        inv_name,
+        detail.to_string(),
+        frame,
+    );
+}
+
+/// Elide the dynamic interpolations from an `oracle_error` detail so
+/// the SAME authoring mistake produces ONE error class across the
+/// frames it recurs on (the dedup key for
+/// [`report_config_error_once`]). Digits (numbers, thresholds,
+/// offsets), entity ids and frame indices all vary between frames
+/// of one mistake; words, path strings, type names and punctuation
+/// carry the mistake's identity. Alphabetic tokens are preserved
+/// exactly; every maximal run of digits becomes a single `#`
+/// placeholder (so `entity 3v1` and `entity 12v4` are one class,
+/// while any word difference yields a different class).
+fn error_class_of(detail: &str) -> String {
+    let mut class = String::with_capacity(detail.len());
+    let mut in_digits = false;
+    for c in detail.chars() {
+        if c.is_ascii_digit() {
+            if !in_digits {
+                class.push('#');
+                in_digits = true;
+            }
+        } else {
+            in_digits = false;
+            class.push(c);
+        }
+    }
+    class
+}
+
 /// Evaluate the `nodes_in_bounds` invariants each frame. The
 /// `component_check` invariants are evaluated by
 /// [`record_component_checks`] in the driver loop; this system skips
@@ -137,6 +207,11 @@ pub struct WatchedInvariants {
     /// this invariant (drives audit-entry suppression; the
     /// `oracle_error` itself is reported during the run).
     pub config_errored: std::collections::HashSet<String>,
+    /// (invariant name, error class) pairs already reported as
+    /// `oracle_error` this run — the once-per-distinct-error dedup
+    /// that keeps static authoring failures from inflating `count`
+    /// to the frame count. See [`report_config_error_once`].
+    pub oracle_error_seen: std::collections::HashSet<String>,
 }
 
 /// One frame's evaluation result for a single `component_check`
@@ -190,15 +265,17 @@ pub fn record_bounds_with_component(world: &mut World, frame: u64) {
         return;
     }
     let Some(atr) = world.get_resource::<AppTypeRegistry>().cloned() else {
-        world.resource_scope(|world, _watched: Mut<WatchedInvariants>| {
+        world.resource_scope(|world, mut watched: Mut<WatchedInvariants>| {
             let mut violations = world.resource_mut::<RunViolations>();
             for inv in &invariants {
-                violations.0.report(
-                    crate::rules::Rule::OracleError.name(),
+                watched.config_errored.insert(inv.name.clone());
+                let why = "the game has no AppTypeRegistry: with_component bounds \
+                     checks are impossible (register types with App::register_type)";
+                report_config_error_once(
+                    &mut violations.0,
+                    &mut watched.oracle_error_seen,
                     &inv.name,
-                    "the game has no AppTypeRegistry: with_component bounds \
-                     checks are impossible (register types with App::register_type)"
-                        .to_string(),
+                    why,
                     frame,
                 );
             }
@@ -279,10 +356,11 @@ pub fn record_bounds_with_component(world: &mut World, frame: u64) {
         for (inv, config_error, checkable, witnesses) in findings {
             if let Some(why) = config_error {
                 watched.config_errored.insert(inv.name.clone());
-                violations.0.report(
-                    crate::rules::Rule::OracleError.name(),
+                report_config_error_once(
+                    &mut violations.0,
+                    &mut watched.oracle_error_seen,
                     &inv.name,
-                    format!("invariant '{}': {why}", inv.name),
+                    &format!("invariant '{}': {why}", inv.name),
                     frame,
                 );
                 continue;
@@ -457,6 +535,11 @@ pub struct WatchedResources {
     /// not also emit vacuous/deadline entries for it (N-B/N-C
     /// doctrine: never blame the game for an author-side problem).
     pub config_errored: std::collections::HashSet<String>,
+    /// (invariant name, error class) pairs already reported as
+    /// `oracle_error` this run — the once-per-distinct-error dedup
+    /// that keeps static authoring failures from inflating `count`
+    /// to the frame count. See [`report_config_error_once`].
+    pub oracle_error_seen: std::collections::HashSet<String>,
 }
 
 /// One frame's outcome for one `resource_check` invariant. Owned data
@@ -501,12 +584,13 @@ pub fn record_resource_checks(world: &mut World, frame: u64) {
             let mut violations = world.resource_mut::<RunViolations>();
             for inv in &invariants {
                 watched.config_errored.insert(inv.name.clone());
-                violations.0.report(
-                    crate::rules::Rule::OracleError.name(),
+                let why = "the game has no AppTypeRegistry: reflected resource checks are \
+                     impossible (register types with App::register_type)";
+                report_config_error_once(
+                    &mut violations.0,
+                    &mut watched.oracle_error_seen,
                     &inv.name,
-                    "the game has no AppTypeRegistry: reflected resource checks are \
-                     impossible (register types with App::register_type)"
-                        .to_string(),
+                    why,
                     frame,
                 );
             }
@@ -576,7 +660,7 @@ fn eval_resource_check(world: &World, registry: &TypeRegistry, inv: &Invariant) 
         }
         Err(why) => return err(why),
     };
-    let value = match reflect_numeric_path(resource, path) {
+    let value = match reflect_numeric_path(resource, path, "resource") {
         Ok(v) => v,
         Err(why) => return err(why),
     };
@@ -599,10 +683,15 @@ fn apply_rc_outcome(
 ) {
     if let Some(why) = &outcome.config_error {
         watched.config_errored.insert(inv.name.clone());
-        violations.0.report(
-            crate::rules::Rule::OracleError.name(),
+        // Scenario-property doctrine: once per distinct error class,
+        // never per frame (the R4 dogfood finding — one typo'd
+        // resource_check path produced `count: 300` on a 5 s run;
+        // the same mechanism scaled to 1200 on a 20 s run).
+        report_config_error_once(
+            &mut violations.0,
+            &mut watched.oracle_error_seen,
             &inv.name,
-            format!("invariant '{}': {why}", inv.name),
+            &format!("invariant '{}': {why}", inv.name),
             frame,
         );
         return;
@@ -679,12 +768,13 @@ pub fn record_component_checks(world: &mut World, frame: u64) {
             let mut violations = world.resource_mut::<RunViolations>();
             for inv in &cc_invariants {
                 watched.config_errored.insert(inv.name.clone());
-                violations.0.report(
-                    crate::rules::Rule::OracleError.name(),
+                let why = "the game has no AppTypeRegistry: reflected component checks are \
+                     impossible (register types with App::register_type)";
+                report_config_error_once(
+                    &mut violations.0,
+                    &mut watched.oracle_error_seen,
                     &inv.name,
-                    "the game has no AppTypeRegistry: reflected component checks are \
-                     impossible (register types with App::register_type)"
-                        .to_string(),
+                    why,
                     frame,
                 );
             }
@@ -728,10 +818,15 @@ fn apply_outcome(
         // run; vacuous/deadline entries on top would misattribute
         // an author-side problem to the game (N-B/N-C from review).
         watched.config_errored.insert(inv.name.clone());
-        violations.0.report(
-            crate::rules::Rule::OracleError.name(),
+        // A config error is a property of the scenario, not of
+        // time: report the first occurrence per distinct error
+        // class, never once per frame (finding: per-frame reporting
+        // inflated `count` to the frame count — 300+ per typo).
+        report_config_error_once(
+            &mut violations.0,
+            &mut watched.oracle_error_seen,
             &inv.name,
-            format!("invariant '{}': {why}", inv.name),
+            &format!("invariant '{}': {why}", inv.name),
             frame,
         );
         return;
@@ -852,12 +947,12 @@ fn eval_one(world: &World, registry: &TypeRegistry, inv: &Invariant) -> CcOutcom
         // `Camera3d` select while the check reads `translation.z`.
         // The error names BOTH attempted roots so the author can see
         // which one (or both) failed and on WHICH entity.
-        let value = reflect_numeric_path(reflect, path).or_else(|selector_err| {
+        let value = reflect_numeric_path(reflect, path, "component").or_else(|selector_err| {
             let tf_result = entity_ref
                 .get::<Transform>()
                 .map(|t| t as &dyn bevy_reflect::Reflect)
                 .ok_or_else(|| format!("entity {:?} has no Transform", entity_ref.id()))
-                .and_then(|tf| reflect_numeric_path(tf, path));
+                .and_then(|tf| reflect_numeric_path(tf, path, "component"));
             match tf_result {
                 Err(tf_err) => Err(format!(
                     "path '{path}' resolves on neither the selector component \
@@ -953,15 +1048,28 @@ fn resolve_registration<'a>(
     }
 }
 
-/// Extract a numeric leaf from a reflected component via a dotted
+/// Extract a numeric leaf from a reflected value via a dotted
 /// reflect path (`translation.z`, `health`, `velocity.x`). Floats
 /// widen to f64; integers convert losslessly; any other leaf type is
 /// an error — never silently coerced to a number.
-fn reflect_numeric_path(root: &dyn bevy_reflect::Reflect, path: &str) -> Result<f64, String> {
+///
+/// `noun` names WHAT the path resolves against in the error message —
+/// "component" for per-entity component roots (component_check and
+/// the with_component bounds recorder), "resource" for reflected
+/// resources (resource_check / stagnant_resource). Dogfood finding:
+/// resource_check errors used to say "does not resolve on this
+/// component" — true for two of the three call sites, misleading for
+/// the resource ones. The caller owns the noun; there is no
+/// blanket default to drift again.
+fn reflect_numeric_path(
+    root: &dyn bevy_reflect::Reflect,
+    path: &str,
+    noun: &str,
+) -> Result<f64, String> {
     use bevy_reflect::GetPath;
     let leaf: &dyn bevy_reflect::PartialReflect = root
         .reflect_path(path)
-        .map_err(|e| format!("path '{path}' does not resolve on this component: {e}"))?;
+        .map_err(|e| format!("path '{path}' does not resolve on this {noun}: {e}"))?;
     // Integer leaves: any width converts losslessly to f64 for the
     // magnitudes games use (up to 2^53).
     macro_rules! int_leaf {
@@ -978,8 +1086,8 @@ fn reflect_numeric_path(root: &dyn bevy_reflect::Reflect, path: &str) -> Result<
     } else {
         int_leaf!(u8, u16, u32, u64, usize, i8, i16, i32, i64, isize);
         Err(format!(
-            "path '{path}' resolves to non-numeric type '{}' — component_check compares \
-             numeric leaves only",
+            "path '{path}' resolves to non-numeric type '{}' — checks over \
+             this {noun} compare numeric leaves only",
             leaf.reflect_type_path()
         ))
     }
@@ -1148,12 +1256,13 @@ pub fn record_stagnant_resources(world: &mut World, frame: u64) {
             let mut violations = world.resource_mut::<RunViolations>();
             for inv in &invariants {
                 watched.config_errored.insert(inv.name.clone());
-                violations.0.report(
-                    crate::rules::Rule::OracleError.name(),
+                let why = "the game has no AppTypeRegistry: reflected resource checks \
+                     are impossible (register types with App::register_type)";
+                report_config_error_once(
+                    &mut violations.0,
+                    &mut watched.oracle_error_seen,
                     &inv.name,
-                    "the game has no AppTypeRegistry: reflected resource checks \
-                     are impossible (register types with App::register_type)"
-                        .to_string(),
+                    why,
                     frame,
                 );
             }
@@ -1232,13 +1341,13 @@ fn eval_stagnant_pair(world: &World, registry: &TypeRegistry, inv: &Invariant) -
         }
         Err(why) => return err(None, None, Some(why)),
     };
-    let watched = match reflect_numeric_path(resource, watched_path) {
+    let watched = match reflect_numeric_path(resource, watched_path, "resource") {
         Ok(v) => v,
         Err(why) => return err(None, None, Some(why)),
     };
     let driver = if driver_resource_name == resource_name {
         // Same resource: already resolved.
-        match reflect_numeric_path(resource, driver_path) {
+        match reflect_numeric_path(resource, driver_path, "resource") {
             Ok(v) => v,
             Err(why) => return err(Some(watched), None, Some(why)),
         }
@@ -1262,7 +1371,7 @@ fn eval_stagnant_pair(world: &World, registry: &TypeRegistry, inv: &Invariant) -
             }
             Err(why) => return err(Some(watched), None, Some(why)),
         };
-        match reflect_numeric_path(driver_resource, driver_path) {
+        match reflect_numeric_path(driver_resource, driver_path, "resource") {
             Ok(v) => v,
             Err(why) => return err(Some(watched), None, Some(why)),
         }
@@ -1285,10 +1394,11 @@ fn apply_sr_outcome(
 ) {
     if let Some(why) = &outcome.config_error {
         watched.config_errored.insert(inv.name.clone());
-        violations.0.report(
-            crate::rules::Rule::OracleError.name(),
+        report_config_error_once(
+            &mut violations.0,
+            &mut watched.oracle_error_seen,
             &inv.name,
-            format!("invariant '{}': {why}", inv.name),
+            &format!("invariant '{}': {why}", inv.name),
             frame,
         );
         return;
