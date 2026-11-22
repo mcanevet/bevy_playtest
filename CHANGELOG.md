@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+## [0.15.0](https://github.com/mcanevet/bevy_playtest/compare/v0.14.0...v0.15.0) - 2026-11-22
+
+### Added
+
+- *(scenario)* allow observe-only (passive) scenarios
+- *(dx)* BEVY_PLAYTEST_LINT aggregates scenario rejections
+- *(battery)* BatteryConfig::new constructor for the common path
+- *(report)* trace passing invariants (held_invariants section)
+
+### Fixed
+
+- *(held)* scrub remaining internal spec references
+- *(report)* recurrence annotation says recurred-across-frames, not present-every-frame
+- *(lint)* describe lint mode honestly
+- *(held)* describe the anticipated window rework in user-facing terms
+- *(report)* drop deny_unknown_fields from HeldInvariant
+- *(docs)* resolve intra-doc link errors caught by CI doc build
+- *(invariants)* list similar registered types on unknown-name resolution
+- *(invariants)* report oracle_error config failures once per error class
+
+### Other
+
+- *(it)* scrub the last internal spec reference
+- *(it)* scrub stale spec reference from lint-mode module doc
+- *(reference)* document lint-mode reports
+- *(reference)* align Opaque leaves quote with the resource/component noun message
+- *(changelog)* leave Unreleased entries to release-plz
+- scrub internal working names from comments and test fixtures
+- *(reference)* note the rendered operator spelling in report details
+- *(it)* lint doc JSON examples against the current grammar
+- *(it)* cover the documented engine clock driver rows
+- *(reference)* document path and driver authoring for resource invariants
+
 ## [0.14.0](https://github.com/mcanevet/bevy_playtest/compare/v0.13.0...v0.14.0) - 2026-11-22
 
 ### Added
