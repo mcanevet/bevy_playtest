@@ -1,8 +1,14 @@
 # Scenario (JSON schema)
 
+> Applies to: bevy_playtest 0.14.x on Bevy 0.20. Update this
+> stamp — and the page — in the same PR that changes the behavior
+> it documents.
+
 The full grammar for scenario files, the behavior of the two
 scripted-input families, and every class of load-time rejection.
 
+<!-- doc-lint: skip — the annotated grammar sketch below is
+     illustrative: field alternatives make it non-JSON on purpose -->
 ```json
 {
   "name": "string",              // [A-Za-z0-9_-] only (used in report file names)
@@ -69,6 +75,7 @@ scripted-input families, and every class of load-time rejection.
       "name": "string",
       "rule": "stagnant_resource",   // rate-form livelock catcher
       "resource": "Scoreboard",      // watched resource type
+      "path": "home",                // watched leaf: must CHANGE within window_s
       "driver_resource": "MatchClock", // optional: defaults to resource
       "driver_path": "elapsed_s",     // driver leaf: must strictly advance
       "window_s": 1.0                 // max driver advance without a change
@@ -100,6 +107,220 @@ shortcuts (`left`, `w`); unknown names are rejected at load with a
 did-you-mean suggestion. Mouse buttons accept the same tolerance
 (`Left`, `left`); valid buttons are `left`, `right`, `middle`, `back`,
 `forward`.
+
+## Paths to numeric leaves
+
+`component_check` and `resource_check` read a numeric leaf through
+`path`; `stagnant_resource` reads two — the watched `path` and the
+driver `driver_path`. A path is a `bevy_reflect` path: field names,
+nested fields, and index accesses, composed freely.
+
+| Construct | Spelling | Example |
+|---|---|---|
+| Named field | `coins` | `"path": "coins"` |
+| Nested field | `wallet.coins` | `"path": "wallet.coins"` |
+| Array / list index | `score[0]` | `"path": "score[0]"` |
+| Tuple-struct index | `0` or `.0` | `"path": "0"` |
+
+Arrays and lists use bracket syntax. Scoreboards are the classic
+case — `[u32; 2]` or `Vec<u32>`, not scalar fields — so the
+home-score leaf of a `score` array is `score[0]`, never `score.0`:
+
+```json
+{
+  "name": "score-home-nonneg",
+  "rule": "resource_check",
+  "resource": "MatchClock",
+  "path": "score[0]",
+  "check": "ge",
+  "value": 0
+}
+```
+
+Dot-indexing an array fails at evaluation — the tuple-access
+grammar is the wrong tool for an array, and bevy_reflect says so in
+its own words: `path 'score.0' does not resolve on this component:
+Error accessing element with '.0' access(offset 6): Expected index
+access to access a tuple, found a array instead.` Bracket-indexing
+past the end fails equally loudly (`[5]` on a two-element array:
+`The array accessed doesn't have index '5'`).
+
+Newtype-style resources (`pub struct Coins(u64)`) are tuple structs
+and take a bare index — `"path": "0"`, with the leading dot optional
+(`".0"` is the same path).
+
+Two limits of the bevy_reflect 0.20 path grammar: there is **no map
+key access** (an `Access` is a field name or an index — HashMap
+leaves are unreachable), and resolution errors always say
+"component" even for a `resource` or `driver_resource` field (the
+message formatter is shared by all three). An unknown or ambiguous
+name reads the same either way:
+
+```
+unknown component 'Time' — not registered in this game's TypeRegistry
+(components need #[derive(Reflect)] and App::register_type, or the
+name must be the full registered type path)
+```
+
+Resolution accepts a full registered type path, or a final-segment
+short name when it is unambiguous; a short name matching several
+registered types rejects listing the candidates. One consequence
+worth knowing in advance: with the engine clocks registered (any
+app running `TimePlugin`), the bare name `Time` does **not** match
+anything — use the full paths in [Engine clock drivers](#engine-clock-drivers)
+below.
+
+## Engine clock drivers
+
+The rate-form `stagnant_resource` rule is usually driven by the
+game's own clock — a match clock, turn counter, or day counter in
+the game's own units (see the `stagnant_resource` bullet under
+[Invariants](#invariants)). When the game has no such clock, the
+engine's clocks work: every app running `TimePlugin` has
+`Time<Virtual>`, `Time<Real>`, and `Time<Fixed>` inserted and
+registered. Their registered paths spell the **definition modules**
+of bevy_time, not the crate-root re-exports (`bevy_time::Time<...>`
+fails as unknown):
+
+| Registered path | Driver leaf | Units |
+|---|---|---|
+| `bevy_time::time::Time<bevy_time::virt::Virtual>` | `elapsed_secs_f64` | seconds of virtual time; pauses with `Time::<Virtual>::pause()`, honors `set_relative_speed` |
+| `bevy_time::time::Time<bevy_time::real::Real>` | `elapsed_secs_f64` | seconds of wall time; never pauses |
+| `bevy_time::time::Time<bevy_time::fixed::Fixed>` | `elapsed_secs_f64` | seconds of fixed-timestep sim time; advances in timestep quanta |
+
+Driving on the engine clock looks like:
+
+```json
+{
+  "name": "score-not-stagnant",
+  "rule": "stagnant_resource",
+  "resource": "MatchClock",
+  "path": "score[0]",
+  "driver_resource": "bevy_time::time::Time<bevy_time::virt::Virtual>",
+  "driver_path": "elapsed_secs_f64",
+  "window_s": 10.0
+}
+```
+
+There is deliberately **no shorthand** for these paths. A
+`"driver": "virtual_clock"` alias would hide *which* clock is
+driven, and the rate is the semantics: Virtual pauses, Real does
+not, Fixed steps in quanta. Games that *do* have their own clock
+should drive on it — it encodes the game's time domain, and the
+driver vocabulary stays uniform.
+
+Paths that cannot reach a numeric leaf at all are covered next: some
+std types reflect as opaque values.
+
+## Opaque leaves: the Duration trap
+
+Not every numeric-looking field is reachable. `core::time::Duration`
+reflects as an **opaque** value — no fields, no subpaths — so
+`Time.elapsed`, `Stopwatch.elapsed`, `Timer.stopwatch.elapsed` and
+`Timer.duration` all fail with:
+
+```
+path 'elapsed' resolves to non-numeric type 'core::time::Duration'
+— component_check compares numeric leaves only
+```
+
+The workaround is built into bevy_time: `Time` carries a redundant
+float twin of its elapsed time (`elapsed_secs_f64` — the field
+behind the driver leaf in the table above). `Stopwatch`-based types
+have no such twin; if a timer must be watched or driven, watch a
+cumulative float elsewhere (the game's own clock), or add a
+reflected `elapsed_s: f32` twin.
+
+A related hazard when choosing a driver leaf: a **repeating**
+timer's remaining time sawtooths — down to zero, snap back to
+duration, again. A sawtooth is not a strictly-advancing value; the
+window machinery treats a retreating driver as a window reset every
+cycle (by design — seek/replay must not accumulate budget). What
+makes a good driver leaf:
+
+1. **Numeric** — f32/f64 or any integer width (widened to f64).
+2. **Strictly advancing while the game runs** — cumulative
+   elapsed, turn counters, tick counts. Never a wrapped, repeating
+   or clamped value (`elapsed_wrapped`, repeating-timer remaining).
+3. **Freezing when the game freezes** — pausing the clock pauses
+   the stagnation budget; a paused game must not be called
+   stagnant. This is the load-bearing liveness property.
+4. **In the game's own time domain if the game has one** — the
+   author budgets `window_s` in the driver's units (next section).
+
+## Window units: `window_s` is measured in the driver's own units
+
+The stagnation budget is consumed by the driver leaf's own advance,
+in the driver's own units — never converted through `tps`. The
+authoring question is always "how much **driver advance** may pass
+without the watched leaf changing?", and the wall-clock duration of
+the window is an emergent property:
+`wall_seconds ≈ window_s / driver_advance_per_wall_second`.
+
+Load validation checks `window_s` as a plain number against
+`duration_s` (positive, finite, ≤ the run duration) — it does not
+(and today cannot) reason about the driver's rate, so an accelerated
+driver with a large `window_s` can pass validation yet cost far more
+wall time than the number suggests. Reason in driver units first,
+then sanity-check the wall cost once by dividing by the clock scale.
+
+Three scales, worked:
+
+**1:1 clock.** Driving on `Time<Virtual>.elapsed_secs_f64` at
+default settings, driver units are seconds. `window_s: 10.0` means
+"no change for 10 seconds of virtual time", costing ~10 wall
+seconds per full window at relative speed 1.0.
+
+**Accelerated clock.** A match clock advanced 18× faster than wall
+time, with a driver leaf `minutes` counting in-game minutes:
+
+```json
+{
+  "name": "home-score-not-stagnant",
+  "rule": "stagnant_resource",
+  "resource": "MatchClock",
+  "path": "score[0]",
+  "driver_path": "minutes",
+  "window_s": 5.0
+}
+```
+
+`window_s: 5.0` here means "no score change for 5 **in-game
+minutes**" — roughly 16.7 wall seconds at 18×. The firing report
+quotes the budget in driver units:
+`MatchClock.score[0] stayed 0.000 for 5.000 of driver advance on
+MatchClock.minutes`. Written the other way — thinking seconds —
+`window_s: 30.0` would grant 30 in-game minutes, six times the
+grace the author meant.
+
+**Slow tick counter.** A tick resource advancing once per 1/20 s of
+game time:
+
+```json
+{
+  "name": "economy-not-stagnant",
+  "rule": "stagnant_resource",
+  "resource": "Economy",
+  "path": "gold",
+  "driver_resource": "TickCount",
+  "driver_path": "ticks",
+  "window_s": 200.0
+}
+```
+
+`window_s: 200.0` means "no gold change for 200 **ticks**" — 10
+seconds of game time at 20 ticks per second. Ticks-per-second never
+appears in the JSON, so the conversion is the author's: "~10 seconds
+of grace" → 10 / 0.05 = 200 ticks. Written the other way — thinking
+seconds, writing `10.0` — the window would grant half a second and
+fire constantly. Converting intent into driver units is the whole
+exercise; the harness never converts for you.
+
+One rough edge of the current validation: `window_s` is compared
+against `duration_s` as plain numbers, even though the window elapses
+in driver units — so the 200-tick window above (10 s of game time)
+is only accepted by a run declared at ≥ 200 `duration_s` seconds.
+Budget accordingly when the driver's unit is smaller than a second.
 
 ## Chaos mouse (default on)
 
@@ -289,10 +510,11 @@ Two distinct error classes, at different stages:
   registered reflected resource (`resource`: full registered type
   path, or an unambiguous short path — same resolution rules as
   `component_check`), reads a numeric leaf via a reflect `path`
-  (e.g. `"coins"`), and compares it against a numeric `value` with
-  `check` (`lt`/`le`/`gt`/`ge`/`equals`/`ne`). Without
-  `eventually_s` the predicate must hold every frame where the
-  resource was present; with `eventually_s: N` it must hold at
+  (e.g. `"coins"`, `"score[0]"` — see [Paths to numeric
+  leaves](#paths-to-numeric-leaves)), and compares it against a
+  numeric `value` with `check` (`lt`/`le`/`gt`/`ge`/`equals`/`ne`).
+  Without `eventually_s` the predicate must hold every frame where
+  the resource was present; with `eventually_s: N` it must hold at
   least once within N seconds of the run start (the deadline must
   be positive, finite, and ≤ `duration_s`). Resources are the
   natural home for economy/score invariants: a coin total that goes
@@ -309,11 +531,13 @@ Two distinct error classes, at different stages:
   numeric leaf (`path` on `resource`) and requires it to CHANGE at
   least once per `window_s`-worth of advance of a declared driver
   leaf (`driver_path` on `driver_resource`, which defaults to the
-  same resource). The window budget is consumed by the DRIVER
-  LEAF'S OWN advance — never converted through `tps` — so the
-  author's clock domain is authoritative (a match clock counting
-  literal in-game seconds is the canonical driver; `window_s` must
-  be positive, finite, and ≤ `duration_s`). A watched leaf constant
+  same resource; the engine clocks are documented under [Engine
+  clock drivers](#engine-clock-drivers)). The window budget is
+  consumed by the DRIVER LEAF'S OWN advance — in the driver's own
+  units, never converted through `tps` — so the author's clock
+  domain is authoritative (a match clock counting literal in-game
+  seconds is the canonical driver; see [Window units](#window-units-windows_s-is-measured-in-the-drivers-own-units);
+  `window_s` must be positive, finite, and ≤ `duration_s`). A watched leaf constant
   for more than `window_s` of driver advance while the driver
   strictly advances is a livelock finding, reported once per
   stagnation episode; the value changing later clears the episode
@@ -343,8 +567,13 @@ Two distinct error classes, at different stages:
   (`check`/`value`), `eventually_s`, `target_selector`, and bounds
   fields are rejected at load; a redundant
   `driver_resource` equal to `resource` is rejected as likely
-  authoring confusion (omit it — the driver defaults to the same
-  resource). Honesty doctrine matches `resource_check`:
+  authoring confusion — the full message is
+  `driver_resource is redundant when it names the same resource as
+  'resource' — omit it (the driver leaf defaults to the same
+  resource)` — and the same-resource driver is authored by setting
+  only `driver_path` (e.g. `"driver_path": "minutes"` on a match
+  clock watched at `score[0]`, driven by its own `minutes` leaf).
+  Honesty doctrine matches `resource_check`:
   never-resolved resource/leaf → `vacuous_invariant`;
   a watched leaf that resolved while the DRIVER never did →
   `vacuous_invariant` naming the driver (stagnation was unprovable,
