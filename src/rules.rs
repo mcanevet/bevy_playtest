@@ -64,6 +64,7 @@ impl Rule {
             Self::ScreenLiveness => "A screen that reflects its simulation: a sim-active run's captured frames should not be bit-identical forever; informational — pixel-hash evidence from a harness-owned capture rig (2D views only; legitimately static screens like menus are a judgment call, not an oracle).",
             Self::VacuousRun => "Nothing was ever observable: no entities to check and no inputs emitted — the run proves nothing about the game.",
             Self::VacuousInvariant => "An invariant matched zero entities; the check proves nothing until there is something to check.",
+            Self::WindowUnelapsed => "A stagnant_resource window (in driver-leaf units) never elapsed: the driver never advanced past the window over the whole run, so the stagnation verdict is unjudgeable for THIS run — lengthen the run, shrink the window, or accept the note. Informational: a driver that legitimately rests (frozen world aside) is correct behavior, not a failure.",
             Self::ReplayDivergence => "Same scenario + seed run twice must produce identical per-frame fingerprints; divergence means hidden nondeterminism (wall clock, unseeded RNG, unordered iteration).",
             Self::StalledProgress => "A churning world is not a progressing one: the frame loop keeps ticking with no inputs buffered and no observable game-state surface change over a whole window — the world is spinning without doing anything.",
             Self::ProgressSurfaceEmpty => "No game state was verifiable at all during progress monitoring (no reflected game types and no progress markers/resources in scope); progress cannot be assessed. Informational by default — escalate with strict_warnings or progress.require_surface.",
@@ -82,7 +83,8 @@ impl Rule {
             | Self::LogCaptureLost
             | Self::LogBridgeLost
             | Self::LogLevelTampered
-            | Self::ProgressSurfaceEmpty => true,
+            | Self::ProgressSurfaceEmpty
+            | Self::WindowUnelapsed => true,
             #[cfg(feature = "render-liveness")]
             Self::RenderLiveness => true,
             #[cfg(feature = "screen-liveness")]
@@ -130,6 +132,12 @@ declare_rules! {
 
     // Vacuity guard: a single invariant matched zero entities.
     VacuousInvariant => "vacuous_invariant",
+
+    // Post-run elision audit: a stagnant_resource window that never
+    // elapsed under the driver's own advance (informational — the
+    // 0.14 doctrine that a present-but-frozen driver legitimately
+    // passes silently must NOT flip pass->fail).
+    WindowUnelapsed => "window_unelapsed",
 
     // Verification depth.
     ReplayDivergence => "replay_divergence",

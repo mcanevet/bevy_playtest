@@ -609,11 +609,37 @@ fn resource_invariant_validation_rejections() {
         ),
         Err(ScenarioError::Rejected(_))
     ));
-    // stagnant_resource: window_s exceeding the run duration is
-    // unjudgeable.
+    // stagnant_resource: window_s is consumed in DRIVER-LEAF units,
+    // not seconds — a window larger than the run no longer rejects
+    // outright (the tick-counter trap: the driver
+    // may advance many units per second). Judgeability moves to the
+    // declared-rate fit check and the post-run elision audit.
+    assert!(parse(
+        r#"{"name":"a","rule":"stagnant_resource","resource":"R","path":"x","driver_path":"y","window_s":5.0}"#
+    ).is_ok());
+    // ...but WITH a declared rate the fit check rejects at load:
+    // window / rate must fit the run duration.
     assert!(matches!(
         parse(
-            r#"{"name":"a","rule":"stagnant_resource","resource":"R","path":"x","driver_path":"y","window_s":5.0}"#
+            r#"{"name":"a","rule":"stagnant_resource","resource":"R","path":"x","driver_path":"y","window_s":5.0,"driver_units_per_second":1.0}"#
+        ),
+        Err(ScenarioError::Rejected(_))
+    ));
+    // ...and a fast-enough declared rate makes the same window fit.
+    assert!(parse(
+        r#"{"name":"a","rule":"stagnant_resource","resource":"R","path":"x","driver_path":"y","window_s":5.0,"driver_units_per_second":4.0}"#
+    ).is_ok());
+    // driver_units_per_second: stagnant_resource-only surface.
+    assert!(matches!(
+        parse(
+            r#"{"name":"a","rule":"resource_check","resource":"R","path":"x","check":"ge","value":0,"driver_units_per_second":20.0}"#
+        ),
+        Err(ScenarioError::Rejected(_))
+    ));
+    // driver_units_per_second: finite and > 0.
+    assert!(matches!(
+        parse(
+            r#"{"name":"a","rule":"stagnant_resource","resource":"R","path":"x","driver_path":"y","window_s":1.0,"driver_units_per_second":0.0}"#
         ),
         Err(ScenarioError::Rejected(_))
     ));
@@ -1413,5 +1439,250 @@ fn unknown_short_name_lists_similar_registered_types() {
         entry.detail.contains("Time<Fixed>"),
         "hint should name the Time<*> generic spellings: {}",
         entry.detail
+    );
+}
+
+// ---------------------------------------------------------------------------
+// window_s driver-unit semantics (windows measured in the driver leaf's own unit)
+// ---------------------------------------------------------------------------
+
+/// A tick counter driving the stagnation window,
+/// advancing +1 per fixed tick at 20 ticks/s (every 3rd frame at
+/// 60 tps). One driver unit = 1/20 s — NOT one second: the exact
+/// class of driver the old `window_s > duration_s` validation
+/// misjudged.
+#[derive(Resource, Reflect, Default)]
+#[reflect(Resource)]
+struct RcSimTick {
+    tick: u64,
+}
+
+/// A tick-driven economy a tick-driven economy: a drone
+/// trip takes ~42-48 ticks; here a deposit lands every 45 ticks
+/// (2.25 sim-seconds), so a window of 300 ticks never fires while a
+/// window of 19 ticks (the R2 over-correction: < 1 s of activity
+/// demand) fires repeatedly.
+#[derive(Resource, Reflect, Default)]
+#[reflect(Resource)]
+struct RcHarvest {
+    lumen: i64,
+}
+
+fn harvest(sim: Res<RcSimTick>, mut eco: ResMut<RcHarvest>) {
+    eco.lumen = (sim.tick / 45) as i64;
+}
+
+/// One frame of the tick/harvest world: advances the tick counter
+/// +1 every 3rd frame (20 ticks/s at 60 tps — a tick-counter shape)
+/// and pays the harvest cadence. `Local<u32>` supplies the frame
+/// count Bevy-free (same doctrine as the suite's other fixtures:
+/// bare test apps do not run TimePlugin).
+fn tick_sim_frame(mut frame: Local<u32>, mut sim: ResMut<RcSimTick>) {
+    *frame += 1;
+    if frame.is_multiple_of(3) {
+        sim.tick += 1;
+    }
+}
+
+/// Build the R1/R2 world: the tick counter, the harvest economy and
+/// a wandering entity keeping the world observable.
+fn sim_app() -> App {
+    let mut app = App::new();
+    app.register_type::<RcSimTick>();
+    app.register_type::<RcHarvest>();
+    app.register_type::<Transform>();
+    app.insert_resource(RcSimTick::default());
+    app.insert_resource(RcHarvest::default());
+    app.add_systems(Update, (tick_sim_frame, harvest, wander_players));
+    app.world_mut().spawn(Transform::from_xyz(0.0, 1.0, 0.0));
+    app
+}
+
+/// A window sized in the author's mental unit —
+/// ticks — used to be rejected at load as "can never elapse"
+/// because validation silently assumed drivers advance at >= 1
+/// unit/second. The run is 4 s / 240 frames / 80 sim ticks, and the
+/// 45-tick harvest cadence sits comfortably inside a 60-unit window
+/// (an honest window: elapses at tick 60).
+/// Under the fix the scenario LOADS, RUNS, and PASSES.
+#[test]
+fn window_in_driver_units_loads_and_passes() {
+    let _slot = common::run_slot();
+    let mut app = sim_app();
+    let report = run_scenario(
+        &mut app,
+        &scenario_with_invariants(
+            r#"
+    "name": "economy_flows_honest_window",
+    "rule": "stagnant_resource",
+    "resource": "RcHarvest",
+    "path": "lumen",
+    "driver_resource": "RcSimTick",
+    "driver_path": "tick",
+    "window_s": 60.0"#,
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        report.status,
+        bevy_playtest::enums::PlaytestStatus::Pass,
+        "the tick-sized window is judgeable and satisfied: {:?}",
+        report.violations
+    );
+    // No window_unelapsed note either: the driver (80 ticks) passed
+    // the window (60 units).
+    assert!(
+        !report
+            .violations
+            .iter()
+            .any(|v| v.rule == "window_unelapsed"),
+        "the window elapsed; the elision audit must stay silent: {:?}",
+        report.violations
+    );
+}
+
+/// The R2 over-correction, suite-scale: the author HERDED BY R1's old
+/// rejection sizes the window at 19 ticks (< 1 s of activity demand
+/// against a 45-tick cadence). That shape is no longer forced on
+/// anyone — but if authored anyway, the oracle still fires, honestly
+/// and once per episode.
+#[test]
+fn forced_small_window_over_fires_as_documented() {
+    let _slot = common::run_slot();
+    let mut app = sim_app();
+    let report = run_scenario(
+        &mut app,
+        &scenario_with_invariants(
+            r#"
+    "name": "economy_flows",
+    "rule": "stagnant_resource",
+    "resource": "RcHarvest",
+    "path": "lumen",
+    "driver_resource": "RcSimTick",
+    "driver_path": "tick",
+    "window_s": 19.0"#,
+        ),
+    )
+    .unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
+    let entry = report
+        .violations
+        .iter()
+        .find(|v| v.rule == "stagnant_resource" && v.target == "economy_flows")
+        .expect("the over-firing shape still fires");
+    // Cadence: change every 45 ticks; window 19 ticks ⇒ an episode
+    // fires roughly every 45 ticks. The oracle behaves exactly as
+    // specified — the FIX is that nobody is herded into writing
+    // this window anymore.
+    assert!(entry.count >= 1, "{}", entry.detail);
+}
+
+/// The elision audit (the post-run fallback when no rate is declared): a window the
+/// driver never passed is INFORMATIONAL, never a pass->fail flip —
+/// a present-but-slow driver holding the invariant's peace is the
+/// 0.14 frozen-driver doctrine.
+#[test]
+fn window_never_elapsed_is_informational_window_unelapsed() {
+    let _slot = common::run_slot();
+    let mut app = App::new();
+    app.register_type::<RcScoreboard>();
+    app.register_type::<RcMatchClock>();
+    app.register_type::<Transform>();
+    app.insert_resource(RcScoreboard::default());
+    app.insert_resource(RcMatchClock::default());
+    app.add_systems(Update, (tick_clock, wander_players));
+    app.world_mut().spawn(Transform::from_xyz(0.0, 1.0, 0.0));
+    // Window 5.0 driver units on a clock advancing 1/60 per frame:
+    // total advance over the 4 s run is 4.0 — the window never
+    // elapses, the invariant is unjudgeable FOR THIS RUN.
+    let report = run_scenario(
+        &mut app,
+        &scenario_with_invariants(
+            r#"
+    "name": "score_moves",
+    "rule": "stagnant_resource",
+    "resource": "RcScoreboard",
+    "path": "home",
+    "driver_resource": "RcMatchClock",
+    "driver_path": "elapsed_s",
+    "window_s": 5.0"#,
+        ),
+    )
+    .unwrap();
+    // INFORMATIONAL: the run still passes.
+    assert_eq!(
+        report.status,
+        bevy_playtest::enums::PlaytestStatus::Pass,
+        "window_unelapsed must never gate: {:?}",
+        report.violations
+    );
+    let entry = report
+        .violations
+        .iter()
+        .find(|v| v.rule == "window_unelapsed")
+        .expect("the elision audit must fire");
+    // The wording names the observed advance.
+    assert!(
+        entry.detail.contains("never elapsed"),
+        "elision detail: {}",
+        entry.detail
+    );
+    assert!(
+        entry.detail.contains("advanced only"),
+        "elision detail must name the observed advance: {}",
+        entry.detail
+    );
+}
+
+/// The declared-rate load-time fit check: a window that
+/// cannot elapse at the DECLARED rate rejects at load with the
+/// spec's wording — a numerically true message instead of the old
+/// assumed-seconds rejection.
+#[test]
+fn declared_rate_fit_check_rejects_unelapsible_window_at_load() {
+    let _slot = common::run_slot();
+    let scenario = scenario_with_invariants(
+        r#"
+    "name": "economy_flows_honest_window",
+    "rule": "stagnant_resource",
+    "resource": "R",
+    "path": "x",
+    "driver_path": "y",
+    "window_s": 300.0,
+    "driver_units_per_second": 20.0"#,
+    );
+    // Suite scale: duration is 4 s, so 300 units at 20/s = 15 s does
+    // not fit — the exact expected error shape.
+    let err = bevy_playtest::scenario::validate_scenario(&scenario).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("driver units at declared 20 units/s = 15.0s"),
+        "fit error must show the true arithmetic: {msg}"
+    );
+    assert!(
+        msg.contains("check driver_units_per_second"),
+        "fit error must point at the rate: {msg}"
+    );
+}
+
+/// Two invariants sharing ONE driver leaf with DIFFERENT declared
+/// rates are a consistency error: one driver leaf has one rate.
+#[test]
+fn conflicting_declared_rates_on_one_driver_reject() {
+    let _slot = common::run_slot();
+    let json = r#"{"bot":{"type":"chaos","seed":42},"duration_s":4.0,"tps":60,
+        "invariants":[
+          {"name":"a","rule":"stagnant_resource","resource":"R","path":"x",
+           "driver_resource":"Sim","driver_path":"tick","window_s":10.0,
+           "driver_units_per_second":20.0},
+          {"name":"b","rule":"stagnant_resource","resource":"Q","path":"z",
+           "driver_resource":"Sim","driver_path":"tick","window_s":20.0,
+           "driver_units_per_second":60.0}
+        ]}"#;
+    let scenario: bevy_playtest::scenario::Scenario = serde_json::from_str(json).unwrap();
+    let err = bevy_playtest::scenario::validate_scenario(&scenario).unwrap_err();
+    assert!(
+        err.to_string().contains("one driver leaf has one rate"),
+        "conflicting rates must reject: {err}"
     );
 }

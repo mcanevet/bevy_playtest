@@ -7,7 +7,7 @@
 //! fields are rejected by `deny_unknown_fields` with a clear message.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::enums::{BotType, CheckOp, InvariantRule};
 
@@ -465,11 +465,26 @@ pub struct Invariant {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub driver_path: Option<String>,
     /// Rate-form (`stagnant_resource` only): the watched leaf must
-    /// stay constant for at most this many seconds of driver time
-    /// before the invariant fires. Must fit inside the run
-    /// (a window longer than the run can never elapse).
+    /// stay constant for at most this many **driver-leaf units** of
+    /// advance before the invariant fires — NOT seconds unless the
+    /// driver literally counts seconds (a tick counter advancing
+    /// +1 per FixedUpdate tick consumes the window in ticks; a
+    /// 300-unit window at 20 ticks/s elapses in 15 wall seconds).
+    /// The budget is consumed in the driver's own unit; the author's
+    /// mental unit is the driver's unit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_s: Option<f32>,
+    /// Rate-form (`stagnant_resource` only): optional declaration of
+    /// the driver leaf's advance rate, in driver units per wall
+    /// second. Enables load-time fit validation: with the rate
+    /// declared, `window_s / rate` must fit inside `duration_s`, so
+    /// an unelidable window is caught at load with a numerically
+    /// true message instead of a rejected-by-assumption one. When
+    /// omitted, no duration-coupled rejection applies and the
+    /// post-run elision audit (`window_unelapsed`) is the only
+    /// judge. Doubles as documentation of the driver's unit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver_units_per_second: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after_s: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1125,6 +1140,38 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
             )));
         }
     }
+    // Cross-invariant rate consistency: one driver leaf has ONE
+    // advance rate — two invariants watching the same
+    // (driver_resource, driver_path) pair may not declare different
+    // `driver_units_per_second` values (a lie about the game's clock
+    // either way; the pair with the wrong rate gets silently
+    // mis-fit validation).
+    let mut declared_rates: HashMap<(String, String), f32> = HashMap::new();
+    for rule in &scenario.invariants {
+        if let Some(rate) = rule.driver_units_per_second {
+            let driver_resource = rule
+                .driver_resource
+                .clone()
+                .or_else(|| rule.resource.clone())
+                .unwrap_or_default();
+            let driver_path = rule.driver_path.clone().unwrap_or_default();
+            let key = (driver_resource, driver_path);
+            match declared_rates.get(&key) {
+                Some(existing) if *existing != rate => {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': driver_units_per_second is {rate} but invariant \
+                         driver ({}) was already declared at {existing} units/s — one \
+                         driver leaf has one rate; fix the declarations",
+                        rule.name, key.0
+                    )));
+                }
+                Some(_) => {}
+                None => {
+                    declared_rates.insert(key, rate);
+                }
+            }
+        }
+    }
     for rule in &scenario.invariants {
         if rule.eventually_s.is_some()
             && !matches!(
@@ -1398,7 +1445,13 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                 }
                 // window_s: required for stagnant_resource (the
                 // stagnation budget), forbidden elsewhere (it is the
-                // rule's only temporal knob).
+                // rule's only temporal knob). The budget is consumed
+                // in DRIVER-LEAF units, so the window is judgeable
+                // whenever the driver can advance past it — the old
+                // `window_s > duration_s` rejection silently assumed
+                // drivers advance at >= 1 unit/second, wrongly
+                // rejecting tick counters sized in the author's
+                // mental unit.
                 let expect_window = rule.rule == InvariantRule::StagnantResource;
                 match rule.window_s {
                     Some(_window_s) if !expect_window => {
@@ -1415,26 +1468,53 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                                 rule.name
                             )));
                         }
-                        if window_s > scenario.duration_s {
-                            errors.push(ScenarioError::Rejected(format!(
-                                "invariant '{}': window_s ({window_s}s) exceeds the run \
-                                 duration ({duration}s) — the window can never elapse \
-                                 within the run, so the check would be unjudgeable; keep \
-                                 the window at or inside the run window",
-                                rule.name,
-                                duration = scenario.duration_s
-                            )));
+                        // Declared-rate fit check: only when the
+                        // author states the driver's unit is the
+                        // load-time arithmetic honest. Omitted → the
+                        // post-run elision audit judges instead; no
+                        // duration-coupled rejection at all.
+                        if let Some(rate) = rule.driver_units_per_second {
+                            if !rate.is_finite() || rate <= 0.0 {
+                                errors.push(ScenarioError::Rejected(format!(
+                                    "invariant '{}': driver_units_per_second must be a \
+                                     finite number > 0 (got {rate})",
+                                    rule.name
+                                )));
+                            }
+                            let effective_wall_s = (window_s / rate) as f64;
+                            if effective_wall_s > scenario.duration_s as f64 {
+                                errors.push(ScenarioError::Rejected(format!(
+                                    "invariant '{}': window ({window_s} driver units at \
+                                     declared {rate} units/s = {effective_wall_s:.1}s) \
+                                     exceeds the run duration ({duration}s) — either \
+                                     the window or the declared rate makes it \
+                                     unjudgeable; check driver_units_per_second",
+                                    rule.name,
+                                    duration = scenario.duration_s
+                                )));
+                            }
                         }
                     }
                     None if expect_window => {
                         errors.push(ScenarioError::Rejected(format!(
                             "invariant '{}': stagnant_resource requires 'window_s' — the \
-                             maximum number of driver seconds the watched leaf may stay \
-                             constant before the invariant fires",
+                             maximum number of driver-leaf units the watched leaf may \
+                             stay constant before the invariant fires",
                             rule.name
                         )));
                     }
                     None => {}
+                }
+                // driver_units_per_second: stagnant_resource-only
+                // surface (the rate declaration is meaningful only
+                // for the rule whose budget is consumed in driver
+                // units).
+                if rule.driver_units_per_second.is_some() && !expect_window {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': driver_units_per_second belongs to \
+                         stagnant_resource only",
+                        rule.name
+                    )));
                 }
                 // resource_check-only: the predicate triple
                 // (path/check/value), same requirements as

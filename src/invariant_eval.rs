@@ -517,6 +517,13 @@ pub struct WatchedResources {
     /// since the watched leaf last changed (the budget consumed by
     /// the current stagnation episode).
     pub driver_elapsed: std::collections::HashMap<String, f64>,
+    /// stagnant_resource: name → TOTAL driver-leaf advance observed
+    /// over the WHOLE run — a running SUM of every consumed forward
+    /// delta, deliberately not last-minus-first (gap re-seeding
+    /// resets episodes, so endpoint subtraction undercounts). Drives
+    /// the post-run elision audit (`window_unelapsed`): a window the
+    /// driver never passed was unjudgeable for this run.
+    pub driver_total_advance: std::collections::HashMap<String, f64>,
     /// stagnant_resource: name → the current stagnation episode has
     /// already been reported (cleared when the watched leaf changes;
     /// one finding per episode, never per frame).
@@ -1530,7 +1537,16 @@ fn apply_sr_outcome(
             let driver_delta = driver_value - *last_driver;
             if watched_value != *last_watched {
                 // Change observed: episode over, budget reset, a
-                // fresh window begins this frame.
+                // fresh window begins this frame. Forward driver
+                // motion still counts toward the run total (the
+                // elision audit asks "did the driver EVER pass the
+                // window", not "did it pass it during one episode").
+                if driver_delta > 0.0 {
+                    *watched
+                        .driver_total_advance
+                        .entry(inv.name.clone())
+                        .or_insert(0.0) += driver_delta;
+                }
                 *last_watched = watched_value;
                 *last_driver = driver_value;
                 watched.driver_elapsed.remove(&inv.name);
@@ -1540,12 +1556,19 @@ fn apply_sr_outcome(
                     Some(std::cmp::Ordering::Greater) => {
                         // Forward time: consume budget. Overshoot past
                         // window_s is irrelevant once the finding is
-                        // out — one report per episode.
+                        // out — one report per episode. The delta
+                        // also feeds the run-total advance (the
+                        // elision-audit accumulator — an honest sum,
+                        // never endpoint subtraction).
                         let budget = watched
                             .driver_elapsed
                             .entry(inv.name.clone())
                             .or_insert(0.0);
                         *budget += driver_delta;
+                        *watched
+                            .driver_total_advance
+                            .entry(inv.name.clone())
+                            .or_insert(0.0) += driver_delta;
                         // Consume the observed driver value: the next
                         // frame's delta must be measured from HERE.
                         *last_driver = driver_value;
@@ -1707,6 +1730,57 @@ pub fn audit_resource_checks(
                         meta: None,
                     });
                 }
+            }
+        }
+        if inv.rule == InvariantRule::StagnantResource {
+            // Post-run elision audit (the fallback when no rate is
+            // declared): the window is consumed in
+            // DRIVER-LEAF units, so it is judgeable only if the
+            // driver's TOTAL advance over the run reached the
+            // window. It never did → the stagnation verdict is
+            // unjudgeable FOR THIS RUN — an INFORMATIONAL note
+            // (window_unelapsed), never a failure: a driver that
+            // legitimately rests or runs slower than assumed is
+            // game behavior, not a bug, and the frozen-driver
+            // doctrine keeps such passes silent (a deliberate
+            // choice: do NOT
+            // reuse the gating vacuous_invariant rule here).
+            // Not reached for config-errored invariants (suppressed
+            // above) nor for fired ones (a fired episode means the
+            // window DID elapse).
+            let total_advance = watched
+                .driver_total_advance
+                .get(&inv.name)
+                .copied()
+                .unwrap_or(0.0);
+            let window = inv.window_s.unwrap_or(0.0) as f64;
+            if !watched.fired.contains(&inv.name) && total_advance < window && total_advance >= 0.0
+            {
+                let driver = inv
+                    .driver_resource
+                    .as_deref()
+                    .unwrap_or_else(|| inv.resource.as_deref().unwrap_or("?"));
+                let driver_path = inv.driver_path.as_deref().unwrap_or("?");
+                entries.push(crate::state::ViolationEntry {
+                    rule: crate::rules::Rule::WindowUnelapsed.name().to_string(),
+                    target: inv.name.clone(),
+                    first_frame: 0,
+                    last_frame,
+                    count: 1,
+                    detail: format!(
+                        "invariant '{}': window ({window} driver units) never elapsed — \
+                         the driver '{driver}.{driver_path}' advanced only \
+                         {total_advance:.3} units over the whole run; the check was \
+                         unjudgeable (lengthen the run or shrink the window)",
+                        inv.name
+                    ),
+                    last_detail: format!(
+                        "invariant '{}': driver advanced {total_advance:.3} of the \
+                         {window}-unit window",
+                        inv.name
+                    ),
+                    meta: None,
+                });
             }
         }
     }

@@ -78,7 +78,12 @@ scripted-input families, and every class of load-time rejection.
       "path": "home",                // watched leaf: must CHANGE within window_s
       "driver_resource": "MatchClock", // optional: defaults to resource
       "driver_path": "elapsed_s",     // driver leaf: must strictly advance
-      "window_s": 1.0                 // max driver advance without a change
+      "window_s": 300.0,              // max DRIVER-LEAF units the watched leaf may
+                                      //  stay constant (NOT seconds unless the driver
+                                      //  counts seconds — the budget is consumed in
+                                      //  the driver's own unit)
+      "driver_units_per_second": 20.0 // optional: driver rate, enables load-time
+                                      //  fit validation (window/rate must fit the run)
     }
   ],
   "oracles": ["string"],          // rejected: oracle selection not implemented
@@ -546,11 +551,24 @@ Two distinct error classes, at different stages:
   consumed by the DRIVER LEAF'S OWN advance — in the driver's own
   units, never converted through `tps` — so the author's clock
   domain is authoritative (a match clock counting literal in-game
-  seconds is the canonical driver; see [Window units](#window-units-windows_s-is-measured-in-the-drivers-own-units);
-  `window_s` must be positive, finite, and ≤ `duration_s`). A watched leaf constant
-  for more than `window_s` of driver advance while the driver
-  strictly advances is a livelock finding, reported once per
-  stagnation episode; the value changing later clears the episode
+  seconds is the canonical driver; see [Window units](#window-units-windows_s-is-measured-in-the-drivers-own-units)).
+  `window_s` is measured in the DRIVER'S UNITS, not seconds: a tick counter
+  advancing +1 per FixedUpdate tick at 20 ticks/s consumes a
+  `window_s: 300` budget in 300 TICKS (= 15 wall seconds), and a
+  300-second window on such a driver would be written `window_s:
+  6000`. A watched leaf constant for more than `window_s` of driver
+  advance while the driver strictly advances is a livelock finding,
+  reported once per episode. Judgeability: with
+  `driver_units_per_second` declared, `window_s / rate` must fit
+  inside `duration_s` (rejected at load otherwise); with it
+  omitted there is no duration-coupled rejection, and a window the
+  driver's TOTAL observed advance never reached is reported as an
+  informational `window_unelapsed` note at run end (naming the
+  observed advance) — never a failure. Two invariants sharing one
+  driver leaf must declare the same rate or the scenario rejects.
+  (`stagnant_resource` rejects `eventually_s` at load, so the
+  elision audit never interacts with deadlines.) The finding is
+  reported once per stagnation episode; the value changing later clears the episode
   and starts a fresh window — an oscillating value is "changing",
   not stagnating. A non-advancing driver FREEZES the window: time
   stopped (pause screens, victory states), so stagnation is not
