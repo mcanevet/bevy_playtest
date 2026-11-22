@@ -344,3 +344,147 @@ fn lint_e2e_non_1_value_still_lints() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+// ---------------------------------------------------------------------------
+// Stage 2 e2e: the type-registry probe against a booted App
+// ---------------------------------------------------------------------------
+
+/// The game for stage-2 e2e: `takeover_demo_nondet_resource` ships a
+/// registered, inserted, reflected `GameClock(f32)` resource (field
+/// `0`, tuple-indexed leaf "0").
+fn resource_game_binary() -> PathBuf {
+    let path = PathBuf::from(env!("CARGO_BIN_EXE_takeover_demo_nondet_resource"));
+    assert!(path.is_file(), "demo binary missing: {path:?}");
+    path
+}
+
+fn spawn_resource_game_lint_child(
+    scenario_contents: &str,
+    dir: &std::path::Path,
+    tag: &str,
+) -> (std::process::Output, PathBuf) {
+    let scenario_path = dir.join(format!("{tag}.json"));
+    let report_path = dir.join(format!("{tag}.report.json"));
+    std::fs::write(&scenario_path, scenario_contents).unwrap();
+    let out = Command::new(resource_game_binary())
+        .env_remove(ENV_SCENARIO)
+        .env_remove(ENV_REPORT)
+        .env_remove(ENV_LINT)
+        .env(ENV_SCENARIO, scenario_path.to_str().unwrap())
+        .env(ENV_REPORT, report_path.to_str().unwrap())
+        .env(ENV_LINT, "1")
+        .output()
+        .expect("spawn resource-game lint child");
+    (out, report_path)
+}
+
+/// A typo'd resource name is caught at LINT time (stage 2), not at
+/// the first real run's frame 0 — the front-loading the mode exists
+/// for. Stage-1-clean scenario, so the finding can only come from
+/// the registry probe.
+#[test]
+fn lint_e2e_stage2_typo_resource_name() {
+    let _slot = common::run_slot();
+    let dir = unique_dir("e2e_s2_typo");
+    let (out, report_path) = spawn_resource_game_lint_child(
+        r#"{"bot":{"type":"chaos","seed":42},"duration_s":1.0,"tps":60,
+            "invariants":[{"name":"clock_watch","rule":"resource_check",
+                           "resource":"GameClok","path":"0","check":"gt","value":-1.0}]}"#,
+        &dir,
+        "s2_typo",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(exit_code::FAIL),
+        "stage-2 findings must exit 1: {stderr}"
+    );
+    assert!(stderr.contains("GameClok"), "{stderr}");
+    assert!(
+        stderr.contains("not registered in this game's TypeRegistry"),
+        "{stderr}"
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
+    assert_eq!(report["status"], "fail", "{report}");
+    assert!(
+        report["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v["rule"] == "lint_finding"
+                && v["detail"].as_str().is_some_and(|d| d.contains("GameClok"))),
+        "the finding must ride the report: {report}"
+    );
+}
+
+/// A stage-1-clean scenario whose resource and path are valid lints
+/// CLEAN even though the game never ran a real frame: the config is
+/// coherent, and coherence is all lint claims. (GameClock's tuple
+/// field is reflect path "0".)
+#[test]
+fn lint_e2e_stage2_valid_resource_lints_clean() {
+    let _slot = common::run_slot();
+    let dir = unique_dir("e2e_s2_clean");
+    let (out, report_path) = spawn_resource_game_lint_child(
+        r#"{"bot":{"type":"chaos","seed":42},"duration_s":1.0,"tps":60,
+            "invariants":[{"name":"clock_watch","rule":"resource_check",
+                           "resource":"GameClock","path":"0","check":"gt","value":-1.0}]}"#,
+        &dir,
+        "s2_clean",
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(exit_code::PASS),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
+    assert_eq!(report["status"], "pass", "{report}");
+    assert_eq!(
+        report["violations"].as_array().unwrap().len(),
+        0,
+        "{report}"
+    );
+}
+
+/// The plain demo (Transform entities, no game resources) lints clean
+/// through stage 2 with a component_check reading Transform via the
+/// warm-up frame's Startup-spawned entity — the selector resolves,
+/// the path resolves on the entity's Transform (fallback doctrine).
+#[test]
+fn lint_e2e_stage2_component_check_clean_on_startup_entity() {
+    let _slot = common::run_slot();
+    let dir = unique_dir("e2e_s2_cc");
+    let (out, _report_path) = {
+        let scenario_path = dir.join("cc.json");
+        let report_path = dir.join("cc.report.json");
+        std::fs::write(
+            &scenario_path,
+            r#"{"bot":{"type":"chaos","seed":42},"duration_s":1.0,"tps":60,
+                "invariants":[{"name":"fwd","rule":"component_check",
+                               "target_selector":{"with_component":{"name":"Transform"}},
+                               "path":"translation.x","check":"lt","value":100.0}]}"#,
+        )
+        .unwrap();
+        let out = Command::new(game_binary())
+            .env_remove(ENV_SCENARIO)
+            .env_remove(ENV_REPORT)
+            .env_remove(ENV_LINT)
+            .env(ENV_SCENARIO, scenario_path.to_str().unwrap())
+            .env(ENV_REPORT, report_path.to_str().unwrap())
+            .env(ENV_LINT, "1")
+            .output()
+            .expect("spawn lint child");
+        (out, report_path)
+    };
+    assert_eq!(
+        out.status.code(),
+        Some(exit_code::PASS),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

@@ -83,10 +83,15 @@ pub const ENV_SEED: &str = "BEVY_PLAYTEST_SEED";
 /// Lint mode (takeover): when set alongside [`ENV_SCENARIO`], the
 /// takeover runs the scenario linter INSTEAD of driving the game:
 /// every config error is collected and reported at once (aggregate,
-/// never first-error-only) — then the process exits without running
-/// the frame loop. A clean lint means "the config is coherent",
-/// never "the game will pass": frame-level judgments are out of
-/// scope. Alone (no scenario) the variable is inert, like [`ENV_SEED`].
+/// never first-error-only), followed by a type-registry probe of the
+/// booted App (one warm-up frame) that catches definite resolution
+/// errors — typo'd resource/component names, paths that cannot reach
+/// a numeric leaf — before the process exits without running the
+/// frame loop. The probe is silent about what it cannot confirm
+/// (a component with no instances yet). A clean lint means "the
+/// config is coherent", never "the game will pass": frame-level
+/// judgments are out of scope. Alone (no scenario) the variable is
+/// inert, like [`ENV_SEED`].
 pub const ENV_LINT: &str = "BEVY_PLAYTEST_LINT";
 pub use crate::sinks::ENV_ALLOW_MISSING_LOG_CAPTURE;
 /// Seed for the deterministic-randomness shim the battery preloads into
@@ -332,7 +337,7 @@ fn run_takeover(app: &mut App, config: &TakeoverConfig) -> ! {
     // Intercept BEFORE the verify_replay/run_scenario dispatch so
     // lint covers replay scenarios too.
     if std::env::var_os(ENV_LINT).is_some() {
-        run_lint(&scenario, &config.report_path, source);
+        run_lint(app, &scenario, &config.report_path, source);
     }
     // Replay verification needs TWO freshly built Apps. The takeover
     // already owns process lifetime and `set_runner` hands us the App
@@ -444,10 +449,27 @@ fn run_takeover(app: &mut App, config: &TakeoverConfig) -> ! {
 /// a `lint_finding` entry (mirroring `scenario_error`'s channel) —
 /// the rule name is lint-specific, so findings never mix with a
 /// real run's oracle entries.
-fn run_lint(scenario: &crate::scenario::Scenario, report_path: &str, source: &str) -> ! {
-    let findings = crate::scenario::lint_scenario(scenario);
+fn run_lint(
+    app: &mut App,
+    scenario: &crate::scenario::Scenario,
+    report_path: &str,
+    source: &str,
+) -> ! {
+    let mut findings = crate::scenario::lint_scenario(scenario);
     for err in &findings {
         eprintln!("bevy_playtest: {err}");
+    }
+    // Stage 2 — the type-registry probe: ONLY when stage 1 found
+    // nothing, because every stage-2 check presupposes the stage-1
+    // shape (a resource_check with no `resource` field, say, has
+    // nothing to probe). Findings append to the same aggregate list:
+    // the author fixes stage 1 first when both stages fire, exactly
+    // like fixing the first error before seeing the second today.
+    if findings.is_empty() {
+        findings.extend(lint_registry_probe(app, scenario));
+        for err in &findings {
+            eprintln!("bevy_playtest: {err}");
+        }
     }
     let mut report = crate::state::PlaytestReport::crashed_empty();
     report.status = if findings.is_empty() {
@@ -481,6 +503,208 @@ fn run_lint(scenario: &crate::scenario::Scenario, report_path: &str, source: &st
         crate::enums::PlaytestStatus::Crash => exit_code::CRASH,
     };
     std::process::exit(code)
+}
+
+/// Stage 2: the type-registry probe. Booted-App checks stage 1 cannot
+/// do — names and reflect paths resolve against the game's ACTUAL
+/// TypeRegistry, not just the config's internal coherence.
+///
+/// Zero-frame contract (relaxed from a strict no-frames doctrine
+/// to the warm-up doctrine): exactly ONE warm-up `app.update()` runs
+/// before probing, so plugin building finishes, Startup schedules
+/// run, and Startup-spawned entities exist for instance-level path
+/// confirmation. One frame is not a playtest: no bot input, no
+/// oracle evaluation, no frame-level judgments — the probe still
+/// cannot say ANYTHING about how the game behaves across a run.
+///
+/// Doctrine — definite errors only:
+/// - Resolution failures (unknown name, ambiguous short name, wrong
+///   reflection data) are findings: these errors are certain to
+///   resurface as `oracle_error` config errors at run time, so lint
+///   front-loads them.
+/// - Absence is NEVER a finding (the `reflect_resource` Absent
+///   doctrine): a registered-but-never-inserted resource may arrive
+///   later; entities may spawn after the single warm-up frame.
+/// - Instance-level path failures are findings ONLY when an instance
+///   exists to check against (present at the warm-up frame). When no
+///   instance exists, the path stays UNCONFIRMED — stage 2 is silent
+///   about it rather than guessing (a "cannot confirm" line for every
+///   unprovable thing would bury the definite errors in noise).
+///
+/// Every stage-2 finding mirrors the message the normal run's oracle
+/// would emit at frame 0 — the probe reuses `invariant_eval`'s
+/// resolution machinery (`resolve_registration`, `reflect_resource`,
+/// `reflect_numeric_path`) so the two cannot drift.
+fn lint_registry_probe(
+    app: &mut App,
+    scenario: &crate::scenario::Scenario,
+) -> Vec<crate::scenario::ScenarioError> {
+    use crate::enums::InvariantRule;
+    use crate::scenario::ScenarioError;
+
+    // Finish plugin building exactly like the frame loop would, then
+    // run exactly ONE warm-up update: Startup schedules execute and
+    // their entities exist for the instance-level checks below.
+    while matches!(app.plugins_state(), bevy_app::PluginsState::Adding) {
+        bevy_tasks::tick_global_task_pools_on_main_thread();
+    }
+    if matches!(app.plugins_state(), bevy_app::PluginsState::Ready) {
+        app.finish();
+        app.cleanup();
+    }
+    app.update();
+
+    let mut findings = Vec::new();
+    let world = app.world_mut();
+    let Some(atr) = world
+        .get_resource::<bevy_ecs::reflect::AppTypeRegistry>()
+        .cloned()
+    else {
+        // No registry at all: the same definite infra error the run's
+        // oracle would raise at frame 0 — front-load it. Game-wide,
+        // not per-invariant (nothing reflected can ever resolve).
+        findings.push(ScenarioError::Rejected(
+            "the game has no AppTypeRegistry: reflected invariant checks are \
+             impossible (register types with App::register_type)"
+                .to_string(),
+        ));
+        return findings;
+    };
+    let registry = atr.read();
+    for inv in &scenario.invariants {
+        let inv_name = |finding: &str| format!("invariant '{}': {finding}", inv.name);
+        match inv.rule {
+            InvariantRule::ComponentCheck => {
+                // Stage 1 already guaranteed the shape (the probe runs
+                // only on a stage-1-clean scenario).
+                let Some(crate::enums::TargetSelector::WithComponent { name }) =
+                    inv.target_selector.as_ref()
+                else {
+                    continue;
+                };
+                let Some(path) = inv.path.as_deref() else {
+                    continue;
+                };
+                probe_component_check(world, &registry, inv_name, name, path)
+                    .into_iter()
+                    .for_each(|f| findings.push(f));
+            }
+            InvariantRule::NodesInBounds => {
+                // Selector names resolve dynamically at run time via
+                // the same machinery the component_check probe below
+                // uses; nothing extra to probe here beyond it.
+                if let Some(crate::enums::TargetSelector::WithComponent { name }) =
+                    inv.target_selector.as_ref()
+                {
+                    // Only the TYPE needs to resolve for bounds
+                    // recording; there is no numeric path to confirm.
+                    if let Err(why) = crate::invariant_eval::resolve_registration(&registry, name) {
+                        findings.push(ScenarioError::Rejected(inv_name(&why)));
+                    }
+                }
+            }
+            InvariantRule::ResourceCheck | InvariantRule::StagnantResource => {
+                let Some(resource) = inv.resource.as_deref() else {
+                    continue;
+                };
+                // The watched leaf lives on the primary resource.
+                let primary = crate::invariant_eval::reflect_resource(world, &registry, resource);
+                if let Err(why) = &primary {
+                    findings.push(ScenarioError::Rejected(inv_name(why)));
+                } else if let Ok(crate::invariant_eval::ResourceView::Value(value)) = &primary {
+                    if let Err(why) = crate::invariant_eval::reflect_numeric_path(
+                        *value,
+                        inv.path.as_deref().expect("stage-1 guaranteed"),
+                        "resource",
+                    ) {
+                        findings.push(ScenarioError::Rejected(inv_name(&why)));
+                    }
+                }
+                // stagnant_resource: the driver leaf lives on
+                // `driver_resource`, or the primary resource when the
+                // field is omitted (the documented default).
+                if inv.rule == InvariantRule::StagnantResource {
+                    let driver_root = inv.driver_resource.as_deref().unwrap_or(resource);
+                    let driver =
+                        crate::invariant_eval::reflect_resource(world, &registry, driver_root);
+                    if let Err(why) = &driver {
+                        findings.push(ScenarioError::Rejected(inv_name(why)));
+                    } else if let Ok(crate::invariant_eval::ResourceView::Value(value)) = &driver {
+                        if let Err(why) = crate::invariant_eval::reflect_numeric_path(
+                            *value,
+                            inv.driver_path.as_deref().expect("stage-1 guaranteed"),
+                            "resource",
+                        ) {
+                            findings.push(ScenarioError::Rejected(inv_name(&why)));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    findings
+}
+
+/// Probe one `component_check` invariant: the selector type must
+/// resolve with component reflection data (definite errors — the run
+/// would emit them as `oracle_error` at its first matched frame), and
+/// the numeric `path` must resolve on every entity bearing the
+/// selector at the warm-up frame (selector first, Transform
+/// fallback — `eval_one`'s doctrine, mirrored word-for-word). Zero
+/// matched entities: unconfirmed, no finding (the component may
+/// spawn later).
+fn probe_component_check(
+    world: &bevy_ecs::prelude::World,
+    registry: &bevy_reflect::TypeRegistry,
+    inv_name: impl Fn(&str) -> String,
+    name: &str,
+    path: &str,
+) -> Vec<crate::scenario::ScenarioError> {
+    use crate::scenario::ScenarioError;
+    let mut findings = Vec::new();
+    let registration = match crate::invariant_eval::resolve_registration(registry, name) {
+        Err(why) => {
+            findings.push(ScenarioError::Rejected(inv_name(&why)));
+            return findings;
+        }
+        Ok(r) => r,
+    };
+    let Some(reflect_component) = registration.data::<bevy_ecs::reflect::ReflectComponent>() else {
+        findings.push(ScenarioError::Rejected(inv_name(&format!(
+            "type '{name}' is registered in the game's TypeRegistry but is not a \
+             reflected component (missing ReflectComponent data — is it a Resource?)"
+        ))));
+        return findings;
+    };
+    for entity_ref in world.iter_entities() {
+        let Some(reflect) = reflect_component.reflect(entity_ref) else {
+            continue;
+        };
+        // Selector first, Transform fallback — eval_one's doctrine.
+        let value = crate::invariant_eval::reflect_numeric_path(reflect, path, "component")
+            .or_else(|sel_err| {
+                entity_ref
+                    .get::<bevy_transform::prelude::Transform>()
+                    .map(|t| t as &dyn bevy_reflect::Reflect)
+                    .ok_or_else(|| format!("entity {:?} has no Transform", entity_ref.id()))
+                    .and_then(|tf| {
+                        crate::invariant_eval::reflect_numeric_path(tf, path, "component")
+                    })
+                    .map_err(|tf_err| {
+                        format!(
+                            "path '{path}' resolves on neither the selector component \
+                             ({sel_err}) nor the entity's Transform ({tf_err})"
+                        )
+                    })
+            });
+        if let Err(why) = value {
+            // One definite instance-level failure is enough: the run
+            // hits it on the first matched frame.
+            findings.push(ScenarioError::Rejected(inv_name(&why)));
+            break;
+        }
+    }
+    findings
 }
 
 /// Case-sensitive magic literal for the built-in smoke scenario.
@@ -919,5 +1143,244 @@ mod tests {
             serde_json::to_value(&scenario).unwrap()
         );
         let _ = std::fs::remove_file(&path);
+    }
+
+    // -----------------------------------------------------------------------
+    // Stage-2 registry probe (lint_registry_probe)
+    // -----------------------------------------------------------------------
+
+    /// Test game: a registered reflected resource, INSERTED; a
+    /// registered-but-never-inserted resource (the Absent doctrine);
+    /// a registered component with an instance spawned in Startup.
+    mod probe_game {
+        use bevy_app::prelude::*;
+        use bevy_ecs::prelude::*;
+        use bevy_transform::prelude::*;
+
+        #[derive(Resource, Debug, bevy_reflect::Reflect)]
+        #[reflect(bevy_ecs::reflect::ReflectResource)]
+        pub struct Score {
+            pub home: f32,
+        }
+
+        /// Registered, never inserted — legit for lint (late
+        /// arrival), would be vacuity at run time, never a lint
+        /// finding.
+        #[derive(Resource, Debug, bevy_reflect::Reflect)]
+        #[reflect(bevy_ecs::reflect::ReflectResource)]
+        pub struct LateArriving {
+            pub value: f32,
+        }
+
+        #[derive(Component, Debug, bevy_reflect::Reflect)]
+        #[reflect(bevy_ecs::reflect::ReflectComponent)]
+        pub struct Health {
+            pub hp: f32,
+        }
+
+        pub fn app() -> App {
+            let mut app = App::new();
+            app.register_type::<Score>();
+            app.register_type::<LateArriving>();
+            app.register_type::<Health>();
+            app.insert_resource(Score { home: 1.0 });
+            // Spawned in the Startup schedule, exactly like a real
+            // game: the probe's ONE warm-up update must bring this
+            // entity into existence for the instance-level checks.
+            app.add_systems(Startup, |mut commands: Commands| {
+                commands.spawn((Health { hp: 3.0 }, Transform::default()));
+            });
+            app
+        }
+    }
+
+    fn probe_json(invariants: serde_json::Value) -> crate::scenario::Scenario {
+        let json = serde_json::json!({
+            "bot": { "type": "chaos", "seed": 1 },
+            "duration_s": 1.0,
+            "invariants": invariants,
+        });
+        serde_json::from_value(json).expect("parse probe scenario")
+    }
+
+    /// A typo'd resource name is a definite error: unknown to the
+    /// registry, the run would raise oracle_error at frame 0. Lint
+    /// front-loads it.
+    #[test]
+    fn probe_flags_unknown_resource_name() {
+        let scenario = probe_json(serde_json::json!([
+            { "name": "score_watch", "rule": "resource_check",
+              "resource": "Scroe", "path": "home", "check": "gt", "value": 0.0 }
+        ]));
+        let mut app = probe_game::app();
+        let findings = lint_registry_probe(&mut app, &scenario);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.to_string().contains("unknown") && f.to_string().contains("Scroe")),
+            "typo'd resource name must be a finding: {findings:?}"
+        );
+    }
+
+    /// A registered-but-never-inserted resource (Absent doctrine) is
+    /// NEVER a finding: late arrival is legitimate gameplay.
+    #[test]
+    fn probe_absent_resource_is_not_a_finding() {
+        let scenario = probe_json(serde_json::json!([
+            { "name": "late_watch", "rule": "resource_check",
+              "resource": "LateArriving", "path": "value", "check": "gt", "value": 0.0 }
+        ]));
+        let mut app = probe_game::app();
+        let findings = lint_registry_probe(&mut app, &scenario);
+        assert!(
+            findings.is_empty(),
+            "Absent resource must not be a lint finding: {findings:?}"
+        );
+    }
+
+    /// A bogus path on an INSERTED resource is a definite error —
+    /// the instance exists, the leaf does not.
+    #[test]
+    fn probe_flags_bogus_path_on_present_resource() {
+        let scenario = probe_json(serde_json::json!([
+            { "name": "score_watch", "rule": "resource_check",
+              "resource": "Score", "path": "hoem", "check": "gt", "value": 0.0 }
+        ]));
+        let mut app = probe_game::app();
+        let findings = lint_registry_probe(&mut app, &scenario);
+        assert!(
+            findings.iter().any(|f| f.to_string().contains("hoem")),
+            "bogus path on present resource must be a finding: {findings:?}"
+        );
+    }
+
+    /// A valid path on an inserted resource is clean — the happy
+    /// path stays silent.
+    #[test]
+    fn probe_accepts_valid_resource_path() {
+        let scenario = probe_json(serde_json::json!([
+            { "name": "score_watch", "rule": "resource_check",
+              "resource": "Score", "path": "home", "check": "gt", "value": 0.0 }
+        ]));
+        let mut app = probe_game::app();
+        let findings = lint_registry_probe(&mut app, &scenario);
+        assert!(
+            findings.is_empty(),
+            "valid resource check must lint clean: {findings:?}"
+        );
+    }
+
+    /// A typo'd selector component name is a definite error.
+    #[test]
+    fn probe_flags_unknown_component_name() {
+        let scenario = probe_json(serde_json::json!([
+            { "name": "hp_watch", "rule": "component_check",
+              "target_selector": { "with_component": { "name": "Heatlh" } },
+              "path": "hp", "check": "lt", "value": 0.0 }
+        ]));
+        let mut app = probe_game::app();
+        let findings = lint_registry_probe(&mut app, &scenario);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.to_string().contains("unknown") && f.to_string().contains("Heatlh")),
+            "typo'd component name must be a finding: {findings:?}"
+        );
+    }
+
+    /// A bogus path on an EXISTING entity (spawned in Startup, alive
+    /// at the warm-up frame) is a definite error; a valid path
+    /// resolving through the selector component is clean. Also the
+    /// Transform fallback: `translation.x` resolves on the entity's
+    /// Transform even though Health has no such field.
+    #[test]
+    fn probe_instance_level_component_paths() {
+        // Bogus leaf on the selector component, entity exists.
+        let scenario = probe_json(serde_json::json!([
+            { "name": "hp_watch", "rule": "component_check",
+              "target_selector": { "with_component": { "name": "Health" } },
+              "path": "ph", "check": "lt", "value": 0.0 }
+        ]));
+        let mut app = probe_game::app();
+        let findings = lint_registry_probe(&mut app, &scenario);
+        assert!(
+            findings.iter().any(|f| f.to_string().contains("ph")),
+            "bogus path on existing entity must be a finding: {findings:?}"
+        );
+
+        // Valid leaf on the selector component.
+        let scenario = probe_json(serde_json::json!([
+            { "name": "hp_watch", "rule": "component_check",
+              "target_selector": { "with_component": { "name": "Health" } },
+              "path": "hp", "check": "lt", "value": 0.0 }
+        ]));
+        let mut app = probe_game::app();
+        let findings = lint_registry_probe(&mut app, &scenario);
+        assert!(
+            findings.is_empty(),
+            "valid selector path must lint clean: {findings:?}"
+        );
+
+        // Transform fallback path: selector has no such field, the
+        // entity's Transform does. eval_one's doctrine, mirrored.
+        let scenario = probe_json(serde_json::json!([
+            { "name": "hp_watch", "rule": "component_check",
+              "target_selector": { "with_component": { "name": "Health" } },
+              "path": "translation.x", "check": "lt", "value": 10.0 }
+        ]));
+        let mut app = probe_game::app();
+        let findings = lint_registry_probe(&mut app, &scenario);
+        assert!(
+            findings.is_empty(),
+            "Transform-fallback path must lint clean: {findings:?}"
+        );
+    }
+
+    /// An inserted REFLECTED-as-component-only type named as a
+    /// resource: definite data-shape error (the run would raise
+    /// oracle_error at frame 0).
+    #[test]
+    fn probe_flags_component_named_as_resource() {
+        let scenario = probe_json(serde_json::json!([
+            { "name": "hp_watch", "rule": "resource_check",
+              "resource": "Health", "path": "hp", "check": "gt", "value": 0.0 }
+        ]));
+        let mut app = probe_game::app();
+        let findings = lint_registry_probe(&mut app, &scenario);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.to_string().contains("not a reflected Resource")),
+            "a component named as a resource must be a finding: {findings:?}"
+        );
+    }
+
+    /// stale stagnant_resource driver paths (the leaf the windows
+    /// budget watches) probe exactly like watched leaves — on the
+    /// driver_resource, or the primary resource by default.
+    #[test]
+    fn probe_stagnant_driver_paths() {
+        // Driver on the primary resource, valid leaf: clean.
+        let scenario = probe_json(serde_json::json!([
+            { "name": "stag", "rule": "stagnant_resource",
+              "resource": "Score", "path": "home", "driver_path": "home", "window_s": 0.5 }
+        ]));
+        let mut app = probe_game::app();
+        let findings = lint_registry_probe(&mut app, &scenario);
+        assert!(
+            findings.is_empty(),
+            "valid stagnant_resource must lint clean: {findings:?}"
+        );
+        // Driver on the primary resource, BOGUS leaf: finding.
+        let scenario = probe_json(serde_json::json!([
+            { "name": "stag", "rule": "stagnant_resource",
+              "resource": "Score", "path": "home", "driver_path": "hoem", "window_s": 0.5 }
+        ]));
+        let mut app = probe_game::app();
+        let findings = lint_registry_probe(&mut app, &scenario);
+        assert!(
+            findings.iter().any(|f| f.to_string().contains("hoem")),
+            "bogus driver_path on primary resource must be a finding: {findings:?}"
+        );
     }
 }

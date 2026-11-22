@@ -70,7 +70,7 @@ impl Rule {
             Self::ProgressSurfaceEmpty => "No game state was verifiable at all during progress monitoring (no reflected game types and no progress markers/resources in scope); progress cannot be assessed. Informational by default — escalate with strict_warnings or progress.require_surface.",
             Self::OracleError => "An oracle itself errored while evaluating (infrastructure failure, not a game bug).",
             Self::ScenarioError => "The scenario itself failed (rejected config) rather than the game misbehaving.",
-            Self::LintFinding => "Lint-mode finding: the scenario config failed static validation (BEVY_PLAYTEST_LINT). Never a statement about a real run's outcome.",
+            Self::LintFinding => "Lint-mode finding: the scenario config failed static validation, or a definite type-resolution error was caught by the lint registry probe (BEVY_PLAYTEST_LINT). Never a statement about a real run's outcome.",
         }
     }
 
@@ -148,8 +148,9 @@ declare_rules! {
 
     // Lint mode (plugin.rs): a config-coherence finding surfaced by
     // `BEVY_PLAYTEST_LINT` — an aggregated scenario validation
-    // error. The config is wrong, not the game: lint never says
-    // anything about a real run's outcome.
+    // error or a definite resolution error caught by the registry
+    // probe of the booted App. The config is wrong, not the game:
+    // lint never says anything about a real run's outcome.
     LintFinding => "lint_finding",
 
     // Infrastructure errors
