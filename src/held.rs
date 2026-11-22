@@ -23,7 +23,7 @@
 //!
 //! - `frames_matched`: RESOLVED frames — the count of frames on which
 //!   the resource resolved and the leaf was read (existence
-//!   evidence, exactly the spec's meaning). For eventually-mode
+//!   evidence, exactly the documented meaning). For eventually-mode
 //!   checks this counts RESOLUTIONS, not predicate-held frames, so a
 //!   late-arriving resource shows `frames_matched < frame_count`
 //!   honestly. (Amendment note: the semantics is deliberately

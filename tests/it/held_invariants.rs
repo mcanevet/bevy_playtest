@@ -343,10 +343,10 @@ fn fired_stagnant_check_is_not_held() {
 }
 
 // ---------------------------------------------------------------------------
-// Sizing: 20 invariants ≈ 3 KB (spec §2's constant-size claim)
+// Sizing: 20 invariants ≈ 3 KB (the documented constant-size claim)
 // ---------------------------------------------------------------------------
 
-/// The spec's sizing claim, made executable: 20 serialized
+/// The documented sizing claim, made executable: 20 serialized
 /// held-invariant objects stay in the low-KB range — the reason the
 /// section ships default-on with no opt-in tier.
 #[test]
