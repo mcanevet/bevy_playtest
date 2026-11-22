@@ -83,11 +83,10 @@ pub const ENV_SEED: &str = "BEVY_PLAYTEST_SEED";
 /// Lint mode (takeover): when set alongside [`ENV_SCENARIO`], the
 /// takeover runs the scenario linter INSTEAD of driving the game:
 /// every config error is collected and reported at once (aggregate,
-/// never first-error-only), plus a type-registry probe of the booted
-/// App (stage 2) — then the process exits without running the frame
-/// loop. A clean lint means "the config is coherent", never "the
-/// game will pass": frame-level judgments are out of scope. Alone
-/// (no scenario) the variable is inert, like [`ENV_SEED`].
+/// never first-error-only) — then the process exits without running
+/// the frame loop. A clean lint means "the config is coherent",
+/// never "the game will pass": frame-level judgments are out of
+/// scope. Alone (no scenario) the variable is inert, like [`ENV_SEED`].
 pub const ENV_LINT: &str = "BEVY_PLAYTEST_LINT";
 pub use crate::sinks::ENV_ALLOW_MISSING_LOG_CAPTURE;
 /// Seed for the deterministic-randomness shim the battery preloads into
@@ -328,11 +327,10 @@ fn run_takeover(app: &mut App, config: &TakeoverConfig) -> ! {
             }
         }
     }
-    // Lint mode intercept: with BEVY_PLAYTEST_LINT set, aggregate every
-    // scenario error (plus the stage-2 registry probe) and exit —
-    // never reaching the frame loop. Intercept BEFORE the
-    // verify_replay/run_scenario dispatch so lint covers replay
-    // scenarios too.
+    // Lint mode intercept: with BEVY_PLAYTEST_LINT set, aggregate
+    // every scenario error and exit — never reaching the frame loop.
+    // Intercept BEFORE the verify_replay/run_scenario dispatch so
+    // lint covers replay scenarios too.
     if std::env::var_os(ENV_LINT).is_some() {
         run_lint(&scenario, &config.report_path, source);
     }
