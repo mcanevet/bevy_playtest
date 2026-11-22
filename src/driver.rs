@@ -2092,6 +2092,10 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         )
     }) {
         app.init_resource::<crate::invariant_eval::WatchedResources>();
+        // Held-invariant evidence accumulators (spec 0.14.1 §2): the
+        // resource_check/stagnant_resource recorders fold into this
+        // on every observed frame.
+        app.init_resource::<crate::held::HeldBookkeeping>();
     }
     if scenario.verify_replay {
         app.insert_resource(crate::replay::ReplaySeries::default());
@@ -2920,6 +2924,19 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             },
         ))
     };
+    // Held-invariant evidence (spec 0.14.1 §2): collected from the
+    // accumulator resource plus the watched bookkeeping AFTER the
+    // post-run audits (so `failed` judges against the final, audited
+    // violation snapshot — an invariant demoted to Fail by a
+    // deadline/vacuity audit must not appear as "held").
+    let held_bookkeeping = app
+        .world_mut()
+        .remove_resource::<crate::held::HeldBookkeeping>()
+        .unwrap_or_default();
+    let held_invariants =
+        held_bookkeeping.collect(&scenario.invariants, &watched_resources, tps, &|name| {
+            snap.iter().any(|v| v.target == name)
+        });
     Ok(PlaytestReport {
         schema_version: 1,
         status,
@@ -2942,6 +2959,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         game_build_profile: Some(crate::discovery::surface::BuildProfile::current()),
         state_digest,
         progress_samples: progress_audit.map(|a| a.samples).unwrap_or_default(),
+        held_invariants,
         source_derived_keys: None,
         source_derived_notes: None,
         #[cfg(feature = "lw-reader")]

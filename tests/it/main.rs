@@ -30,6 +30,7 @@ mod driver_smoke;
 mod explorer;
 mod fault_injection;
 mod frozen_world_detail;
+mod held_invariants;
 mod input_delivery;
 mod isolation;
 mod negative_validation;

@@ -31,6 +31,34 @@
   surface, `churn` says the frame loop was alive, `channels` counts the
   channels in scope). Non-empty whenever
   `liveness.progress.mode` is not `"off"`.
+- `held_invariants` (absent when no resource-tier invariant passed):
+  the pass-side evidence trace — one compact object per PASSING
+  `resource_check` / `stagnant_resource` invariant, the mirror of the
+  violations list for invariants that held. A passing run previously
+  carried zero per-invariant evidence (a deadline met at frame 299 of
+  300 was indistinguishable from one met at frame 3):
+  - `name`, `rule`, `target` — the invariant's identity, the rule
+    kind, and the reflect target (`Resource.leaf`)
+  - `frames_matched` — frames on which the resource resolved and the
+    leaf was read (existence evidence; `frames_matched: 0` plus a
+    `vacuous_invariant` finding is the wrong-path signal, since
+    vacuous invariants get no entry)
+  - `predicate` (`resource_check` only) — the authored predicate in
+    wire syntax, e.g. `ge 0`
+  - `observed_min` / `observed_max` (`resource_check` only) —
+    extrema of the sampled leaf across matched frames
+  - `worst_frame` (`resource_check`, ordered predicates only) — the
+    frame of the extremum closest to violating (`lt`/`le` → the max,
+    `gt`/`ge` → the min; earliest frame wins ties); omitted for
+    `equals`/`ne`, where "closest to violating" is not well-ordered
+  - `met_at_frame` / `deadline_frame` (eventually-mode only) — the
+    first frame the predicate held and the audited deadline
+    (`eventually_s × tps`, ceiled)
+  - `episodes_fired` / `driver_advanced` / `driver`
+    (`stagnant_resource` only) — stagnation episodes that fired (0 on
+    a passing run) and the run-total driver-leaf advance (sum of
+    positive deltas across fully-observed frames; gaps and rewinds
+    are never credited), plus the driver reflect path
 - `harness_mode`: `"in_process"`
 - `scenario_source`: `"file"`, `"builtin_smoke"`, or `"builtin_battery"`
 - `log_capture_available` (absent when not applicable; `log_capture_available: false` also produces an
