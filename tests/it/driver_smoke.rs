@@ -942,3 +942,44 @@ fn chaos_same_frame_retap_observes_both_edges() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Passive mode: the observe-only escape hatch (spec 0.14.1 §passive)
+// ---------------------------------------------------------------------------
+
+/// `"passive": true` must mean what it says at RUNTIME, not just at
+/// load: no key draws, no clicks, no motion — an empty action log on
+/// an observable world. Without the early returns in the chaos pick
+/// paths, a default-surface chaos bot would still press keys while
+/// claiming to observe.
+#[test]
+fn passive_bot_emits_no_inputs_and_its_run_still_observes() {
+    let _slot = common::run_slot();
+    // Default-surface chaos (would press keys/click without the
+    // passive early return) — the strongest runtime proof.
+    let scenario: Scenario = serde_json::from_str(
+        r#"{"bot":{"type":"chaos","seed":7,"passive":true},"duration_s":1.0,"tps":60}"#,
+    )
+    .unwrap();
+    let mut app = minimal_app();
+    spawn_observable_entity(&mut app);
+    let report = run_scenario(&mut app, &scenario).unwrap();
+    assert!(
+        report.action_log.is_empty(),
+        "a passive bot must emit no key actions: {:?}",
+        report.action_log
+    );
+    assert!(
+        report.choices.iter().all(|c| !matches!(
+            c.kind,
+            bevy_playtest::choice::ChoiceKind::Key | bevy_playtest::choice::ChoiceKind::KeyCombo
+        )),
+        "a passive bot must draw no keys: {:?}",
+        report.choices
+    );
+    // The run itself is real and observable: 60 frames ran, the
+    // moving entity keeps the vacuity guard quiet, and the run
+    // passes — observation, not emptiness.
+    assert_eq!(report.frame_count, 60);
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+}

@@ -124,6 +124,18 @@ pub struct BotConfig {
     /// replay-faithful: ties are broken by the recorded random draws.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub explore: bool,
+    /// Opt in to an input-free run: the bot emits NO inputs, making
+    /// the scenario purely observational. Without this flag an empty
+    /// synthetic_keyboard input list is rejected at load (a bot that
+    /// never acts is usually an authoring slip — a typo'd list, a
+    /// dropped key), so observe-only scenarios were unexpressible.
+    /// Explicit opt-in keeps the guard for the accidental case while
+    /// making intentional observation expressible (the same
+    /// unjudgeable-vs-rejected trade as the window_s fix). Chaos bots
+    /// may also declare it, though an idle chaos bot is equivalent
+    /// to an empty synthetic_keyboard.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub passive: bool,
 }
 
 /// A scripted mouse click: position + button + hold, frame-indexed.
@@ -954,13 +966,35 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
         // `key_presses` OR `mouse_clicks` must be non-empty: a
         // mouse-only scripted scenario is valid (the docs advertise
         // `mouse_clicks` as orthogonal to the bot's keyboard half).
-        if scenario.bot.key_presses.is_empty()
+        // `passive: true` opts OUT: an intentional observe-only run
+        // (empty lists, no inputs emitted) — the accidental-typo
+        // guard applies only without the explicit opt-in.
+        if !scenario.bot.passive
+            && scenario.bot.key_presses.is_empty()
             && scenario.bot.mouse_clicks.is_empty()
             && scenario.bot.mouse_motion.is_empty()
         {
             errors.push(ScenarioError::Rejected(
                 "synthetic_keyboard bot requires a non-empty key_presses, \
-                 mouse_clicks or mouse_motion list"
+                 mouse_clicks or mouse_motion list (or \"passive\": true for \
+                 an intentional observe-only run)"
+                    .into(),
+            ));
+        }
+        // Reserved-surface honesty: `passive` promises no inputs, so
+        // declaring scripted inputs alongside it is a contradiction
+        // the loader must not silently swallow (the inputs would be
+        // skipped, or worse, honored while the flag claims
+        // observation-only).
+        if scenario.bot.passive
+            && (!scenario.bot.key_presses.is_empty()
+                || !scenario.bot.mouse_clicks.is_empty()
+                || !scenario.bot.mouse_motion.is_empty())
+        {
+            errors.push(ScenarioError::Rejected(
+                "passive bot declares scripted inputs (key_presses, \
+                 mouse_clicks or mouse_motion) — passive runs emit no \
+                 inputs; remove the inputs or drop \"passive\""
                     .into(),
             ));
         }
@@ -1028,6 +1062,19 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
     // surface yields a bot that silently does nothing.
     if scenario.bot.bot_type == BotType::Chaos {
         if let Some(surface) = &scenario.bot.raw_surface {
+            // Reserved-surface honesty (synthetic twin below): passive
+            // promises no inputs, and a chaos bot with a non-empty
+            // surface would press them — the flag would be a lie.
+            if scenario.bot.passive
+                && (!surface.keys.is_empty() || !surface.mouse_buttons.is_empty())
+            {
+                errors.push(ScenarioError::Rejected(
+                    "passive bot declares an input surface (raw_surface with \
+                     keys or mouse_buttons) — passive runs emit no inputs; \
+                     remove the surface or drop \"passive\""
+                        .into(),
+                ));
+            }
             for key in &surface.keys {
                 if normalize_key_name(key).is_none() {
                     errors.push(ScenarioError::Rejected(unknown_key_error(key, None)));
@@ -1036,10 +1083,14 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
             // An explicitly empty `keys` list opts out of chaos keys
             // (mouse-only chaos) — valid only if the mouse surface is
             // non-empty; a fully-empty surface can do nothing.
-            if surface.keys.is_empty() && surface.mouse_buttons.is_empty() {
+            // `passive: true` opts into exactly that: an intentional
+            // observe-only run.
+            if surface.keys.is_empty() && surface.mouse_buttons.is_empty() && !scenario.bot.passive
+            {
                 errors.push(ScenarioError::Rejected(
                     "raw_surface is empty — a chaos bot with no keys and no \
-                     mouse buttons can do nothing (vacuous run)"
+                     mouse buttons can do nothing (vacuous run; declare \
+                     \"passive\": true for an intentional observe-only run)"
                         .into(),
                 ));
             }
