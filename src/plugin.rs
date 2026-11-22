@@ -662,7 +662,7 @@ fn lint_registry_probe(
                     // Only the TYPE needs to resolve for bounds
                     // recording; there is no numeric path to confirm.
                     if let Err(why) =
-                        crate::invariant_eval::resolve_registration(&registry, name)
+                        crate::invariant_eval::resolve_registration(&registry, name, "component")
                     {
                         findings.push(ScenarioError::Rejected(inv_name(&why)));
                     }
@@ -728,7 +728,7 @@ fn probe_component_check(
     use crate::scenario::ScenarioError;
     let mut findings = Vec::new();
     let registration =
-        match crate::invariant_eval::resolve_registration(registry, name) {
+        match crate::invariant_eval::resolve_registration(registry, name, "component") {
             Err(why) => {
                 findings.push(ScenarioError::Rejected(inv_name(&why)));
                 return findings;
