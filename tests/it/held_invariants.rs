@@ -372,7 +372,7 @@ fn twenty_held_invariants_serialize_under_4kb() {
         });
     }
     let json = serde_json::to_string(&entries).unwrap();
-    // Spec claims ≈3 KB for 20 invariants. Allow generous headroom to
+    // The documented estimate is ≈3 KB for 20 invariants. Allow generous headroom to
     // a hard bound of 4 KB so formatting drift doesn't flake CI.
     assert!(
         json.len() < 4 * 1024,
