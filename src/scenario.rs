@@ -712,23 +712,21 @@ impl std::fmt::Display for ScenarioError {
 
 impl std::error::Error for ScenarioError {}
 
-/// Validate a scenario. Rejects (never silently degrades) on:
-/// - bad tps/duration/liveness values
-/// - compute-DoS caps
-/// - Time\<Virtual\> max_delta clamp violations
-/// - path-traversal in scenario names
-/// - unimplemented bot types
-/// - duplicate invariant names
-/// - inconsistent invariant bounds/time windows
+/// Collect every liveness.progress configuration error, in check
+/// order (the aggregate-all form the lint walker needs). Same checks,
+/// same order as the previous first-error form — only the
+/// aggregation differs, and the default-config / mode-off exemptions
+/// behave identically (early `return`).
 fn validate_progress_config(
     progress: &ProgressConfig,
     scenario: &Scenario,
-) -> Result<(), ScenarioError> {
+    errors: &mut Vec<ScenarioError>,
+) {
     if progress.mode == ProgressMode::Off {
-        return Ok(()); // Oracle disabled: nothing further to check.
+        return; // Oracle disabled: nothing further to check.
     }
     if progress.mode == ProgressMode::Markers && progress.markers.is_empty() {
-        return Err(ScenarioError::Rejected(
+        errors.push(ScenarioError::Rejected(
             "liveness.progress.mode 'markers' requires a non-empty markers \
              list — without markers the oracle would watch nothing and \
              silently pass everything"
@@ -736,13 +734,13 @@ fn validate_progress_config(
         ));
     }
     if !progress.window_s.is_finite() || progress.window_s <= 0.0 {
-        return Err(ScenarioError::Rejected(format!(
+        errors.push(ScenarioError::Rejected(format!(
             "liveness.progress.window_s must be finite and > 0, got {}",
             progress.window_s
         )));
     }
     if !progress.sample_s.is_finite() || progress.sample_s <= 0.0 {
-        return Err(ScenarioError::Rejected(format!(
+        errors.push(ScenarioError::Rejected(format!(
             "liveness.progress.sample_s must be finite and > 0, got {}",
             progress.sample_s
         )));
@@ -752,7 +750,7 @@ fn validate_progress_config(
     // silently would hide a broken config behind partial coverage.
     for entry in progress.markers.iter().chain(progress.exclude.iter()) {
         if entry.trim().is_empty() {
-            return Err(ScenarioError::Rejected(
+            errors.push(ScenarioError::Rejected(
                 "liveness.progress.markers/exclude entries must not be \
                  blank — a blank entry is indistinguishable from a \
                  typo, and silently dropping it hides a broken config"
@@ -772,10 +770,10 @@ fn validate_progress_config(
     if progress.window_s == default_progress_window()
         && progress.sample_s == default_progress_sample()
     {
-        return Ok(());
+        return;
     }
     if progress.window_s >= scenario.duration_s {
-        return Err(ScenarioError::Rejected(format!(
+        errors.push(ScenarioError::Rejected(format!(
             "liveness.progress.window_s {} must be shorter than the \
              scenario duration_s {} — otherwise fewer than one window \
              ever completes and the oracle can never fire",
@@ -784,7 +782,7 @@ fn validate_progress_config(
     }
     let frame_s = 1.0 / scenario.tps as f32;
     if progress.sample_s < frame_s {
-        return Err(ScenarioError::Rejected(format!(
+        errors.push(ScenarioError::Rejected(format!(
             "liveness.progress.sample_s {} is shorter than one frame at \
              tps {} ({:.6}s) — sub-frame sampling collapses to repeated \
              identical samples; raise sample_s to at least one frame",
@@ -792,7 +790,7 @@ fn validate_progress_config(
         )));
     }
     if progress.sample_s >= progress.window_s {
-        return Err(ScenarioError::Rejected(format!(
+        errors.push(ScenarioError::Rejected(format!(
             "liveness.progress.sample_s {} must be shorter than \
              window_s {} — otherwise fewer than two samples fall in a \
              window and the change-detection degenerates",
@@ -810,7 +808,7 @@ fn validate_progress_config(
     let sample_product = progress.sample_s * scenario.tps as f32;
     let sample_frames = sample_product.round();
     if (sample_product - sample_frames).abs() > 1e-3 {
-        return Err(ScenarioError::Rejected(format!(
+        errors.push(ScenarioError::Rejected(format!(
             "liveness.progress.sample_s {} must be exactly a whole \
              number of frames at tps {}: sample_s·tps = {} — pick a \
              sample_s that is a whole frame count ({} frames, i.e. \
@@ -826,7 +824,7 @@ fn validate_progress_config(
     let window_product = progress.window_s * scenario.tps as f32;
     let window_frames = (window_product / sample_frames as f32).round();
     if (window_product / sample_frames as f32 - window_frames).abs() > 1e-3 {
-        return Err(ScenarioError::Rejected(format!(
+        errors.push(ScenarioError::Rejected(format!(
             "liveness.progress.window_s {} must be a whole number of \
              sample intervals at tps {}: got sample_frames {}, authored \
              window_s·tps = {} frames — the nearest coherent window is \
@@ -840,15 +838,26 @@ fn validate_progress_config(
             window_frames as u64
         )));
     }
-    Ok(())
 }
 
-pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
+/// Collect EVERY validation error in the scenario, in check order —
+/// the aggregate-all-errors form the lint mode (`BEVY_PLAYTEST_LINT`)
+/// needs: one pass shows the author every rejection at once instead of
+/// one error per full run.
+///
+/// Adds NOTHING to the accepted/rejected boundary: it walks exactly
+/// the checks of [`validate_scenario`], in the same order — a scenario
+/// is accepted by `validate_scenario` iff this list is empty. Lint
+/// only front-loads identical findings. Errors are `ScenarioError`s
+/// (structured, same taxonomy as a normal run's rejection), each
+/// already naming its invariant where the underlying check does.
+pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
+    let mut errors = Vec::new();
     if scenario.tps < 1 {
-        return Err(ScenarioError::Rejected("tps must be >= 1".into()));
+        errors.push(ScenarioError::Rejected("tps must be >= 1".into()));
     }
     if !scenario.duration_s.is_finite() || scenario.duration_s <= 0.0 {
-        return Err(ScenarioError::Rejected(
+        errors.push(ScenarioError::Rejected(
             "duration_s must be finite and > 0".into(),
         ));
     }
@@ -858,7 +867,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
     const MAX_DURATION_S: f32 = 3_600.0;
     const MAX_TOTAL_TICKS: u64 = 10_000_000;
     if scenario.tps > MAX_TPS {
-        return Err(ScenarioError::Rejected(format!(
+        errors.push(ScenarioError::Rejected(format!(
             "tps {} exceeds the maximum of {MAX_TPS}",
             scenario.tps
         )));
@@ -866,7 +875,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
     // Time<Virtual> clamps incoming deltas to max_delta (250ms default) —
     // a manual frame duration above that silently distorts dt. Reject.
     if scenario.simulated_time && 1.0 / scenario.tps as f64 > 0.250 {
-        return Err(ScenarioError::Rejected(format!(
+        errors.push(ScenarioError::Rejected(format!(
             "simulated_time frame duration {:.3}s (tps {}) exceeds the \
              Time<Virtual> max_delta clamp (0.250s) — dt would be silently \
              distorted; raise tps above 4",
@@ -875,7 +884,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
         )));
     }
     if scenario.duration_s > MAX_DURATION_S {
-        return Err(ScenarioError::Rejected(format!(
+        errors.push(ScenarioError::Rejected(format!(
             "duration_s {} exceeds the maximum of {MAX_DURATION_S}",
             scenario.duration_s
         )));
@@ -883,7 +892,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
     // Reject NaN/negative liveness timeouts — they silently disable
     // frozen_world detection (timeout_frames 0).
     if !scenario.liveness.timeout_s.is_finite() || scenario.liveness.timeout_s <= 0.0 {
-        return Err(ScenarioError::Rejected(format!(
+        errors.push(ScenarioError::Rejected(format!(
             "liveness.timeout_s must be finite and > 0, got {}",
             scenario.liveness.timeout_s
         )));
@@ -891,7 +900,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
     // A timeout SMALLER than one frame gives timeout_frames 0 (cast
     // truncates) — frozen_world silently disabled. Reject up front.
     if (scenario.liveness.timeout_s * scenario.tps as f32) as u64 == 0 {
-        return Err(ScenarioError::Rejected(format!(
+        errors.push(ScenarioError::Rejected(format!(
             "liveness.timeout_s {} is shorter than one frame at tps {} \
              (frozen-world detection would be silently disabled)",
             scenario.liveness.timeout_s, scenario.tps
@@ -900,18 +909,18 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
     // The liveness mode knob is not implemented: "off" must reject
     // loudly instead of silently behaving like real_time.
     if scenario.liveness.mode == LivenessMode::Off {
-        return Err(ScenarioError::NotImplemented(
+        errors.push(ScenarioError::NotImplemented(
             "liveness.mode 'off' is not implemented — the liveness oracle \
              always runs; widen timeout_s to accommodate quiet phases"
                 .into(),
         ));
     }
-    validate_progress_config(&scenario.liveness.progress, scenario)?;
+    validate_progress_config(&scenario.liveness.progress, scenario, &mut errors);
     // Typed-oracle selection is not implemented. `Some(vec![])` is as
     // much a selection as a populated list (and reads as "none" to a
     // human author) — any non-None value must reject loudly.
     if scenario.oracles.is_some() {
-        return Err(ScenarioError::NotImplemented(
+        errors.push(ScenarioError::NotImplemented(
             "oracles selection is not implemented — all registered \
              oracles always run; omit the oracles field"
                 .into(),
@@ -919,7 +928,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
     }
     let total_ticks = (scenario.duration_s * scenario.tps as f32).ceil() as u64;
     if total_ticks > MAX_TOTAL_TICKS {
-        return Err(ScenarioError::Rejected(format!(
+        errors.push(ScenarioError::Rejected(format!(
             "total ticks ({total_ticks}) exceed the maximum of {MAX_TOTAL_TICKS} \
              (duration_s {} x tps {})",
             scenario.duration_s, scenario.tps
@@ -934,7 +943,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
         {
-            return Err(ScenarioError::Rejected(format!(
+            errors.push(ScenarioError::Rejected(format!(
                 "scenario.name '{name}' is invalid: names may only contain \
                  [A-Za-z0-9_-] and must be non-empty",
             )));
@@ -949,7 +958,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
             && scenario.bot.mouse_clicks.is_empty()
             && scenario.bot.mouse_motion.is_empty()
         {
-            return Err(ScenarioError::Rejected(
+            errors.push(ScenarioError::Rejected(
                 "synthetic_keyboard bot requires a non-empty key_presses, \
                  mouse_clicks or mouse_motion list"
                     .into(),
@@ -957,7 +966,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
         }
         for kp in &scenario.bot.key_presses {
             if normalize_key_name(&kp.key).is_none() {
-                return Err(ScenarioError::Rejected(unknown_key_error(
+                errors.push(ScenarioError::Rejected(unknown_key_error(
                     &kp.key,
                     Some(kp.frame),
                 )));
@@ -968,13 +977,13 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
     // harness can inject (an unknown name would silently no-op).
     for click in &scenario.bot.mouse_clicks {
         if normalize_mouse_button_name(&click.button).is_none() {
-            return Err(ScenarioError::Rejected(unknown_mouse_button_error(
+            errors.push(ScenarioError::Rejected(unknown_mouse_button_error(
                 &click.button,
                 Some(click.frame),
             )));
         }
         if click.hold_frames == 0 {
-            return Err(ScenarioError::Rejected(format!(
+            errors.push(ScenarioError::Rejected(format!(
                 "mouse_clicks at frame {}: hold_frames must be >= 1 (a \
                  zero-frame hold is a same-frame press+release, which \
                  ButtonInput cancels)",
@@ -988,14 +997,14 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
     // silently.
     for motion in &scenario.bot.mouse_motion {
         if motion.repeat_frames == 0 {
-            return Err(ScenarioError::Rejected(format!(
+            errors.push(ScenarioError::Rejected(format!(
                 "mouse_motion at frame {}: repeat_frames must be >= 1 (a \
                  zero-repeat motion writes nothing — a silent no-op)",
                 motion.frame
             )));
         }
         if !motion.dx.is_finite() || !motion.dy.is_finite() {
-            return Err(ScenarioError::Rejected(format!(
+            errors.push(ScenarioError::Rejected(format!(
                 "mouse_motion at frame {}: dx/dy must be finite (got \
                  ({}, {})) — NaN/infinite deltas poison cursor arithmetic",
                 motion.frame, motion.dx, motion.dy
@@ -1006,7 +1015,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
         // against, and the driver's window bound would otherwise add
         // two author-controlled u64s unchecked.
         if motion.frame >= total_ticks {
-            return Err(ScenarioError::Rejected(format!(
+            errors.push(ScenarioError::Rejected(format!(
                 "mouse_motion at frame {}: entry starts at/past the run \
                  end ({} ticks) — it would apply on no frame (a silent \
                  no-op)",
@@ -1021,14 +1030,14 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
         if let Some(surface) = &scenario.bot.raw_surface {
             for key in &surface.keys {
                 if normalize_key_name(key).is_none() {
-                    return Err(ScenarioError::Rejected(unknown_key_error(key, None)));
+                    errors.push(ScenarioError::Rejected(unknown_key_error(key, None)));
                 }
             }
             // An explicitly empty `keys` list opts out of chaos keys
             // (mouse-only chaos) — valid only if the mouse surface is
             // non-empty; a fully-empty surface can do nothing.
             if surface.keys.is_empty() && surface.mouse_buttons.is_empty() {
-                return Err(ScenarioError::Rejected(
+                errors.push(ScenarioError::Rejected(
                     "raw_surface is empty — a chaos bot with no keys and no \
                      mouse buttons can do nothing (vacuous run)"
                         .into(),
@@ -1036,7 +1045,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
             }
             for button in &surface.mouse_buttons {
                 if normalize_mouse_button_name(button).is_none() {
-                    return Err(ScenarioError::Rejected(unknown_mouse_button_error(
+                    errors.push(ScenarioError::Rejected(unknown_mouse_button_error(
                         button, None,
                     )));
                 }
@@ -1052,14 +1061,14 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
         // a line break splits the line, so such a finding could never
         // be recorded (or would silently match another invariant).
         if rule.name.contains(['#', '\n', '\r']) {
-            return Err(ScenarioError::Rejected(format!(
+            errors.push(ScenarioError::Rejected(format!(
                 "invariant name {:?} may not contain '#' or a line break \
                  (it is the finding target in seed-sweep regression files)",
                 rule.name
             )));
         }
         if !seen.insert(rule.name.as_str()) {
-            return Err(ScenarioError::Rejected(format!(
+            errors.push(ScenarioError::Rejected(format!(
                 "duplicate invariant name '{}' — names must be unique",
                 rule.name
             )));
@@ -1072,14 +1081,14 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                 InvariantRule::ComponentCheck | InvariantRule::ResourceCheck
             )
         {
-            return Err(ScenarioError::NotImplemented(format!(
+            errors.push(ScenarioError::NotImplemented(format!(
                 "invariant '{}': eventually mode is only supported for component_check \
                  and resource_check",
                 rule.name
             )));
         }
         if rule.after_s.is_some() || rule.before_s.is_some() {
-            return Err(ScenarioError::NotImplemented(format!(
+            errors.push(ScenarioError::NotImplemented(format!(
                 "invariant '{}': time windows (after_s/before_s) are not \
                  supported",
                 rule.name
@@ -1094,27 +1103,28 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                 let Some(crate::enums::TargetSelector::WithComponent { name }) =
                     rule.target_selector.as_ref()
                 else {
-                    return Err(ScenarioError::Rejected(format!(
+                    errors.push(ScenarioError::Rejected(format!(
                         "invariant '{}': component_check requires \
                          'target_selector: {{\"with_component\": {{\"name\": ...}}}}'",
                         rule.name
                     )));
+                    continue;
                 };
                 if name.trim().is_empty() {
-                    return Err(ScenarioError::Rejected(format!(
+                    errors.push(ScenarioError::Rejected(format!(
                         "invariant '{}': with_component name must be non-empty",
                         rule.name
                     )));
                 }
                 if rule.path.is_none() {
-                    return Err(ScenarioError::Rejected(format!(
+                    errors.push(ScenarioError::Rejected(format!(
                         "invariant '{}': component_check requires 'path' \
                          (a reflect path into the component, e.g. \"translation.z\")",
                         rule.name
                     )));
                 }
                 if rule.check.is_none() {
-                    return Err(ScenarioError::Rejected(format!(
+                    errors.push(ScenarioError::Rejected(format!(
                         "invariant '{}': component_check requires 'check' \
                          (one of lt/le/gt/ge/equals/ne)",
                         rule.name
@@ -1123,14 +1133,14 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                 match rule.value.as_ref() {
                     Some(serde_json::Value::Number(n)) => {
                         if n.as_f64().is_none() {
-                            return Err(ScenarioError::Rejected(format!(
+                            errors.push(ScenarioError::Rejected(format!(
                                 "invariant '{}': 'value' must be a finite number",
                                 rule.name
                             )));
                         }
                     }
                     _ => {
-                        return Err(ScenarioError::Rejected(format!(
+                        errors.push(ScenarioError::Rejected(format!(
                             "invariant '{}': component_check requires a numeric \
                              'value' to compare against",
                             rule.name
@@ -1147,7 +1157,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                     || rule.min_z.is_some()
                     || rule.max_z.is_some()
                 {
-                    return Err(ScenarioError::Rejected(format!(
+                    errors.push(ScenarioError::Rejected(format!(
                         "invariant '{}': component_check does not use bounds \
                          fields (min_x/max_x/min_y/max_y/min_z/max_z) — those \
                          belong to nodes_in_bounds; use 'path'/'check'/'value'",
@@ -1164,14 +1174,14 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                 // total_ticks.
                 if let Some(eventually_s) = rule.eventually_s {
                     if !eventually_s.is_finite() || eventually_s <= 0.0 {
-                        return Err(ScenarioError::Rejected(format!(
+                        errors.push(ScenarioError::Rejected(format!(
                             "invariant '{}': eventually_s must be a finite \
                              number > 0 (got {eventually_s})",
                             rule.name
                         )));
                     }
                     if eventually_s > scenario.duration_s {
-                        return Err(ScenarioError::Rejected(format!(
+                        errors.push(ScenarioError::Rejected(format!(
                             "invariant '{}': eventually_s ({eventually_s}s) exceeds \
                              the run duration ({duration}s) — the deadline can never \
                              elapse within the run, so the check would be \
@@ -1188,7 +1198,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                 // component_check predicates a game-wide resource or
                 // expires after window_s — it silently does neither.
                 if rule.resource.is_some() {
-                    return Err(ScenarioError::Rejected(format!(
+                    errors.push(ScenarioError::Rejected(format!(
                         "invariant '{}': component_check selects entities via \
                          target_selector — 'resource' belongs to resource_check / \
                          stagnant_resource",
@@ -1196,7 +1206,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                     )));
                 }
                 if rule.window_s.is_some() {
-                    return Err(ScenarioError::Rejected(format!(
+                    errors.push(ScenarioError::Rejected(format!(
                         "invariant '{}': component_check has no window — its \
                          predicate must hold every matched frame (or eventually \
                          within 'eventually_s'); 'window_s' belongs to \
@@ -1205,7 +1215,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                     )));
                 }
                 if rule.driver_resource.is_some() || rule.driver_path.is_some() {
-                    return Err(ScenarioError::Rejected(format!(
+                    errors.push(ScenarioError::Rejected(format!(
                         "invariant '{}': component_check does not use \
                          driver_resource/driver_path — those belong to \
                          stagnant_resource",
@@ -1215,7 +1225,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
             }
             InvariantRule::NodesInBounds => {
                 if rule.value.is_some() || rule.path.is_some() || rule.check.is_some() {
-                    return Err(ScenarioError::Rejected(format!(
+                    errors.push(ScenarioError::Rejected(format!(
                         "invariant '{}': nodes_in_bounds does not use value/path/check",
                         rule.name
                     )));
@@ -1223,21 +1233,21 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                 // Same reserved-surface honesty as above: the
                 // resource-rule fields would be silently ignored.
                 if rule.resource.is_some() {
-                    return Err(ScenarioError::Rejected(format!(
+                    errors.push(ScenarioError::Rejected(format!(
                         "invariant '{}': nodes_in_bounds checks per-entity bounds — \
                          'resource' belongs to resource_check / stagnant_resource",
                         rule.name
                     )));
                 }
                 if rule.window_s.is_some() {
-                    return Err(ScenarioError::Rejected(format!(
+                    errors.push(ScenarioError::Rejected(format!(
                         "invariant '{}': nodes_in_bounds does not use window_s — \
                          that belongs to stagnant_resource",
                         rule.name
                     )));
                 }
                 if rule.driver_resource.is_some() || rule.driver_path.is_some() {
-                    return Err(ScenarioError::Rejected(format!(
+                    errors.push(ScenarioError::Rejected(format!(
                         "invariant '{}': nodes_in_bounds does not use \
                          driver_resource/driver_path — those belong to \
                          stagnant_resource",
@@ -1266,7 +1276,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                             && gen.bytes().all(|b| b.is_ascii_digit())
                     });
                 if entity_shaped {
-                    return Err(ScenarioError::Rejected(format!(
+                    errors.push(ScenarioError::Rejected(format!(
                         "invariant '{}': a nodes_in_bounds name may not look like a bevy \
                          entity — '{name}' would collide with the global oracle's \
                          canonicalized `nodes_in_bounds:entity` fingerprint; pick a \
@@ -1285,7 +1295,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                 // type path, and reusing the component-selector
                 // vocabulary here would invite silent misuse).
                 if let Some(_selector) = rule.target_selector.as_ref() {
-                    return Err(ScenarioError::Rejected(format!(
+                    errors.push(ScenarioError::Rejected(format!(
                         "invariant '{}': {} does not use target_selector — name the \
                          resource via the 'resource' field instead (components would \
                          be matched per entity; resources are game-wide singletons)",
@@ -1293,21 +1303,22 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                     )));
                 }
                 let Some(resource) = rule.resource.as_deref() else {
-                    return Err(ScenarioError::Rejected(format!(
+                    errors.push(ScenarioError::Rejected(format!(
                         "invariant '{}': {} requires 'resource' — the registered \
                          resource type name (full path, or an unambiguous short path)",
                         rule.name, rule.rule
                     )));
+                    continue;
                 };
                 if resource.trim().is_empty() {
-                    return Err(ScenarioError::Rejected(format!(
+                    errors.push(ScenarioError::Rejected(format!(
                         "invariant '{}': 'resource' must be non-empty",
                         rule.name
                     )));
                 }
                 if let Some(path) = rule.path.as_deref() {
                     if path.trim().is_empty() {
-                        return Err(ScenarioError::Rejected(format!(
+                        errors.push(ScenarioError::Rejected(format!(
                             "invariant '{}': 'path' must be non-empty — a blank \
                              reflect path resolves the resource root, never a \
                              numeric leaf",
@@ -1315,7 +1326,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                         )));
                     }
                 } else {
-                    return Err(ScenarioError::Rejected(format!(
+                    errors.push(ScenarioError::Rejected(format!(
                         "invariant '{}': {} requires 'path' — the reflect path to the \
                          numeric leaf on the resource (e.g. \"score.home\")",
                         rule.name, rule.rule
@@ -1328,7 +1339,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                     || rule.min_z.is_some()
                     || rule.max_z.is_some()
                 {
-                    return Err(ScenarioError::Rejected(format!(
+                    errors.push(ScenarioError::Rejected(format!(
                         "invariant '{}': {} does not use bounds fields — those belong \
                          to nodes_in_bounds",
                         rule.name, rule.rule
@@ -1340,21 +1351,21 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                 let expect_window = rule.rule == InvariantRule::StagnantResource;
                 match rule.window_s {
                     Some(_window_s) if !expect_window => {
-                        return Err(ScenarioError::Rejected(format!(
+                        errors.push(ScenarioError::Rejected(format!(
                             "invariant '{}': window_s belongs to stagnant_resource only",
                             rule.name
                         )));
                     }
                     Some(window_s) => {
                         if !window_s.is_finite() || window_s <= 0.0 {
-                            return Err(ScenarioError::Rejected(format!(
+                            errors.push(ScenarioError::Rejected(format!(
                                 "invariant '{}': window_s must be a finite number > 0 \
                                  (got {window_s})",
                                 rule.name
                             )));
                         }
                         if window_s > scenario.duration_s {
-                            return Err(ScenarioError::Rejected(format!(
+                            errors.push(ScenarioError::Rejected(format!(
                                 "invariant '{}': window_s ({window_s}s) exceeds the run \
                                  duration ({duration}s) — the window can never elapse \
                                  within the run, so the check would be unjudgeable; keep \
@@ -1365,7 +1376,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                         }
                     }
                     None if expect_window => {
-                        return Err(ScenarioError::Rejected(format!(
+                        errors.push(ScenarioError::Rejected(format!(
                             "invariant '{}': stagnant_resource requires 'window_s' — the \
                              maximum number of driver seconds the watched leaf may stay \
                              constant before the invariant fires",
@@ -1383,7 +1394,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                 match rule.rule {
                     InvariantRule::ResourceCheck => {
                         if rule.check.is_none() {
-                            return Err(ScenarioError::Rejected(format!(
+                            errors.push(ScenarioError::Rejected(format!(
                                 "invariant '{}': resource_check requires 'check' \
                                  (one of lt/le/gt/ge/equals/ne)",
                                 rule.name
@@ -1392,14 +1403,14 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                         match rule.value.as_ref() {
                             Some(serde_json::Value::Number(n)) => {
                                 if n.as_f64().is_none() {
-                                    return Err(ScenarioError::Rejected(format!(
+                                    errors.push(ScenarioError::Rejected(format!(
                                         "invariant '{}': 'value' must be a finite number",
                                         rule.name
                                     )));
                                 }
                             }
                             _ => {
-                                return Err(ScenarioError::Rejected(format!(
+                                errors.push(ScenarioError::Rejected(format!(
                                     "invariant '{}': resource_check requires a numeric \
                                      'value' to compare against",
                                     rule.name
@@ -1407,7 +1418,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                             }
                         }
                         if rule.driver_resource.is_some() || rule.driver_path.is_some() {
-                            return Err(ScenarioError::Rejected(format!(
+                            errors.push(ScenarioError::Rejected(format!(
                                 "invariant '{}': resource_check does not use \
                                  driver_resource/driver_path — those belong to \
                                  stagnant_resource",
@@ -1418,14 +1429,14 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                         // doctrine as component_check's eventually_s.
                         if let Some(eventually_s) = rule.eventually_s {
                             if !eventually_s.is_finite() || eventually_s <= 0.0 {
-                                return Err(ScenarioError::Rejected(format!(
+                                errors.push(ScenarioError::Rejected(format!(
                                     "invariant '{}': eventually_s must be a finite \
                                      number > 0 (got {eventually_s})",
                                     rule.name
                                 )));
                             }
                             if eventually_s > scenario.duration_s {
-                                return Err(ScenarioError::Rejected(format!(
+                                errors.push(ScenarioError::Rejected(format!(
                                     "invariant '{}': eventually_s ({eventually_s}s) \
                                      exceeds the run duration ({duration}s) — the \
                                      deadline can never elapse within the run, so the \
@@ -1442,7 +1453,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                             || rule.value.is_some()
                             || rule.eventually_s.is_some()
                         {
-                            return Err(ScenarioError::Rejected(format!(
+                            errors.push(ScenarioError::Rejected(format!(
                                 "invariant '{}': stagnant_resource does not use \
                                  check/value/eventually_s — it watches whether the \
                                  leaf changes within window_s, never a threshold",
@@ -1451,7 +1462,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                         }
                         match rule.driver_path.as_deref() {
                             None => {
-                                return Err(ScenarioError::Rejected(format!(
+                                errors.push(ScenarioError::Rejected(format!(
                                     "invariant '{}': stagnant_resource requires \
                                  'driver_path' — the reflect path to the numeric \
                                  driver leaf (on 'resource' by default, or on \
@@ -1461,7 +1472,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                                 )));
                             }
                             Some(dp) if dp.trim().is_empty() => {
-                                return Err(ScenarioError::Rejected(format!(
+                                errors.push(ScenarioError::Rejected(format!(
                                     "invariant '{}': 'driver_path' must be non-empty — \
                                      a blank reflect path resolves the resource root, \
                                      never a numeric leaf",
@@ -1472,7 +1483,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                         }
                         if let Some(dr) = rule.driver_resource.as_deref() {
                             if dr.trim().is_empty() {
-                                return Err(ScenarioError::Rejected(format!(
+                                errors.push(ScenarioError::Rejected(format!(
                                     "invariant '{}': 'driver_resource' must be non-empty \
                                      — omit it to default the driver to 'resource'",
                                     rule.name
@@ -1480,7 +1491,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
                             }
                         }
                         if rule.driver_resource.is_some() && rule.driver_resource == rule.resource {
-                            return Err(ScenarioError::Rejected(format!(
+                            errors.push(ScenarioError::Rejected(format!(
                                 "invariant '{}': driver_resource is redundant when it \
                                  names the same resource as 'resource' — omit it \
                                  (the driver leaf defaults to the same resource)",
@@ -1502,7 +1513,7 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
         for (min, max, axis) in bound_pairs {
             if let (Some(lo), Some(hi)) = (min, max) {
                 if lo > hi {
-                    return Err(ScenarioError::Rejected(format!(
+                    errors.push(ScenarioError::Rejected(format!(
                         "invariant '{}' has min_{} ({}) > max_{} ({})",
                         rule.name, axis, lo, axis, hi
                     )));
@@ -1510,5 +1521,25 @@ pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
             }
         }
     }
-    Ok(())
+    errors
+}
+
+/// Validate a scenario. Rejects (never silently degrades) on:
+/// - bad tps/duration/liveness values
+/// - compute-DoS caps
+/// - Time\<Virtual\> max_delta clamp violations
+/// - path-traversal in scenario names
+/// - unimplemented bot types
+/// - duplicate invariant names
+/// - inconsistent invariant bounds/time windows
+///
+/// First-error-only form of [`lint_scenario`]: the FIRST error the
+/// walker finds, as a `Result`. Both walk the same checks in the same
+/// order, so a normal run's rejection reason and a lint run's first
+/// finding are always the same error.
+pub fn validate_scenario(scenario: &Scenario) -> Result<(), ScenarioError> {
+    match lint_scenario(scenario).into_iter().next() {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
 }

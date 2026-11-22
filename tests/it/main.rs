@@ -33,6 +33,7 @@ mod frozen_world_detail;
 mod held_invariants;
 mod input_delivery;
 mod isolation;
+mod lint;
 mod negative_validation;
 mod probe_pool;
 mod progress_liveness;
