@@ -1028,11 +1028,35 @@ fn resolve_registration<'a>(
         .collect();
     match paths.as_slice() {
         [one] => Ok(*one),
-        [] => Err(format!(
-            "unknown component '{name}' — not registered in this game's TypeRegistry \
-             (components need #[derive(Reflect)] and App::register_type, or the name \
-             must be the full registered type path)"
-        )),
+        [] => {
+            let mut msg = format!(
+                "unknown component '{name}' — not registered in this game's TypeRegistry \
+                 (components need #[derive(Reflect)] and App::register_type, or the name \
+                 must be the full registered type path)"
+            );
+            // Did-you-mean: the short-name scan above is exact-match
+            // only, so "Time" is technically "unknown" (not
+            // "ambiguous") even though Time<()>, Time<Real>,
+            // Time<Virtual> and Time<Fixed> are all sitting right
+            // there. Listing the substring-matching short paths turns
+            // that unhelpful-but-correct "unknown" into an actionable
+            // next step without changing resolution semantics at all
+            // (short names that DO match exactly and uniquely keep
+            // resolving as before).
+            let similar: Vec<String> = registry
+                .iter()
+                .map(|r| r.type_info().type_path_table().short_path().to_string())
+                .filter(|short| short.contains(name))
+                .take(4)
+                .collect();
+            if !similar.is_empty() {
+                msg.push_str(&format!(
+                    "; known similar registered types: {}",
+                    similar.join(", ")
+                ));
+            }
+            Err(msg)
+        }
         many => {
             let full: Vec<String> = many
                 .iter()
