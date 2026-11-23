@@ -662,3 +662,75 @@ fn lint_e2e_stage1_findings_defer_the_probe() {
         "stage-2 probe must be deferred while stage 1 fires: {report}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Probe-crash containment (M2): pin the flagship fix end to end
+// ---------------------------------------------------------------------------
+
+/// A game that panics during the lint probe's warm-up frame must
+/// report a Crash report (status "crash", exit 2), never a naked
+/// exit-101 panic with no report. Without the containment (panic
+/// hook + run guard + catch_unwind), a boot-crashing game turned
+/// every lint invocation into an uncompilable-looking failure. The
+/// report must also be self-describing: `error` carries the crash
+/// narrative, matching the run path's crash usage — a machine
+/// consumer sees a reason, not just a status.
+///
+/// Uses takeover_demo_crash (panics in Update on frame 1) with a
+/// stage-1-clean scenario requesting a probeable rule: the probe
+/// boots the game, the warm-up frame panics inside catch_unwind,
+/// and lint exits CRASH.
+#[test]
+fn lint_e2e_probe_crash_reports_crash_and_exits_2() {
+    let _slot = common::run_slot();
+    let dir = unique_dir("e2e_probe_crash");
+    // Stage-1-clean, probe-triggering: resource_check on bevy's
+    // registered Time resource with a valid shape. The crash
+    // happens at the warm-up frame regardless of whether the
+    // resource itself would have resolved.
+    let scenario = r#"{"bot":{"type":"chaos","seed":42},"duration_s":0.05,"tps":60,
+        "invariants":[
+          {"name":"time_moves","rule":"resource_check","resource":"Time","path":"delta","check":"gt","value":0.0}
+        ]}"#;
+    let scenario_path = dir.join("probe_crash.json");
+    let report_path = dir.join("probe_crash.report.json");
+    std::fs::write(&scenario_path, scenario).unwrap();
+    let out = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_takeover_demo_crash")))
+        .env_remove(ENV_SCENARIO)
+        .env_remove(ENV_REPORT)
+        .env_remove(ENV_LINT)
+        .env(ENV_SCENARIO, scenario_path.to_str().unwrap())
+        .env(ENV_REPORT, report_path.to_str().unwrap())
+        .env(ENV_LINT, "1")
+        .output()
+        .expect("spawn lint crash child");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(exit_code::CRASH),
+        "probe crash must exit 2 (contained), not a naked panic: {stderr}"
+    );
+    assert!(
+        stderr.contains("panicked during the lint warm-up frame"),
+        "the crash narrative must reach stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("scenario rejected:"),
+        "a boot crash is not a lint finding: {stderr}"
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
+    assert_eq!(report["status"], "crash", "{report}");
+    assert_eq!(report["harness_mode"], "lint", "{report}");
+    assert!(
+        report["error"].is_string(),
+        "lint crash report must carry a reason in `error`: {report}"
+    );
+    assert!(
+        report["error"]
+            .as_str()
+            .unwrap()
+            .contains("panicked during the lint warm-up frame"),
+        "`error` must narrate the crash: {report}"
+    );
+}
