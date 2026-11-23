@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+## [0.17.0](https://github.com/mcanevet/bevy_playtest/compare/v0.16.0...v0.17.0) - 2026-11-23
+
+### Added
+
+- *(judgement)* evaluate pairwise_separation at run time
+- *(judgement)* add the pairwise_separation authoring grammar
+- *(judgement)* add the shared episode-fold engine
+
+### Fixed
+
+- *(progress)* name the ECS role attributes in remediation texts
+
+### Other
+
+- crate-root the episode intra-doc links
+- record the dogfooding roadmap vote for the judgement layer
+- add the entity-scoped judgement-layer proposal
+- disclose the zero-config battery's counts-only progress surface
+- *(readme)* add a Bazel runfiles recipe next to the cargo one
+- *(readme)* make the quick-start snippet clippy-clean
+
 ## [0.16.0](https://github.com/mcanevet/bevy_playtest/compare/v0.15.0...v0.16.0) - 2026-11-23
 
 ### Added
