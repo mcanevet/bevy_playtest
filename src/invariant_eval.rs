@@ -1053,10 +1053,19 @@ pub(crate) fn resolve_registration<'a>(
             // by segment and still suggests. When the queried name is
             // a full path, a correct full-path suggestion beats a
             // bare short name — offer the full path of the best
-            // candidate.
-            let (probe, full_probe) = match name.rsplit_once("::") {
+            // candidate. Generic ARGS are stripped before segment
+            // extraction (`Time<…Virtuall>` probes as `Time`, not
+            // `Virtuall>`) so the suggestion is the CONTAINER — the
+            // container's spelling is the only string an author can
+            // paste back into the field verbatim; the argument alone
+            // is not a valid resource name.
+            let base = match name.find('<') {
+                Some(open) => &name[..open],
+                None => name,
+            };
+            let (probe, full_probe) = match base.rsplit_once("::") {
                 Some((_, last)) => (last, true),
-                None => (name, false),
+                None => (base, false),
             };
             let full_for = |short: &str| {
                 registry
@@ -1069,13 +1078,30 @@ pub(crate) fn resolve_registration<'a>(
             // several registered types ("Time" for Time<()>,
             // Time<Real>, …) is best served by listing those exact
             // generic spellings — an unrelated Levenshtein near-match
-            // ("Timer") would shadow the author's real target.
-            let similar: Vec<String> = shorts
+            // ("Timer") would shadow the author's real target. Rank
+            // candidates that START with the probe ahead of mere
+            // containment ("Time" lists the Time<...> containers
+            // before Timer/TimedAnimationEvent), so the take-cap
+            // spends its slots on the closest kin.
+            let mut similar: Vec<String> = shorts
                 .iter()
                 .filter(|short| short.contains(probe))
-                .take(4)
                 .cloned()
                 .collect();
+            // Rank: candidates whose OWN name segment (container name
+            // — after the last `::`, before any `<args>`) matches the
+            // probe exactly (`Time<...>` for probe "Time") outrank
+            // longer names that merely extend it ("Timer",
+            // "TimedAnimationEvent") — the author who typed `Time`
+            // means a Time, and the generic spellings are the exact
+            // strings to paste. Registry order breaks ties (stable
+            // sort).
+            fn own_segment(s: &str) -> &str {
+                let container = s.split('<').next().unwrap_or(s);
+                container.rsplit("::").next().unwrap_or(container)
+            }
+            similar.sort_by_key(|short| own_segment(short) != probe);
+            similar.truncate(4);
             if !similar.is_empty() {
                 let shown: Vec<String> = if full_probe {
                     similar.iter().map(|s| full_for(s)).collect()
