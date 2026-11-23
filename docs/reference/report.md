@@ -151,7 +151,8 @@ know:
   what it cannot confirm (a component with no instances yet);
   its findings mirror the run's resolution machinery and message
   builders (`resolve_registration`, `reflect_resource`,
-  `reflect_numeric_path`), so lint clean-ness transfers: a
+  `reflect_numeric_path`, `resolve_entity_numeric_path`), so
+  lint clean-ness transfers: a
   scenario that lints clean stays clean for the resolution errors
   the probe checks.
 - `status: "fail"` in a lint report says the *config* is incoherent.
