@@ -571,7 +571,14 @@ Two distinct error classes, at different stages:
   omitted there is no duration-coupled rejection, and a window the
   driver's TOTAL observed advance never reached is reported as an
   informational `window_unelapsed` note at run end (naming the
-  observed advance) — never a failure. Two invariants sharing one
+  observed advance) — never a failure. Budget windows with headroom:
+  a run of `duration_s` at `tps` observes `ceil(duration_s × tps)`
+  FRAMES and one fewer POSITIVE DELTAS, so a window authored at
+  exactly `duration_s × driver_units_per_second` (e.g. 400 units
+  for a 20 s run at 20 units/s) is unjudgeable by that one unit and
+  lands in the `window_unelapsed` note — author windows at
+  `duration_s × rate − 1` or smaller to guarantee the full budget
+  elapses. Two invariants sharing one
   driver leaf must declare the same rate or the scenario rejects
   (a full-path and a short-name declaration of the same type count as
   one driver; two distinct full paths are always distinct drivers,
