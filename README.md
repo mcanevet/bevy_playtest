@@ -96,6 +96,75 @@ seeded bot typed and clicked through your game while every oracle
 watched — and nothing fired. When something does, the test prints the
 findings (violation, tick, entities involved) instead.
 
+
+### Under Bazel instead of cargo
+
+`env!("CARGO_BIN_EXE_…")` is a cargo-ism: it is set for cargo test
+builds and does not exist at a `bazel test` runner's runtime. Three
+plausible-looking wirings fail before one works — worth knowing so you
+don't burn an afternoon on them:
+
+- **`args = ["$(location //:my_game)"]`** — bazel forwards test args
+  to the libtest runner, which treats the FIRST positional argument as
+  a test-name filter. Every test silently filters out; you get a green
+  `PASS` that ran nothing. This is the nastiest failure mode because
+  it looks like success.
+- **`env = {"MY_GAME": "$(location //:my_game)"}`** — `$(location)`
+  expands execroot-relative; the sandboxed test process can't reach it.
+  (`$(rootpath)`/`$(rlocationpath)` exist and expand runfiles-friendly,
+  but they still land you writing the same runfiles lookup the recipe
+  below does — go straight there.)
+- **`CARGO_BIN_EXE_*`** seen in `bazel aquery` output — that's the
+  compile-action environment only, absent at test runtime.
+
+The reliable recipe: put the binary in the test's `data` and locate it
+through the **runfiles** tree. In `BUILD.bazel`:
+
+```python
+rust_test(
+    name = "playtest_battery",
+    srcs = ["tests/playtest.rs"],
+    crate_name = "playtest",
+    deps = [
+        ":my_game_playtest_lib",   # your library, built with the playtest cfg
+        "@crates//:bevy_playtest",
+    ],
+    data = [
+        ":my_game_bin",            # the game binary rides in runfiles
+        "scenarios/battery.json",  # authored scenarios, if any
+    ],
+)
+```
+
+and in `tests/playtest.rs` replace `env!("CARGO_BIN_EXE_my_game")`
+with a runfiles lookup:
+
+```rust
+fn binary_path() -> String {
+    let name = "my_game_bin";
+    let candidates = [
+        std::env::var("TEST_SRCDIR").ok().map(|d| {
+            std::path::Path::new(&d).join("_main").join(name)
+        }),
+        std::env::var("RUNFILES_DIR").ok().map(|d| {
+            std::path::Path::new(&d).join("_main").join(name)
+        }),
+        Some(std::path::PathBuf::from(name)),
+    ];
+    candidates
+        .into_iter()
+        .flatten()
+        .find(|p| p.exists())
+        .map(|p| p.display().to_string())
+        .expect("game binary not found in runfiles; is it in the test's data?")
+}
+```
+
+`_main` is the workspace entry under bzlmod (`$(WORKSPACE_NAME)` under
+legacy mode); the last candidate covers `bazel run` invocations where
+runfiles sit next to the binary. Authored scenario files declared in
+`data` resolve through the same helpers.
+
 ## What the battery does
 
 The built-in battery scenario runs the chaos bot in **explore** mode —
