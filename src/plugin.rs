@@ -543,15 +543,15 @@ fn run_lint(
     std::process::exit(code)
 }
 
-/// Whether the scenario has any invariant the type-registry probe
-/// could ever find a DEFINITE error for. When it does not, the
-/// probe's cost and risk (plugin finishing, one real warm-up frame —
-/// asset loads, saves, anything a game does at Startup) would buy
+/// Whether the scenario has anything the type-registry probe could
+/// ever find a DEFINITE error for. When it does not, the probe's
+/// cost and risk (plugin finishing, one real warm-up frame — asset
+/// loads, saves, anything a game does at Startup) would buy
 /// nothing: the probe cannot produce a finding. Skipping the boot
 /// keeps linting a probe-free scenario side-effect-free.
 fn lint_probe_wanted(scenario: &crate::scenario::Scenario) -> bool {
     use crate::enums::InvariantRule;
-    scenario.invariants.iter().any(|inv| {
+    let invariant_probe = scenario.invariants.iter().any(|inv| {
         match inv.rule {
             InvariantRule::ComponentCheck
             | InvariantRule::ResourceCheck
@@ -563,7 +563,29 @@ fn lint_probe_wanted(scenario: &crate::scenario::Scenario) -> bool {
             // guaranteed-empty probe.
             InvariantRule::NodesInBounds => inv.target_selector.is_some(),
         }
-    })
+    });
+    invariant_probe || progress_surface_probe_wanted(scenario)
+}
+
+/// Whether the progress configuration names any surface entry the
+/// probe could flag: markers (every non-off mode) and exact
+/// `include_paths` entries (auto mode). The recorder resolves these
+/// against registered-and-currently-inserted pairs at the run's
+/// first sample, so a typo in them is a DEFINITE run error — the
+/// class lint exists to front-load. Prefix entries (`foo::`) and
+/// mode-off need no boot.
+fn progress_surface_probe_wanted(scenario: &crate::scenario::Scenario) -> bool {
+    let progress = &scenario.liveness.progress;
+    if progress.mode == crate::scenario::ProgressMode::Off {
+        return false;
+    }
+    let has_markers = progress.markers.iter().any(|m| !m.trim().is_empty());
+    let has_exact_include = progress.mode == crate::scenario::ProgressMode::Auto
+        && progress
+            .include_paths
+            .iter()
+            .any(|p| !p.trim().is_empty() && !p.ends_with("::"));
+    has_markers || has_exact_include
 }
 
 /// Stage 2: the type-registry probe. Booted-App checks stage 1 cannot
@@ -717,6 +739,18 @@ fn lint_registry_probe(
                 }
             }
         }
+    }
+    // Progress-surface probe: markers and exact include_paths
+    // entries resolve at the run's FIRST sampled frame, so a typo in
+    // them is a definite run error (`oracle_error` at frame 0 plus
+    // whatever second-order finding the missing channel causes) —
+    // the exact class lint front-loads. Shared resolution with the
+    // recorder (lint_probe_surface reuses initialize's flow), so the
+    // message cannot drift between lint and run.
+    for problem in crate::progress::lint_probe_surface(world, &scenario.liveness.progress) {
+        findings.push(ScenarioError::Rejected(format!(
+            "progress surface entry failed to resolve — {problem}"
+        )));
     }
     findings
 }

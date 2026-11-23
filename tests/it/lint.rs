@@ -664,6 +664,151 @@ fn lint_e2e_stage1_findings_defer_the_probe() {
 }
 
 // ---------------------------------------------------------------------------
+// Stage-2 progress-surface probe (dogfood round-4 gap)
+// ---------------------------------------------------------------------------
+
+/// Camelback round-4's lint-vs-run divergence, closed: a typo'd
+/// progress marker passed lint clean (nothing but invariants was
+/// probeable, so the probe never booted) and only failed a real
+/// 90s run — with a confusing oracle_error plus a second-order
+/// stalled_progress it caused. Markers resolve at the run's FIRST
+/// sampled frame against registered-and-inserted pairs, so the
+/// typo is a definite run error: exactly what stage 2 front-loads.
+/// The finding must mirror the run's `oracle_error` wording
+/// ("progress surface entry failed to resolve — {name}: {problem}")
+/// and offer a did-you-mean for the typo.
+#[test]
+fn lint_e2e_stage2_typo_progress_marker_is_a_finding() {
+    let _slot = common::run_slot();
+    let dir = unique_dir("e2e_s2_marker_typo");
+    let (out, report_path) = spawn_resource_game_lint_child(
+        r#"{"bot":{"type":"chaos","seed":42},"duration_s":5.0,"tps":60,
+            "liveness":{"progress":{"mode":"markers","markers":["GameClok"],
+                                    "window_s":2.0}}}"#,
+        &dir,
+        "s2_marker_typo",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(exit_code::FAIL),
+        "stage-2 marker findings must exit 1: {stderr}"
+    );
+    assert!(
+        stderr.contains("progress surface entry failed to resolve — GameClok"),
+        "wording must mirror the run's oracle_error: {stderr}"
+    );
+    assert!(
+        stderr.contains("did you mean") || stderr.contains("known similar"),
+        "typos get did-you-mean help: {stderr}"
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
+    assert_eq!(report["status"], "fail", "{report}");
+    assert!(
+        report["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v["rule"] == "lint_finding"
+                && v["detail"].as_str().is_some_and(|d| d.contains("GameClok"))),
+        "the finding must ride the report: {report}"
+    );
+}
+
+/// The positive control: a correctly spelled marker on the same
+/// game lints clean — the probe boots (markers are probeable now)
+/// and finds nothing. Pins that the new probe arm does not invent
+/// findings for valid configs, and that a marker-only scenario
+/// (no probeable invariant) now triggers the probe at all.
+#[test]
+fn lint_e2e_stage2_valid_progress_marker_lints_clean() {
+    let _slot = common::run_slot();
+    let dir = unique_dir("e2e_s2_marker_clean");
+    let (out, report_path) = spawn_resource_game_lint_child(
+        r#"{"bot":{"type":"chaos","seed":42},"duration_s":5.0,"tps":60,
+            "liveness":{"progress":{"mode":"markers","markers":["GameClock"],
+                                    "window_s":2.0}}}"#,
+        &dir,
+        "s2_marker_clean",
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(exit_code::PASS),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
+    assert_eq!(report["status"], "pass", "{report}");
+    assert_eq!(
+        report["violations"].as_array().unwrap().len(),
+        0,
+        "{report}"
+    );
+}
+
+/// Prefix include_paths (`game::`) scope whole namespaces; a typo in
+/// the PREFIX is still an authoring error, but it is not a
+/// name-resolution candidate the probe can grade from one frame —
+/// its zero-match failure belongs to the run's registry-wide
+/// report. Exact include entries are gradeable; prefixes are
+/// skipped by the probe (documented boundary).
+#[test]
+fn lint_e2e_stage2_include_prefix_is_not_probed_but_exact_is() {
+    let _slot = common::run_slot();
+    let dir = unique_dir("e2e_s2_include");
+    // Exact typo'd entry: a finding.
+    let (out, _report) = spawn_resource_game_lint_child(
+        r#"{"bot":{"type":"chaos","seed":42},"duration_s":5.0,"tps":60,
+            "liveness":{"progress":{"mode":"auto",
+                                    "include_paths":["GameClok"],
+                                    "window_s":2.0}}}"#,
+        &dir,
+        "s2_include_typo",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(exit_code::FAIL), "{stderr}");
+    assert!(
+        stderr.contains("GameClok"),
+        "exact include typo must be a finding: {stderr}"
+    );
+
+    // Valid exact entry: clean.
+    let (out, _report) = spawn_resource_game_lint_child(
+        r#"{"bot":{"type":"chaos","seed":42},"duration_s":5.0,"tps":60,
+            "liveness":{"progress":{"mode":"auto",
+                                    "include_paths":["GameClock"],
+                                    "window_s":2.0}}}"#,
+        &dir,
+        "s2_include_clean",
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(exit_code::PASS),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Prefix entry: skipped (one frame cannot grade a prefix miss).
+    let (out, _report) = spawn_resource_game_lint_child(
+        r#"{"bot":{"type":"chaos","seed":42},"duration_s":5.0,"tps":60,
+            "liveness":{"progress":{"mode":"auto",
+                                    "include_paths":["nosuch_module::"],
+                                    "window_s":2.0}}}"#,
+        &dir,
+        "s2_include_prefix",
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(exit_code::PASS),
+        "prefix entries are the run's to grade, not the probe's: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Probe-crash containment (M2): pin the flagship fix end to end
 // ---------------------------------------------------------------------------
 
