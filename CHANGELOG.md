@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+## [0.16.0](https://github.com/mcanevet/bevy_playtest/compare/v0.15.0...v0.16.0) - 2026-11-23
+
+### Added
+
+- *(lint)* probe progress-surface names in lint stage 2
+- *(lint)* stage-2 type-registry probe of the booted App
+
+### Fixed
+
+- *(invariants)* suggest containers for generic-arg typos; rank own-segment matches first
+- *(invariants)* suggest candidates for full-path typos too
+- *(invariants)* refine driver rate-consistency keying
+- *(lint)* tighten the probe gate; disclose it in the docs
+- *(lint)* give crash reports an `error` narrative; pin the crash path e2e
+- *(lint)* print findings to stderr once, after both stages
+- *(invariants)* window-unit review fixes — rate-key aliasing, frozen-driver wording, boundary pins
+- *(invariants)* parameterize resolve_registration nouns, upgrade did-you-mean
+- *(lint)* contain warm-up panics, gate the probe, share oracle message builders
+- *(invariants)* judge stagnant_resource windows in the driver's unit
+
+### Other
+
+- note the one-unit shortfall of exact budget windows
+
 ## [0.15.0](https://github.com/mcanevet/bevy_playtest/compare/v0.14.0...v0.15.0) - 2026-11-22
 
 ### Added
