@@ -508,6 +508,13 @@ fn run_lint(
     } else {
         crate::enums::PlaytestStatus::Fail
     };
+    if probe_crashed {
+        // The run's crash path fills `error` ("run loop panicked"); the
+        // lint schema must be equally self-describing for machine
+        // consumers — a crash report with no reason field leaves the
+        // panic narrative stranded on stderr only.
+        report.error = Some("game panicked during the lint warm-up frame".to_string());
+    }
     report.harness_mode = HARNESS_MODE_LINT.to_string();
     report.scenario_source = Some(source.to_string());
     report.violations = findings
