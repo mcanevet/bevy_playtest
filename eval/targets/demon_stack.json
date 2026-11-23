@@ -1,0 +1,30 @@
+{
+  "fixture": "demon_stack",
+  "manifest_dir": "fixtures/demon_stack",
+  "targets": [
+    {
+      "id": "D1",
+      "description": "World keeps evolving: the reflected PileTarget resource is written every frame by the pile's homing system",
+      "check": {
+        "resource_changed_times": {
+          "resource": "PileTarget",
+          "at_least": 100
+        }
+      }
+    },
+    {
+      "id": "D2",
+      "description": "Contact pile persists: the reflected PileTarget keeps changing through the end of the run (no late freeze)",
+      "check": {
+        "unmeasurable": "needs a changed-after-frame-N check; the state trace records first-change frames, not last-change — deferred to a trace schema extension"
+      }
+    },
+    {
+      "id": "D3",
+      "description": "Spatial litmus verdict itself (one folded pairwise_separation episode) is pinned in the fixture's own golden tests, not the exploration tier",
+      "check": {
+        "unmeasurable": "the eval tier measures input exploration on the builtin battery; authored-invariant judgment is the fixtures/ test tier's job (fixtures/demon_stack/tests/playtest.rs)"
+      }
+    }
+  ]
+}

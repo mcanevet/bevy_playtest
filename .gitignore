@@ -18,6 +18,9 @@
 # (source + tests + ground truth) — NOT fetch-script-managed like
 # the showcase games. Later-match-wins over the patterns above.
 !/fixtures/known_answer/**
+# The demon_stack fixture is likewise hand-authored and committed
+# wholesale — the pairwise_separation rule's fixture-tier litmus.
+!/fixtures/demon_stack/**
 bevy_playtest-smoke.report.json
 
 # Discovery cache (bevy_playtest::discovery): re-probing after
