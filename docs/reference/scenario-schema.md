@@ -573,8 +573,9 @@ Two distinct error classes, at different stages:
   informational `window_unelapsed` note at run end (naming the
   observed advance) — never a failure. Two invariants sharing one
   driver leaf must declare the same rate or the scenario rejects
-  (full-path and short-name declarations of the same type count as
-  one driver).
+  (a full-path and a short-name declaration of the same type count as
+  one driver; two distinct full paths are always distinct drivers,
+  even when their final segments coincide).
   (`stagnant_resource` rejects `eventually_s` at load, so the
   elision audit never interacts with deadlines.) Note:
   `strict_warnings` does NOT escalate `window_unelapsed` — a

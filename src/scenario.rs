@@ -7,7 +7,7 @@
 //! fields are rejected by `deny_unknown_fields` with a clear message.
 
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::enums::{BotType, CheckOp, InvariantRule};
 
@@ -1145,14 +1145,35 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
     // (driver_resource, driver_path) pair may not declare different
     // `driver_units_per_second` values (a lie about the game's clock
     // either way; the pair with the wrong rate gets silently
-    // mis-fit validation). The key is the FINAL PATH SEGMENT of the
-    // driver resource — the same normalization `reflect_resource`
-    // uses to accept both full paths and unambiguous short names —
-    // so `my_game::clock::TickCount` and `TickCount` are one driver,
-    // not two (raw-string keying would let aliased declarations
-    // smuggle conflicting rates past this check).
+    // mis-fit validation). Full paths are compared as full paths —
+    // two genuinely different types that merely share a final
+    // segment (`a::clock::TickCount` vs `b::TickCount`) are distinct
+    // drivers, exactly as runtime resolution treats them; a SHORT
+    // name on either side collapses by final segment, since a short
+    // name is an unambiguous alias of exactly one registered full
+    // path. `my_game::clock::TickCount` and `TickCount` are one
+    // driver, not two; two full paths differing anywhere are two. Two FULL paths
+    // with the same final segment but different crates/modules are
+    // DISTINCT types, however — runtime resolution matches them by
+    // full path — so they keep separate keys; final-segment
+    // collapsing applies only when a short name is involved on
+    // either side.
     let final_segment = |path: &str| path.rsplit("::").next().unwrap_or(path).to_string();
-    let mut declared_rates: HashMap<(String, String), f32> = HashMap::new();
+    // Entry (name, path, rate). Full paths must match by full string
+    // (distinct modules with the same final segment are distinct
+    // types at runtime resolution); a short name on either side
+    // makes final-segment comparison the join — mirroring
+    // reflect_resource, where a short name IS an unambiguous alias
+    // of exactly one full path. The driver PATH keeps every leaf
+    // distinct: one resource can drive several leaves.
+    let mut declared: Vec<(String, String, f32)> = Vec::new();
+    let same_leaf = |a: &str, b: &str| -> bool {
+        if a.contains("::") && b.contains("::") {
+            a == b
+        } else {
+            final_segment(a) == final_segment(b)
+        }
+    };
     for rule in &scenario.invariants {
         if let Some(rate) = rule.driver_units_per_second {
             let driver_resource = rule
@@ -1160,22 +1181,22 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                 .clone()
                 .or_else(|| rule.resource.clone())
                 .unwrap_or_default();
-            let driver_resource = final_segment(&driver_resource);
             let driver_path = rule.driver_path.clone().unwrap_or_default();
-            let key = (driver_resource, driver_path);
-            match declared_rates.get(&key) {
-                Some(existing) if *existing != rate => {
+            let prior = declared
+                .iter()
+                .find(|(name, path, _)| *path == driver_path && same_leaf(name, &driver_resource));
+            match prior {
+                Some((_, _, existing)) if *existing != rate => {
                     errors.push(ScenarioError::Rejected(format!(
-                        "invariant '{}': driver_units_per_second is {rate} but invariant \
-                         driver ({}) was already declared at {existing} units/s — one \
-                         driver leaf has one rate; fix the declarations",
-                        rule.name, key.0
+                        "invariant '{}': driver_units_per_second is {rate} but the same \
+                         driver leaf ({driver_resource}.{driver_path}) was already \
+                         declared at {existing} units/s — one driver leaf has one rate; \
+                         fix the declarations",
+                        rule.name
                     )));
                 }
                 Some(_) => {}
-                None => {
-                    declared_rates.insert(key, rate);
-                }
+                None => declared.push((driver_resource, driver_path, rate)),
             }
         }
     }
