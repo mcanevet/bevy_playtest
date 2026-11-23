@@ -586,6 +586,16 @@ fn empty_surface_is_informational_by_default() {
         .iter()
         .find(|v| v.rule == "progress_surface_empty")
         .expect("progress_surface_empty reported");
+    // The remediation must name the ECS role attributes, not just
+    // "Reflect + register_type": derive alone attaches no role data
+    // in Bevy 0.20, and the under-specified wording sent a dogfooding
+    // round-4 report down a dead end.
+    assert!(
+        entry.detail.contains("#[reflect(Component)]")
+            && entry.detail.contains("#[reflect(Resource)]"),
+        "remediation must name the role attributes: {}",
+        entry.detail
+    );
     assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
     let _ = entry;
 }

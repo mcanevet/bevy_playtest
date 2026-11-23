@@ -92,7 +92,7 @@ scripted-input families, and every class of load-time rejection.
     "timeout_s": number,          // default 2.0; must span at least one frame
     "progress": {                 // progress-heartbeat liveness oracle
       "mode": "auto",             // "auto" | "markers" | "off" (default auto)
-      "markers": ["string"],      // markers mode: named reflected resources/components
+      "markers": ["string"],      // markers: named reflected resources (watched by hashed value)
       "include_paths": ["string"],// auto mode: extra reflected resources to watch;
                                    //  entries ending in "::" are path prefixes matching
                                    //  all resources under that module path
@@ -163,8 +163,9 @@ name reads the same either way:
 
 ```
 unknown component 'Time' — not registered in this game's TypeRegistry
-(components need #[derive(Reflect)] and App::register_type, or the
-name must be the full registered type path)
+(components need #[derive(Reflect)] WITH its ECS role attribute
+(#[reflect(Component)]) plus App::register_type, or the name must be
+the full registered type path)
 ```
 
 Resolution accepts a full registered type path, or a final-segment

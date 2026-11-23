@@ -352,8 +352,12 @@ impl ProgressRecorder {
                 if matched == 0 {
                     self.unresolved.push(format!(
                         "{entry}: no reflected resources under this path prefix — \
-                         check the module path or register the resource types \
-                         (Reflect + register_type)"
+                         check the module path, or register the resource types \
+                         with BOTH the reflect trait and the Resource role \
+                         (#[derive(Reflect)] with #[reflect(Resource)], plus \
+                         app.register_type — derive alone attaches no ECS \
+                         role data, and this prefix scopes only reflected \
+                         resources into the surface)"
                     ));
                 }
             } else {
@@ -413,8 +417,10 @@ fn resolve_resource(
         0 => {
             let mut msg = format!(
                 "no reflected resource matches '{name}' — register the \
-                 resource type (Reflect + register_type) and use its full \
-                 path or an unambiguous short name"
+                 resource type with BOTH the reflect trait and the Resource \
+                 role (#[derive(Reflect)] with #[reflect(Resource)], plus \
+                 app.register_type) and use its full path or an unambiguous \
+                 short name"
             );
             // Did-you-mean, same doctrine as invariant-name
             // suggestions: purely advisory, resolution semantics
@@ -642,9 +648,13 @@ pub fn audit_progress(recorder: ProgressRecorder) -> ProgressAudit {
             count: 1,
             detail: format!(
                 "no verifiable progress surface: {} matched the progress \
-                 configuration (mode {:?}); register game state types \
-                 (Reflect + register_type), or declare markers/include_paths \
-                 naming the game's observable state",
+                 configuration (mode {:?}); register game state types with \
+                 BOTH the reflect trait and their ECS role (components: \
+                 #[derive(Reflect)] with #[reflect(Component)]; resources: \
+                 #[derive(Reflect)] with #[reflect(Resource)] — plus \
+                 app.register_type in both cases; derive alone attaches no \
+                 role data and the surface sees nothing), or declare \
+                 markers/include_paths naming the game's observable state",
                 channel_summary(channels),
                 config.mode
             ),
