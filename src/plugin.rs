@@ -563,9 +563,9 @@ fn lint_probe_wanted(scenario: &crate::scenario::Scenario) -> bool {
             // guaranteed-empty probe.
             InvariantRule::NodesInBounds => inv.target_selector.is_some(),
             // pairwise_separation resolves its selector via the
-            // same registry machinery in the LINT PROBE (its
-            // run-time recorder ships with the episode-fold
-            // slice; until then the rule rejects at validation).
+            // same registry machinery, at both probe and run time
+            // (the driver-loop episode recorder uses the same
+            // resolution).
             InvariantRule::PairwiseSeparation => true,
         }
     });

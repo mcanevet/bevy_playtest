@@ -37,6 +37,7 @@ mod input_delivery;
 mod isolation;
 mod lint;
 mod negative_validation;
+mod pairwise_separation;
 mod probe_pool;
 mod progress_liveness;
 // Drives the bevy_camera/bevy_render-typed API surface, which only

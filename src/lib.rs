@@ -6,8 +6,8 @@ pub mod choice;
 pub mod digest;
 pub mod discovery;
 pub mod driver;
-pub mod episode;
 pub mod enums;
+pub mod episode;
 #[cfg(feature = "takeover")]
 pub mod evaluation;
 pub mod explorer;
