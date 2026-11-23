@@ -456,9 +456,6 @@ fn run_lint(
     source: &str,
 ) -> ! {
     let mut findings = crate::scenario::lint_scenario(scenario);
-    for err in &findings {
-        eprintln!("bevy_playtest: {err}");
-    }
     // Stage 2 — the type-registry probe: ONLY when stage 1 found
     // nothing, because every stage-2 check presupposes the stage-1
     // shape (a resource_check with no `resource` field, say, has
@@ -490,6 +487,9 @@ fn run_lint(
     } else {
         false
     };
+    // Findings print to stderr ONCE — here, after both stages have
+    // contributed (printing per-stage would show stage-1 errors
+    // twice: once eagerly, once beside their stage-2 siblings).
     for err in &findings {
         eprintln!("bevy_playtest: {err}");
     }
