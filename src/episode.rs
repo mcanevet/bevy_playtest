@@ -115,6 +115,10 @@ pub struct ClosedEpisode {
     /// True when the roster was truncated at the cap — disclosed so
     /// `_meta` never lies by omission.
     pub roster_truncated: bool,
+    /// Total DISTINCT violating pairs observed in the episode —
+    /// `roster.len()` plus the pairs the cap dropped. Reported so
+    /// `_meta` can disclose the crowd size a truncation hid.
+    pub distinct_pairs: u64,
     /// The worst observation (minimum distance, earliest frame).
     pub worst: WorstObservation,
 }
@@ -135,6 +139,10 @@ struct OpenEpisode {
     /// Set at absorb time when a distinct pair was dropped by the
     /// cap — truncation is disclosed, never silently subsampled.
     roster_truncated: bool,
+    /// Total distinct violating pairs observed in the episode,
+    /// including the ones the cap dropped — the disclosed crowd
+    /// size behind a truncated roster.
+    distinct_pairs: u64,
 }
 
 impl OpenEpisode {
@@ -147,6 +155,7 @@ impl OpenEpisode {
             worst: None,
             roster: Vec::new(),
             roster_truncated: false,
+            distinct_pairs: 0,
         }
     }
 
@@ -170,8 +179,9 @@ impl OpenEpisode {
     }
 
     fn close(self) -> ClosedEpisode {
-        let worst =
-            self.worst.expect("absorb always seeds the worst observation on open");
+        let worst = self
+            .worst
+            .expect("absorb always seeds the worst observation on open");
         let mut roster = self.roster;
         roster.sort_by(|a, b| {
             a.worst_distance
@@ -186,6 +196,7 @@ impl OpenEpisode {
             driver_span: self.driver_span,
             roster,
             roster_truncated: self.roster_truncated,
+            distinct_pairs: self.distinct_pairs,
             worst,
         }
     }
@@ -286,8 +297,7 @@ impl EpisodeFolder {
             let better = match ep.worst {
                 None => true,
                 Some(w) => {
-                    obs.distance < w.distance
-                        || (obs.distance == w.distance && frame < w.frame)
+                    obs.distance < w.distance || (obs.distance == w.distance && frame < w.frame)
                 }
             };
             if better {
@@ -308,6 +318,10 @@ impl EpisodeFolder {
                     }
                 }
                 None => {
+                    // A distinct pair: count it BEFORE the cap
+                    // decision so `distinct_pairs` is the honest
+                    // crowd size even when the roster drops it.
+                    ep.distinct_pairs += 1;
                     let exceeded = ep.roster.len() >= self.roster_cap;
                     if !exceeded {
                         ep.roster.push(RosterEntry {
@@ -439,7 +453,8 @@ mod tests {
         let mut f = EpisodeFolder::default();
         f.push(0, Some(0.0), &[obs(1, 2, 0.1)]);
         f.push(1, Some(1.0), &[obs(1, 2, 0.1)]);
-        let ep = f.push(2, None, &[obs(1, 2, 0.1)])
+        let ep = f
+            .push(2, None, &[obs(1, 2, 0.1)])
             .expect("driver gap closes the stretch");
         assert_eq!(ep.end_frame, 1);
         assert!((ep.driver_span - 1.0).abs() < 1e-9);
@@ -536,11 +551,20 @@ mod tests {
         f.push(
             1,
             Some(1.0),
-            &[obs(3, 4, 0.05), obs(5, 6, 0.2), obs(7, 8, 0.3), obs(9, 10, 0.4)],
+            &[
+                obs(3, 4, 0.05),
+                obs(5, 6, 0.2),
+                obs(7, 8, 0.3),
+                obs(9, 10, 0.4),
+            ],
         );
         let ep = f.close_run().expect("run end closes");
         assert_eq!(ep.roster.len(), 3);
         assert!(ep.roster_truncated);
+        // The honest crowd size: all FIVE distinct pairs were
+        // counted (one from frame 0, four from frame 1), including
+        // the two the cap dropped.
+        assert_eq!(ep.distinct_pairs, 5);
         // The roster holds the first three pairs SEEN — (1,2),
         // (3,4), (5,6) — and the cap dropped (7,8), (9,10). The
         // worst observation is tracked OUTSIDE the roster, so it

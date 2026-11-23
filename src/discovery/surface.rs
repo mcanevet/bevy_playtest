@@ -279,7 +279,9 @@ pub struct DiscoveryFinding {
 
 /// Machine-readable annotation block attached to a violation
 /// (serialized as `_meta`), next to the verbatim human `detail`.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// `PartialEq` only — the `pairwise_separation` episode block
+/// carries `f32` distances, which have no total `Eq`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ViolationMeta {
     /// `frozen_world` only: whether the broadened state digest kept
     /// changing through the silent streak (`Some(true)` — the sim was
@@ -289,6 +291,59 @@ pub struct ViolationMeta {
     /// the detail keeps the legacy "soft-lock?" wording).
     #[serde(default)]
     pub stepping: Option<bool>,
+    /// `pairwise_separation` only: the episode's evidence — the
+    /// distinct violating pairs (first + worst + frame count per
+    /// pair, capped, truncation disclosed via `roster_truncated`)
+    /// plus how many pairs the frame enumerator sampled vs. saw.
+    /// Populated only by episode findings; the detail text names
+    /// the worst pair, the roster holds the full story so a
+    /// handoff A–B → A–C cannot hide the persistent offender A.
+    #[serde(default)]
+    pub pairwise_episode: Option<PairwiseEpisodeMeta>,
+}
+
+/// The `pairwise_separation` episode evidence block (`_meta`).
+/// Roster entries are `(low, high)` entity indices, ordered worst
+/// pair first (minimum distance, then earliest frame). `PartialEq`
+/// only — the roster carries `f32` distances, which have no total
+/// `Eq`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PairwiseEpisodeMeta {
+    /// How many DISTINCT violating pairs the episode saw in total —
+    /// `roster.len()` plus the pairs the cap dropped. Disclosed so
+    /// `_meta` never lies by omission when a crowd exceeds the cap
+    /// (`roster_truncated`). (Enumeration itself is uncapped in
+    /// this slice: the author bounds O(n²) by choosing the selector;
+    /// a sampling stride stays TBD by the cost model per the design
+    /// doc.)
+    pub sampled_pairs: u64,
+    /// Distinct violating pairs with first/worst/count evidence,
+    /// worst-first. Capped at the roster cap; `roster_truncated`
+    /// discloses when the episode had more.
+    pub roster: Vec<PairwiseRosterEntry>,
+    /// True when the episode saw more distinct pairs than the
+    /// roster cap admits — disclosed truncation, never silent
+    /// subsampling.
+    pub roster_truncated: bool,
+}
+
+/// One roster entry: the evidence for one distinct violating pair
+/// inside an episode. Serialized field names are wire-stable
+/// (`first_frame`, `worst_frame`, `worst_distance`,
+/// `violating_frames`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PairwiseRosterEntry {
+    /// The ordered pair: lower entity index first.
+    pub low: u32,
+    pub high: u32,
+    /// First violating frame this pair was seen in the episode.
+    pub first_frame: u64,
+    /// The minimum distance observed for this pair.
+    pub worst_distance: f32,
+    /// The frame the worst (minimum) distance was seen at.
+    pub worst_frame: u64,
+    /// How many frames this pair violated within the episode.
+    pub violating_frames: u64,
 }
 
 #[cfg(test)]
@@ -309,6 +364,7 @@ mod tests {
             last_detail: "no Transform change".to_string(),
             meta: Some(ViolationMeta {
                 stepping: Some(true),
+                pairwise_episode: None,
             }),
         };
         let json = serde_json::to_string(&entry).unwrap();

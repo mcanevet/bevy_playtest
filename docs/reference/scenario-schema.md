@@ -631,27 +631,39 @@ Two distinct error classes, at different stages:
   not proven);
   unknown/ambiguous names → `oracle_error`.
 - `pairwise_separation`: the coincident-bodies spatial oracle.
-  **Grammar accepted, evaluation NOT yet shipped** — the rule
-  rejects at validation with `NotImplemented` ("evaluation ships
-  with the episode recorder") until the episode-fold evaluator
-  lands; author the shape now and lint mode reports the full
-  authoring surface alongside the rejection. Selects every
-  entity carrying a named registered component
+  Selects every entity carrying a named registered component
   (`target_selector: {"with_component": {"name": "..."}}` —
   required; "all" is rejected at load because pairwising every
   `Transform` in the world — walls, camera, UI — at O(n²) is
-  never what an author means) and will require every PAIR of
+  never what an author means) and requires every PAIR of
   selected entities to stay at least `min_distance` apart.
   `min_distance` has ε semantics: it is "coincident bodies",
   NOT "personal space" — author it BELOW gameplay-speed
   closing distances or legitimate fly-bys false-positive.
+  Violating frames are folded into EPISODES: a maximal stretch
+  over TIME (not over pair identity — overlapping or handed-off
+  pairs never split an episode, so a persistent offender cannot
+  masquerade as many short findings), and an episode only
+  becomes a finding when its `window_s` soak elapses (forward
+  driver-leaf advance only; a retreating driver is a seek, not
+  progress). Episodes shorter than the soak are discarded as
+  transient fly-bys. The finding reports the WORST observation
+  (minimum distance, tie-broken by earliest frame) plus, in
+  `_meta`, a bounded roster of distinct pairs (first + worst +
+  frame count per pair, capped, truncation-disclosed) so a
+  handoff A–B → A–C cannot hide the persistent offender A.
   `window_s` is required (the instant-fire form is rejected at
-  load) and will be measured in DRIVER UNITS like
+  load) and is measured in DRIVER UNITS like
   `stagnant_resource`'s window: declare
   `driver_path`/`driver_resource` for a game-clock soak (both
   halves or neither — there is no `resource` to default the
   host to), or omit them to soak against the frame clock in
   seconds (which has no declarable rate:
   `driver_units_per_second` without a declared driver is
-  rejected). `check`/`value`/`eventually_s`/`path`/`resource`
-  and the bounds fields are rejected at load.
+  rejected). Soak gaps — a missing, removed, or non-finite
+  driver sample — CLOSE the open episode rather than extending
+  it across an unobservable clock; the evidence gathered so
+  far is judged on its own accumulated span. A selector that
+  never has a pair to check over the whole run →
+  `vacuous_invariant`. `check`/`value`/`eventually_s`/`path`/
+  `resource` and the bounds fields are rejected at load.

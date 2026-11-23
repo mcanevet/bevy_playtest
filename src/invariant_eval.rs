@@ -1927,3 +1927,470 @@ fn vacuous_resource_entry(name: &str, last_frame: u64) -> crate::state::Violatio
         meta: None,
     }
 }
+
+// ---------------------------------------------------------------------------
+// pairwise_separation: the coincident-bodies spatial oracle
+// ---------------------------------------------------------------------------
+
+/// Bookkeeping for `pairwise_separation` invariants (same doctrine
+/// as [`WatchedInvariants`]/[`WatchedResources`]): the per-frame
+/// recorder owns one [`episode::EpisodeFolder`] per invariant, and
+/// the post-run vacuity audit needs the full-series observability
+/// flags.
+#[derive(Resource, Default)]
+pub struct PairwiseBookkeeping {
+    /// Invariant name → the selector resolved AND a pair was
+    /// enumerable in at least one observed frame (≥2 checkable
+    /// entities: fewer can never violate). Otherwise the invariant
+    /// is vacuous — a pairwise rule with nothing to pairwise
+    /// proves nothing.
+    pub matched: std::collections::HashSet<String>,
+    /// Invariant name → a resolution/config failure was seen during
+    /// the run (already reported as `oracle_error`); the audit
+    /// suppresses its vacuity entry so the game is not blamed for
+    /// an author-side problem (N-B/N-C doctrine).
+    pub config_errored: std::collections::HashSet<String>,
+    /// (invariant name, error class) pairs already reported as
+    /// `oracle_error` this run — the once-per-distinct-error dedup
+    /// (same doctrine as [`WatchedResources::oracle_error_seen`]).
+    pub oracle_error_seen: std::collections::HashSet<String>,
+    /// Invariant name → the fold engine.
+    pub folders: std::collections::HashMap<String, crate::episode::EpisodeFolder>,
+}
+
+/// One frame's pairwise outcome for one invariant (owned-data
+/// phase-split doctrine: computed under `&World`, applied after
+/// the borrow ends).
+struct PwOutcome {
+    /// The frame's violating pairs (empty = a clean frame, which
+    /// ends any open episode).
+    pairs: Vec<crate::episode::PairObservation>,
+    /// The driver-leaf sample in the driver's own unit; `None` on
+    /// a gap (driver resource absent / leaf non-finite).
+    driver: Option<f64>,
+    /// First config error this frame, if any.
+    config_error: Option<String>,
+    /// The selector resolved AND ≥2 checkable entities co-existed
+    /// this frame.
+    pairable: bool,
+}
+
+/// Driver-loop recorder for `pairwise_separation` invariants: the
+/// coincident-bodies spatial oracle. Selects every entity carrying
+/// the named registered component and requires every PAIR of
+/// selected entities to stay at least `min_distance` apart; frames
+/// with violating pairs fold into EPISODES (maximal stretches over
+/// time — see [`episode`]) and an episode becomes ONE finding when
+/// its `window_s` soak elapses (measured in the declared driver
+/// leaf's own units; the frame clock in seconds when no driver is
+/// declared).
+///
+/// Enumeration is `O(n²)` over the selector's entities — the author
+/// bounds the cost by choosing the selector (that is why "all" is
+/// rejected at load: pairwising every `Transform` in the world —
+/// walls, camera, UI — is never what an author means). A sampling
+/// stride stays TBD per the design doc's cost-model carve-out;
+/// this recorder enumerates exhaustively.
+///
+/// Soak semantics follow `stagnant_resource`'s window doctrine
+/// exactly (never converted through `tps`): forward driver deltas
+/// credit the span, retreats advance no budget, and a gap
+/// (missing/non-finite driver sample) CLOSES the open episode
+/// rather than extending it across an unobservable clock.
+/// Sub-soak episodes are discarded as transient fly-bys — the ε
+/// doctrine: `min_distance` is "coincident bodies", not "personal
+/// space", so the soak filters legitimate fly-bys and only
+/// sustained overlap becomes a finding.
+pub fn record_pairwise_separation(world: &mut World, frame: u64, tps: u64) {
+    // Clone the relevant invariants out so no world borrow survives
+    // the phase split below.
+    let invariants: Vec<Invariant> = world
+        .get_resource::<ScenarioInvariants>()
+        .map(|invariants| {
+            invariants
+                .0
+                .iter()
+                .filter(|i| i.rule == InvariantRule::PairwiseSeparation)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if invariants.is_empty() {
+        return;
+    }
+    let Some(atr) = world.get_resource::<AppTypeRegistry>().cloned() else {
+        // No registry at all: the same definite infra error the
+        // other reflected oracles front-load — one `oracle_error`
+        // per invariant, once per distinct error class.
+        world.resource_scope(|world, mut book: Mut<PairwiseBookkeeping>| {
+            let mut violations = world.resource_mut::<RunViolations>();
+            for inv in &invariants {
+                book.config_errored.insert(inv.name.clone());
+                let why = &no_atr_message("pairwise separation checks");
+                report_config_error_once(
+                    &mut violations.0,
+                    &mut book.oracle_error_seen,
+                    &inv.name,
+                    why,
+                    frame,
+                );
+            }
+        });
+        return;
+    };
+    let registry = atr.read();
+
+    // Read phase: enumerate under &World, no mutable borrows.
+    let mut outcomes: Vec<(Invariant, PwOutcome)> = Vec::with_capacity(invariants.len());
+    for inv in &invariants {
+        outcomes.push((
+            inv.clone(),
+            eval_pairwise(world, &registry, inv, frame, tps),
+        ));
+    }
+    drop(registry);
+
+    // Write phase: fold, judge soak, report one finding per
+    // soaked episode.
+    world.resource_scope(|world, mut book: Mut<PairwiseBookkeeping>| {
+        let mut violations = world.resource_mut::<RunViolations>();
+        for (inv, outcome) in outcomes {
+            apply_pw_outcome(&inv, &outcome, frame, &mut book, &mut violations.0);
+        }
+    });
+}
+
+/// Enumerate the frame's violating pairs for one invariant (the
+/// read phase).
+fn eval_pairwise(
+    world: &World,
+    registry: &TypeRegistry,
+    inv: &Invariant,
+    frame: u64,
+    tps: u64,
+) -> PwOutcome {
+    let err = |why: String| PwOutcome {
+        pairs: vec![],
+        driver: None,
+        config_error: Some(why),
+        pairable: false,
+    };
+    // Validation guarantees these; the Options are defensive only.
+    let Some(crate::enums::TargetSelector::WithComponent { name }) = inv.target_selector.as_ref()
+    else {
+        return err("pairwise_separation requires a with_component selector (validated)".into());
+    };
+    let Some(min_distance) = inv.min_distance else {
+        return err("pairwise_separation requires 'min_distance' (validated)".into());
+    };
+    let type_reg = match resolve_registration(registry, name, "component") {
+        Ok(t) => t,
+        Err(why) => return err(why),
+    };
+    // Collect (entity index, translation) for every entity carrying
+    // the marker AND a Transform — the bounds recorder's doctrine
+    // ("carries the marker but no Transform: not checkable").
+    let mut nodes: Vec<(u32, [f32; 3])> = Vec::new();
+    if let Some(component_id) = world.components().get_valid_id(type_reg.type_id()) {
+        for archetype in world.archetypes().iter() {
+            if !archetype.components().contains(&component_id) {
+                continue;
+            }
+            for entry in archetype.entities() {
+                let Ok(entity_ref) = world.get_entity(entry.id()) else {
+                    continue;
+                };
+                let Some(transform) = entity_ref.get::<Transform>() else {
+                    continue;
+                };
+                nodes.push((
+                    entity_ref.id().index().index(),
+                    [
+                        transform.translation.x,
+                        transform.translation.y,
+                        transform.translation.z,
+                    ],
+                ));
+            }
+        }
+    }
+    // Registered but never instantiated, or a lone survivor: zero
+    // pairs to check — vacuity is the audit's call, frames are
+    // clean.
+    if nodes.len() < 2 {
+        return PwOutcome {
+            pairs: vec![],
+            driver: frame_clock(frame, tps),
+            config_error: None,
+            pairable: false,
+        };
+    }
+    let mut pairs: Vec<crate::episode::PairObservation> = Vec::new();
+    for i in 0..nodes.len() {
+        for j in (i + 1)..nodes.len() {
+            let (a_index, a_pos) = nodes[i];
+            let (b_index, b_pos) = nodes[j];
+            let dx = a_pos[0] - b_pos[0];
+            let dy = a_pos[1] - b_pos[1];
+            let dz = a_pos[2] - b_pos[2];
+            let distance = (dx * dx + dy * dy + dz * dz).sqrt();
+            // NaN translations yield NaN distances — the
+            // finite_transforms oracle owns NaN findings; this
+            // recorder must not fold a NaN observation into an
+            // episode. Filter rather than report (the NaN family is
+            // already gating elsewhere, never double-reported).
+            if distance.is_finite() && distance < min_distance {
+                pairs.push(crate::episode::PairObservation {
+                    pair: crate::episode::PairKey::new(a_index, b_index),
+                    distance,
+                });
+            }
+        }
+    }
+    // Driver sample: declared leaf, or the frame clock (seconds).
+    let driver = match (inv.driver_resource.as_deref(), inv.driver_path.as_deref()) {
+        (Some(res_name), Some(path)) => {
+            match sample_declared_driver(world, registry, res_name, path) {
+                Ok(Some(v)) => Some(v),
+                // Absent resource: a gap, not an error (same
+                // doctrine as stagnant_resource's late arrivals).
+                Ok(None) => None,
+                Err(why) => return err(why),
+            }
+        }
+        (None, None) => frame_clock(frame, tps),
+        // Lint guarantees both halves or neither; defensive only.
+        _ => return err("pairwise_separation's driver needs both halves (validated)".into()),
+    };
+    PwOutcome {
+        pairs,
+        driver,
+        config_error: None,
+        pairable: true,
+    }
+}
+
+/// The default driver: the frame clock, in seconds.
+fn frame_clock(frame: u64, tps: u64) -> Option<f64> {
+    Some(frame as f64 / tps as f64)
+}
+
+/// Resolve and read the declared driver leaf. `Ok(None)` = the
+/// resource is absent this frame (a gap, not an error — late
+/// arrival, mid-run removal, teardown); `Err` = a resolution
+/// failure (a config error). Non-finite samples become `None` — a
+/// gap — so the fold closes the episode rather than crediting a
+/// bogus budget.
+fn sample_declared_driver(
+    world: &World,
+    registry: &TypeRegistry,
+    resource_name: &str,
+    path: &str,
+) -> Result<Option<f64>, String> {
+    let resource = match reflect_resource(world, registry, resource_name) {
+        Ok(ResourceView::Value(r)) => r,
+        Ok(ResourceView::Absent) => return Ok(None),
+        Err(why) => return Err(why),
+    };
+    match reflect_numeric_path(resource, path, "resource") {
+        Ok(v) => Ok(v.is_finite().then_some(v)),
+        Err(why) => Err(why),
+    }
+}
+
+/// Write-phase fold of one frame's pairwise outcome: feed the
+/// engine, judge any closed episode against the soak, report ONE
+/// finding with the episode's evidence.
+fn apply_pw_outcome(
+    inv: &Invariant,
+    outcome: &PwOutcome,
+    frame: u64,
+    book: &mut PairwiseBookkeeping,
+    violations: &mut crate::state::Violations,
+) {
+    if let Some(why) = &outcome.config_error {
+        book.config_errored.insert(inv.name.clone());
+        report_config_error_once(
+            violations,
+            &mut book.oracle_error_seen,
+            &inv.name,
+            &format!("invariant '{}': {why}", inv.name),
+            frame,
+        );
+        return;
+    }
+    if outcome.pairable {
+        book.matched.insert(inv.name.clone());
+    }
+    let folder = book.folders.entry(inv.name.clone()).or_default();
+    // Frame order is guaranteed by the driver loop; push can close
+    // an episode only via this frame (violation ends, gap, or the
+    // non-consecutive close-and-reopen).
+    if let Some(closed) = folder.push(frame, outcome.driver, &outcome.pairs) {
+        judge_closed_episode(inv, &closed, violations);
+    }
+}
+
+/// Soak judgment and finding emission for one closed episode:
+/// discard sub-soak episodes as transient fly-bys; report one
+/// finding with the worst observation and the roster evidence.
+fn judge_closed_episode(
+    inv: &Invariant,
+    ep: &crate::episode::ClosedEpisode,
+    violations: &mut crate::state::Violations,
+) {
+    let Some(window_s) = inv.window_s else {
+        return; // Validated required; defensive only.
+    };
+    if ep.driver_span < window_s as f64 {
+        // Sub-soak: a transient fly-by the ε doctrine discards.
+        return;
+    }
+    let worst = &ep.worst;
+    let min_distance = inv.min_distance.unwrap_or(0.0);
+    // The soak span is in the DRIVER LEAF'S OWN UNIT — seconds only
+    // for the frame-clock default. Suffixing a game-clock soak with
+    // "s" would lie about the unit (the tests drive minutes).
+    let (span, span_unit) = match inv.driver_path.as_deref() {
+        Some(_) => (ep.driver_span, " driver units"),
+        None => (ep.driver_span, "s of frame clock"),
+    };
+    violations.report(
+        crate::rules::Rule::PairwiseSeparation.name(),
+        &inv.name,
+        format!(
+            "entities #{} and #{} came within {:.3} (< {}) of each other, sustained \
+             for {:.3}{} across frames {}–{} ({} violating pair{}, \
+             worst distance {:.3}); a coincidence this long is bodies occupying the \
+             same space, not a fly-by",
+            worst.pair.low,
+            worst.pair.high,
+            worst.distance,
+            min_distance,
+            span,
+            span_unit,
+            ep.start_frame,
+            ep.end_frame,
+            ep.distinct_pairs,
+            if ep.distinct_pairs == 1 { "" } else { "s" },
+            worst.distance,
+        ),
+        ep.start_frame,
+    );
+    // Attach the roster evidence (`_meta`) to the just-reported
+    // entry — one finding, full story (a handoff A–B → A–C cannot
+    // hide the persistent offender A). First-write-wins, mirroring
+    // the detail doctrine: `report` keeps the FIRST episode's
+    // detail/first_frame, so the meta must describe the same
+    // episode — a second soaked episode extends last_frame (its
+    // detail span already told the reader there was more) but
+    // never swaps the evidence out from under the first finding.
+    if let Some(entry) = violations.entries.get_mut(&(
+        crate::rules::Rule::PairwiseSeparation.name().to_string(),
+        inv.name.clone(),
+    )) {
+        entry.last_frame = entry.last_frame.max(ep.end_frame);
+        if entry.meta.is_none() {
+            entry.meta = Some(crate::discovery::surface::ViolationMeta {
+                stepping: None,
+                pairwise_episode: Some(pairwise_meta_of(ep)),
+            });
+        }
+    }
+}
+
+/// Convert a closed episode into its `_meta` evidence block.
+fn pairwise_meta_of(
+    ep: &crate::episode::ClosedEpisode,
+) -> crate::discovery::surface::PairwiseEpisodeMeta {
+    crate::discovery::surface::PairwiseEpisodeMeta {
+        sampled_pairs: ep.distinct_pairs,
+        roster: ep
+            .roster
+            .iter()
+            .map(|r| crate::discovery::surface::PairwiseRosterEntry {
+                low: r.pair.low,
+                high: r.pair.high,
+                first_frame: r.first_frame,
+                worst_distance: r.worst_distance,
+                worst_frame: r.worst_frame,
+                violating_frames: r.violating_frames,
+            })
+            .collect(),
+        roster_truncated: ep.roster_truncated,
+    }
+}
+
+/// Run-end drain: any episode still open at the last frame is a
+/// complete stretch on its own (frames `start..=end`); the
+/// non-consecutive doctrine never spans the unobserved beyond, so
+/// fold it out and judge it like any other closed episode. Called
+/// once, after the driver loop ends and before the bookkeeping is
+/// audited.
+pub fn close_pairwise_episodes(world: &mut World) {
+    let invariants: Vec<Invariant> = world
+        .get_resource::<ScenarioInvariants>()
+        .map(|invariants| {
+            invariants
+                .0
+                .iter()
+                .filter(|i| i.rule == InvariantRule::PairwiseSeparation)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if invariants.is_empty() {
+        return;
+    }
+    world.resource_scope(|world, mut book: Mut<PairwiseBookkeeping>| {
+        // RunState is already drained at this point (the driver
+        // removes it before the audits); no frame count is needed —
+        // the episode's own end_frame is the authoritative end.
+        let mut violations = world.resource_mut::<RunViolations>();
+        for inv in &invariants {
+            if let Some(folder) = book.folders.get_mut(&inv.name) {
+                if let Some(closed) = folder.close_run() {
+                    judge_closed_episode(inv, &closed, &mut violations.0);
+                }
+            }
+        }
+    });
+}
+
+/// Post-run audit for `pairwise_separation` invariants (mirrors
+/// [`audit_component_checks`]): a selector that never had a pair to
+/// check proves nothing — reported as `vacuous_invariant`, named
+/// per invariant. Config-errored invariants are suppressed (their
+/// `oracle_error` already told the story).
+pub fn audit_pairwise_separation(
+    invariants: &[Invariant],
+    book: &PairwiseBookkeeping,
+    last_frame: u64,
+) -> Vec<crate::state::ViolationEntry> {
+    let mut entries = Vec::new();
+    for inv in invariants
+        .iter()
+        .filter(|i| i.rule == InvariantRule::PairwiseSeparation)
+    {
+        if book.config_errored.contains(&inv.name) {
+            continue;
+        }
+        if !book.matched.contains(&inv.name) {
+            entries.push(crate::state::ViolationEntry {
+                rule: crate::rules::Rule::VacuousInvariant.name().to_string(),
+                target: inv.name.clone(),
+                first_frame: 0,
+                last_frame,
+                count: 1,
+                detail: format!(
+                    "invariant '{}' never had a pair to check over the whole run; \
+                     the check proves nothing until there is something to check",
+                    inv.name
+                ),
+                last_detail: format!("invariant '{}' never had a pair to check", inv.name),
+                meta: None,
+            });
+        }
+    }
+    entries
+}

@@ -57,6 +57,7 @@ impl Rule {
             Self::ComponentCheck => "An authored-intent check: a numeric field on a reflected component must satisfy the declared comparison across the selected entities (always, or eventually within a deadline).",
             Self::ResourceCheck => "An authored-intent check: a numeric field on a reflected resource must satisfy the declared comparison (always, or eventually within a deadline) — the resource sibling of component_check: game-wide state like scores, economies and cooldowns.",
             Self::StagnantResource => "Rate-form liveness: a watched numeric leaf on a reflected resource must change at least once per window of game time while a declared driver leaf strictly advances — constant scoreboards on a running clock are livelocks, not gameplay.",
+            Self::PairwiseSeparation => "Coincident-bodies spatial oracle: every pair of selected entities (via a with_component selector) must stay at least min_distance apart; violating frames fold into episodes, and only an episode that soaks past window_s (in driver units) becomes a finding — sub-soak overlaps are transient fly-bys, not bugs.",
             Self::FiniteTransforms => "Every entity's Transform holds finite values (no NaN/inf).",
             #[cfg(feature = "render-liveness")]
             Self::RenderLiveness => "A structurally live render path: a sim-active run with something to draw should have at least one camera that is enabled and written out; informational — a structural rule, it sees the main-world camera components, never the rendered pixels (a live camera rendering black passes).",
@@ -108,6 +109,11 @@ declare_rules! {
     ComponentCheck => "component_check",
     ResourceCheck => "resource_check",
     StagnantResource => "stagnant_resource",
+
+    // Coincident-bodies spatial oracle (judgement layer, slice 1):
+    // pairs selected via with_component, folded into episodes,
+    // judged against a window_s soak in driver units.
+    PairwiseSeparation => "pairwise_separation",
 
     // Structural render-path health (informational; render-liveness
     // feature). A visual game with no working camera is soft-broken,

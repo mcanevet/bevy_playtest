@@ -1675,31 +1675,6 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                 }
             }
             InvariantRule::PairwiseSeparation => {
-                // Grammar-without-evaluation is the accepted-and-
-                // ignored hole this lint exists to close (see the
-                // reserved-field doctrine below): the parse and
-                // the shape checks below remain load-time-honest
-                // authoring grammar for the slice that ships the
-                // recorder, but until the episode recorder lands,
-                // a scenario reaching this arm would RUN and
-                // silently prove nothing. Reject the RULE (not
-                // the parse) exactly like the other known-future
-                // surfaces (after_s/before_s): the author learns
-                // the grammar is real and the evaluator is not.
-                errors.push(ScenarioError::NotImplemented(
-                    "pairwise_separation evaluation ships with the episode \
-                     recorder — the authoring grammar (target_selector, \
-                     min_distance, window_s) is validated below, but the \
-                     rule is not yet evaluated at run time"
-                        .to_string(),
-                ));
-                // The shape checks still run so lint mode (which
-                // collects ALL errors, unlike validate's first-error)
-                // reports the authoring defects too — except that a
-                // missing SELECTOR skips them (the selector check
-                // continues; one defect class, one complete story),
-                // so "report the shape" here means the checks the
-                // selector-gate permits past.
                 // Spatial rule: selector-required (the rule is
                 // meaningless over an unbounded entity set),
                 // min_distance required and positive, window_s
@@ -1710,6 +1685,14 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                 // grammar carries over from stagnant_resource
                 // — when no driver is declared, the frame
                 // clock in seconds is the default).
+                //
+                // Evaluation (the driver-loop episode recorder)
+                // ships alongside this grammar: the recorder
+                // selects via the same registration machinery,
+                // enumerates pairs among the selector's
+                // Transform-carrying entities, folds violating
+                // frames into episodes, and judges each closed
+                // episode against window_s in driver units.
                 let Some(crate::enums::TargetSelector::WithComponent { name }) =
                     rule.target_selector.as_ref()
                 else {

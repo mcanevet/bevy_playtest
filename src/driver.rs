@@ -1646,7 +1646,10 @@ fn frozen_world_oracle_system(
                 .get_mut(&(Rule::FrozenWorld.name().to_string(), "world".to_string()))
             {
                 if entry.meta.is_none() {
-                    entry.meta = Some(crate::discovery::surface::ViolationMeta { stepping });
+                    entry.meta = Some(crate::discovery::surface::ViolationMeta {
+                        stepping,
+                        pairwise_episode: None,
+                    });
                 }
             }
         }
@@ -2113,6 +2116,16 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         // on every observed frame.
         app.init_resource::<crate::held::HeldBookkeeping>();
     }
+    if scenario
+        .invariants
+        .iter()
+        .any(|i| i.rule == crate::enums::InvariantRule::PairwiseSeparation)
+    {
+        // Episode-fold bookkeeping for pairwise_separation: the
+        // per-frame recorder folds into this, the run-end drain and
+        // vacuity audit read it.
+        app.init_resource::<crate::invariant_eval::PairwiseBookkeeping>();
+    }
     if scenario.verify_replay {
         app.insert_resource(crate::replay::ReplaySeries::default());
     }
@@ -2448,6 +2461,11 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             // doctrine (reflected resource access needs &World).
             crate::invariant_eval::record_resource_checks(app.world_mut(), i);
             crate::invariant_eval::record_stagnant_resources(app.world_mut(), i);
+            // pairwise_separation: same driver-loop recorder doctrine
+            // (&World reflection access, post-update observation of
+            // the settled frame) — selects, enumerates pairs, folds
+            // into episodes via the shared fold engine.
+            crate::invariant_eval::record_pairwise_separation(app.world_mut(), i, tps);
             // Progress-surface sampling: same driver-loop recorder
             // doctrine as the digest above.
             crate::progress::record_progress_sample(app.world_mut(), i);
@@ -2505,6 +2523,12 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         .remove_resource::<RunChoices>()
         .map(|c| c.0.recorded)
         .unwrap_or_default();
+    // pairwise_separation run-end drain: an episode still open at
+    // the last frame is a complete stretch on its own — fold it out
+    // and judge its soak. Must run BEFORE RunViolations is removed
+    // (it reports into it) and before the pairwise bookkeeping is
+    // removed for the vacuity audit below.
+    crate::invariant_eval::close_pairwise_episodes(app.world_mut());
     let violations = app
         .world_mut()
         .remove_resource::<RunViolations>()
@@ -2655,6 +2679,28 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         // Dedupe against post-run guards already pushed (the run-level
         // vacuity guard names every invariant when the whole run was
         // unobservable; do not report the same (rule, target) twice).
+        if !snap
+            .iter()
+            .any(|v| v.rule == entry.rule && v.target == entry.target)
+        {
+            snap.push(entry);
+        }
+    }
+
+    // pairwise_separation vacuity audit: a selector that never had
+    // a pair to check proves nothing. Needs the bookkeeping, so it
+    // runs before it is removed (the episode drain already ran,
+    // before RunViolations was extracted above).
+    let pairwise_book = app
+        .world_mut()
+        .remove_resource::<crate::invariant_eval::PairwiseBookkeeping>()
+        .unwrap_or_default();
+    for entry in crate::invariant_eval::audit_pairwise_separation(
+        &scenario.invariants,
+        &pairwise_book,
+        state.frame,
+    ) {
+        // Same dedupe doctrine as the audits above.
         if !snap
             .iter()
             .any(|v| v.rule == entry.rule && v.target == entry.target)
