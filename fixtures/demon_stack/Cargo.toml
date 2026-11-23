@@ -1,0 +1,32 @@
+# Hand-authored demon-stack fixture — committed wholesale (source
+# AND tests), NOT managed by scripts/fetch_bevy_examples.sh. The
+# contact-spiral plant below is the pairwise_separation rule's
+# fixture-tier litmus: one sustained coincidence episode the rule
+# must catch through the full battery subprocess path (episode
+# folding, worst pair, roster _meta, fly-by discard). See
+# docs/reference/judgement-litmus-fixture.md for the plant catalog.
+[package]
+name = "fixture_demon_stack"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lints.rust]
+unexpected_cfgs = { level = "allow" }
+
+[features]
+playtest = [
+    "dep:bevy_playtest",
+    "bevy_playtest/takeover",
+    "bevy_playtest/takeover-winit",
+    "bevy_playtest/render-liveness",
+]
+
+[dependencies]
+bevy = { version = "0.20.1" }
+bevy_playtest = { path = "../..", optional = true }
+
+[dev-dependencies]
+# Self-dependency: activates OUR OWN `playtest` feature only for
+# test/example/bench builds. Normal & release builds stay clean.
+fixture_demon_stack = { path = ".", features = ["playtest"] }

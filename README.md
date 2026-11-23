@@ -265,7 +265,7 @@ Leafwing Input Manager](docs/how-to/declare-actions-leafwing.md).
 
 ## The hand-maintained fixtures
 
-The repository carries two hand-maintained fixtures beyond the
+The repository carries three hand-maintained fixtures beyond the
 fetched showcase games. The first is hand-authored:
 `fixtures/known_answer/` — a deliberately constructed input surface
 (numbered "plants": chords, debounces, shape-only KeyCode traps)
@@ -274,7 +274,17 @@ lenses are graded against, including asserted expected misses and
 runtime code mutations for drift testing. See the
 [known-answer fixture reference](docs/reference/known-answer-fixture.md).
 
-The second is a real-world game: `fixtures/thetawave/` — a port of
+The second is a spatial litmus: `fixtures/demon_stack/` — a
+hand-authored game whose only planted defect is a six-demon
+contact pile (proportional homing, no separation term) that the
+`pairwise_separation` rule must catch as exactly one folded episode
+with worst-pair and roster evidence, alongside a fly-by control
+proving the same geometry under a boundary soak (window just above
+the episode's span) stays silent.
+See the
+[judgement-litmus fixture reference](docs/reference/judgement-litmus-fixture.md).
+
+The third is a real-world game: `fixtures/thetawave/` — a port of
 the MIT-licensed thetawave (Bevy 0.14 → 0.20) using real Leafwing
 Input Manager maps loaded from RON. It has no ground truth by
 design: its committed tests make only per-run-derivable, honest

@@ -483,8 +483,9 @@ fi
 echo "  Created: $target_dir/ (at pinned ${THETAWAVE_REV})"
 
 # 6. Create fixtures workspace. NOTE: `known_answer` (hand-authored
-#    planted-truth game) is committed but NOT seeded by the loops
-#    above — regeneration must preserve it or the workspace breaks.
+#    planted-truth game) and `demon_stack` (hand-authored spatial
+#    litmus game) are committed but NOT seeded by the loops above —
+#    regeneration must preserve them or the workspace breaks.
 #    Everything else, thetawave included, is fetch-managed.
 cat > "${FIXTURES_DIR}/Cargo.toml" << 'WORKSPACE'
 [workspace]
@@ -494,6 +495,7 @@ members = [
     "breakout",
     "contributors",
     "desk_toy",
+    "demon_stack",
     "game_menu",
     "known_answer",
     "loading_screen",

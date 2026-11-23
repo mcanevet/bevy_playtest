@@ -26,6 +26,7 @@ on:
       - "Cargo.lock"
       - "fixtures/Cargo.lock"
       - "fixtures/known_answer/**"
+      - "fixtures/demon_stack/**"
       - "rust-toolchain.toml"
       - ".cargo/config.toml"
       - "scripts/fetch_bevy_examples.sh"
@@ -62,6 +63,7 @@ jobs:
           - breakout
           - contributors
           - desk_toy
+          - demon_stack
           - game_menu
           - known_answer
           - loading_screen

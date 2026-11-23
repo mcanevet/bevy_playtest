@@ -27,6 +27,9 @@ Public API surface for integrators.
 - [Known-answer fixture](known-answer-fixture.md) — the planted-truth
   fixture: hand-authored input surface, committed ground truth, and
   the measurement/mutation harnesses that grade the declared tier
+- [Judgement-litmus fixture](judgement-litmus-fixture.md) — the planted
+  spatial defect: a six-demon contact pile the `pairwise_separation`
+  rule must catch as one folded episode, plus the fly-by control
 - [Thetawave fixture](thetawave-fixture.md) — the real-world fixture:
   a ported third-party game (Theta Wave, MIT) proving the declared
   tier against actual Leafwing usage
