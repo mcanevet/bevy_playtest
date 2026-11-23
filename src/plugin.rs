@@ -562,6 +562,11 @@ fn lint_probe_wanted(scenario: &crate::scenario::Scenario) -> bool {
             // nothing to resolve, so the boot would be paid for a
             // guaranteed-empty probe.
             InvariantRule::NodesInBounds => inv.target_selector.is_some(),
+            // pairwise_separation resolves its selector via the
+            // same registry machinery in the LINT PROBE (its
+            // run-time recorder ships with the episode-fold
+            // slice; until then the rule rejects at validation).
+            InvariantRule::PairwiseSeparation => true,
         }
     });
     invariant_probe || progress_surface_probe_wanted(scenario)
@@ -657,6 +662,7 @@ fn lint_registry_probe(
                 InvariantRule::ResourceCheck | InvariantRule::StagnantResource => {
                     "reflected resource checks"
                 }
+                InvariantRule::PairwiseSeparation => "pairwise separation selector probes",
             };
             findings.push(ScenarioError::Rejected(format!(
                 "invariant '{}': {}",
@@ -694,6 +700,20 @@ fn lint_registry_probe(
                 {
                     // Only the TYPE needs to resolve for bounds
                     // recording; there is no numeric path to confirm.
+                    if let Err(why) =
+                        crate::invariant_eval::resolve_registration(&registry, name, "component")
+                    {
+                        findings.push(ScenarioError::Rejected(inv_name(&why)));
+                    }
+                }
+            }
+            InvariantRule::PairwiseSeparation => {
+                // Same probe doctrine as nodes_in_bounds: the
+                // selector names a component TYPE that must resolve
+                // at run time; there is no numeric path to confirm.
+                if let Some(crate::enums::TargetSelector::WithComponent { name }) =
+                    inv.target_selector.as_ref()
+                {
                     if let Err(why) =
                         crate::invariant_eval::resolve_registration(&registry, name, "component")
                     {

@@ -31,6 +31,7 @@ pub enum InvariantRule {
     ComponentCheck,
     ResourceCheck,
     StagnantResource,
+    PairwiseSeparation,
 }
 
 impl std::fmt::Display for InvariantRule {
@@ -40,6 +41,7 @@ impl std::fmt::Display for InvariantRule {
             Self::ComponentCheck => f.write_str("component_check"),
             Self::ResourceCheck => f.write_str("resource_check"),
             Self::StagnantResource => f.write_str("stagnant_resource"),
+            Self::PairwiseSeparation => f.write_str("pairwise_separation"),
         }
     }
 }

@@ -451,7 +451,8 @@ Two distinct error classes, at different stages:
   deserialization naming the offender. Rule-scoped reserved fields
   reject with `Rejected` naming the invariant: the resource vocabulary
   (`resource`, `window_s`, `driver_resource`, `driver_path`) is
-  meaningful only on `resource_check` / `stagnant_resource`, and
+  meaningful only on `resource_check` / `stagnant_resource`
+  (`window_s`/`driver_*` also on `pairwise_separation`), and
   binding any of it to `component_check` or `nodes_in_bounds` fails
   at load — a silently-ignored `window_s` on a component check
   would masquerade as a temporal bound that never existed. Blank
@@ -629,3 +630,28 @@ Two distinct error classes, at different stages:
   `vacuous_invariant` naming the driver (stagnation was unprovable,
   not proven);
   unknown/ambiguous names → `oracle_error`.
+- `pairwise_separation`: the coincident-bodies spatial oracle.
+  **Grammar accepted, evaluation NOT yet shipped** — the rule
+  rejects at validation with `NotImplemented` ("evaluation ships
+  with the episode recorder") until the episode-fold evaluator
+  lands; author the shape now and lint mode reports the full
+  authoring surface alongside the rejection. Selects every
+  entity carrying a named registered component
+  (`target_selector: {"with_component": {"name": "..."}}` —
+  required; "all" is rejected at load because pairwising every
+  `Transform` in the world — walls, camera, UI — at O(n²) is
+  never what an author means) and will require every PAIR of
+  selected entities to stay at least `min_distance` apart.
+  `min_distance` has ε semantics: it is "coincident bodies",
+  NOT "personal space" — author it BELOW gameplay-speed
+  closing distances or legitimate fly-bys false-positive.
+  `window_s` is required (the instant-fire form is rejected at
+  load) and will be measured in DRIVER UNITS like
+  `stagnant_resource`'s window: declare
+  `driver_path`/`driver_resource` for a game-clock soak (both
+  halves or neither — there is no `resource` to default the
+  host to), or omit them to soak against the frame clock in
+  seconds (which has no declarable rate:
+  `driver_units_per_second` without a declared driver is
+  rejected). `check`/`value`/`eventually_s`/`path`/`resource`
+  and the bounds fields are rejected at load.

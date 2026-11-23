@@ -497,6 +497,14 @@ pub struct Invariant {
     /// resource was present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eventually_s: Option<f32>,
+    /// Minimum allowed distance between any two selected entities
+    /// (`pairwise_separation` only): ε semantics — this is
+    /// "coincident bodies", NOT "personal space". The threshold
+    /// must sit BELOW gameplay-speed closing distances or
+    /// legitimate fly-bys false-positive; the rule's soak
+    /// (`window_s`) discards the rest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_distance: Option<f32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1664,6 +1672,216 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                         }
                     }
                     _ => unreachable!("arm constrained by the match above"),
+                }
+            }
+            InvariantRule::PairwiseSeparation => {
+                // Grammar-without-evaluation is the accepted-and-
+                // ignored hole this lint exists to close (see the
+                // reserved-field doctrine below): the parse and
+                // the shape checks below remain load-time-honest
+                // authoring grammar for the slice that ships the
+                // recorder, but until the episode recorder lands,
+                // a scenario reaching this arm would RUN and
+                // silently prove nothing. Reject the RULE (not
+                // the parse) exactly like the other known-future
+                // surfaces (after_s/before_s): the author learns
+                // the grammar is real and the evaluator is not.
+                errors.push(ScenarioError::NotImplemented(
+                    "pairwise_separation evaluation ships with the episode \
+                     recorder — the authoring grammar (target_selector, \
+                     min_distance, window_s) is validated below, but the \
+                     rule is not yet evaluated at run time"
+                        .to_string(),
+                ));
+                // The shape checks still run so lint mode (which
+                // collects ALL errors, unlike validate's first-error)
+                // reports the authoring defects too — except that a
+                // missing SELECTOR skips them (the selector check
+                // continues; one defect class, one complete story),
+                // so "report the shape" here means the checks the
+                // selector-gate permits past.
+                // Spatial rule: selector-required (the rule is
+                // meaningless over an unbounded entity set),
+                // min_distance required and positive, window_s
+                // REQUIRED as the fly-by soak (rejecting the
+                // instant-fire form at load is cheaper than a
+                // finding explaining ε semantics post-run),
+                // driver fields allowed (the driver-unit soak
+                // grammar carries over from stagnant_resource
+                // — when no driver is declared, the frame
+                // clock in seconds is the default).
+                let Some(crate::enums::TargetSelector::WithComponent { name }) =
+                    rule.target_selector.as_ref()
+                else {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': pairwise_separation requires \
+                         'target_selector: {{\"with_component\": {{\"name\": ...}}}}' \
+                         — the rule judges pairs among a named component's \
+                         entities, and 'all' would pairwise every Transform \
+                         in the world (walls, camera, UI) at O(n²)",
+                        rule.name
+                    )));
+                    continue;
+                };
+                if name.trim().is_empty() {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': with_component name must be non-empty",
+                        rule.name
+                    )));
+                }
+                match rule.min_distance {
+                    Some(d) if !d.is_finite() || d <= 0.0 => {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': min_distance must be a finite \
+                             number > 0 (got {d}) — ε semantics: this is \
+                             \"coincident bodies\", so a zero-or-negative \
+                             threshold fires only on exact overlap",
+                            rule.name
+                        )));
+                    }
+                    None => {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': pairwise_separation requires \
+                             'min_distance' — the ε below which two selected \
+                             entities count as coincident",
+                            rule.name
+                        )));
+                    }
+                    _ => {}
+                }
+                // The soak: required (a rule with no soak
+                // fires on any single contact frame), must be
+                // finite and positive, and — unlike
+                // stagnant_resource — the DECLARED-RATE fit
+                // check shares the same arithmetic because
+                // the window is consumed in the same driver
+                // units (default: seconds).
+                match rule.window_s {
+                    None => {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': pairwise_separation requires \
+                             'window_s' — the soak in driver-leaf units \
+                             (default driver: the frame clock, so seconds); \
+                             episodes shorter than the soak are discarded \
+                             as transient fly-bys",
+                            rule.name
+                        )));
+                    }
+                    Some(window_s) => {
+                        if !window_s.is_finite() || window_s <= 0.0 {
+                            errors.push(ScenarioError::Rejected(format!(
+                                "invariant '{}': window_s must be a finite \
+                                 number > 0 (got {window_s})",
+                                rule.name
+                            )));
+                        }
+                        // Declared-rate fit check: same doctrine and
+                        // arithmetic as stagnant_resource — a soak the
+                        // run can never elapse is unjudgeable, rejected
+                        // at load rather than discovered post-run.
+                        if let Some(rate) = rule.driver_units_per_second {
+                            if !rate.is_finite() || rate <= 0.0 {
+                                errors.push(ScenarioError::Rejected(format!(
+                                    "invariant '{}': driver_units_per_second must be a \
+                                     finite number > 0 (got {rate})",
+                                    rule.name
+                                )));
+                            } else {
+                                let effective_wall_s = (window_s / rate) as f64;
+                                if effective_wall_s > scenario.duration_s as f64 {
+                                    errors.push(ScenarioError::Rejected(format!(
+                                        "invariant '{}': soak window ({window_s} driver units \
+                                         at declared {rate} units/s = {effective_wall_s:.1}s) \
+                                         exceeds the run duration ({duration}s) — either the \
+                                         soak or the declared rate makes it unjudgeable; check \
+                                         driver_units_per_second",
+                                        rule.name,
+                                        duration = scenario.duration_s
+                                    )));
+                                }
+                            }
+                        }
+                    }
+                }
+                // Driver fields carry stagnant_resource's grammar
+                // when declared — with one structural difference:
+                // pairwise has no `resource` to default the driver
+                // host to, so a driver declaration must name BOTH
+                // halves (host resource + numeric leaf) or neither.
+                let has_dr = rule.driver_resource.is_some();
+                let has_dp = rule.driver_path.is_some();
+                if has_dr != has_dp {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': pairwise_separation's driver needs \
+                         both 'driver_resource' and 'driver_path' — unlike \
+                         stagnant_resource there is no 'resource' to default \
+                         the host to; omit both to soak against the frame \
+                         clock in seconds",
+                        rule.name
+                    )));
+                }
+                // A declared rate with no driver declared at all is a
+                // contradiction: the implicit driver is the FRAME
+                // CLOCK at 1 unit/s by definition, so accepting a
+                // rate would mis-validate the soak fit below (the
+                // window judged in the author's fake units, not the
+                // real seconds). The rejection also keeps the rate
+                // out of the run: a driverless rate would otherwise
+                // enter the one-leaf-one-rate join (which runs
+                // before this arm) keyed on an empty ("","") leaf.
+                if rule.driver_units_per_second.is_some() && !(has_dr && has_dp) {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': driver_units_per_second needs the \
+                         driver declared ('driver_resource' + 'driver_path') — \
+                         the default frame-clock driver is seconds by \
+                         definition and has no declarable rate",
+                        rule.name
+                    )));
+                }
+                if let Some(dp) = rule.driver_path.as_deref() {
+                    if dp.trim().is_empty() {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': 'driver_path' must be non-empty — \
+                             a blank reflect path resolves the resource root, \
+                             never a numeric leaf",
+                            rule.name
+                        )));
+                    }
+                }
+                if let Some(dr) = rule.driver_resource.as_deref() {
+                    if dr.trim().is_empty() {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': 'driver_resource' must be non-empty",
+                            rule.name
+                        )));
+                    }
+                }
+                // Predicate/threshold fields belong to other
+                // rules; silently accepting them would
+                // recreate the accepted-and-ignored
+                // reserved-field hole. (eventually_s is NOT
+                // gated here: the generic eventually-mode check
+                // above already rejects it with its own
+                // message — one defect, one error.)
+                if rule.check.is_some()
+                    || rule.value.is_some()
+                    || rule.path.is_some()
+                    || rule.resource.is_some()
+                    || rule.min_x.is_some()
+                    || rule.max_x.is_some()
+                    || rule.min_y.is_some()
+                    || rule.max_y.is_some()
+                    || rule.min_z.is_some()
+                    || rule.max_z.is_some()
+                {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': pairwise_separation does not use \
+                         check/value/eventually_s/path/resource/bounds — it judges \
+                         pair DISTANCE against min_distance and folds \
+                         consecutive violating frames into episodes within \
+                         window_s",
+                        rule.name
+                    )));
                 }
             }
         }

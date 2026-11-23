@@ -227,6 +227,79 @@ fn rejects_entity_shaped_nodes_in_bounds_invariant_names() {
 }
 
 #[test]
+fn pairwise_separation_driver_needs_both_halves() {
+    // Unlike stagnant_resource there is no 'resource' to default the
+    // driver host to: declaring a driver means naming BOTH halves.
+    for (field, other) in [("driver_resource", "driver_path"), ("driver_path", "driver_resource")]
+    {
+        let mut json = pairwise_json(Some("Enemy"), serde_json::json!(0.5), serde_json::json!(1.0));
+        json["invariants"][0][field] = serde_json::json!("MatchClock");
+        let errs = lint_errors(json);
+        assert!(
+            errs.iter().any(|e| e.contains("both 'driver_resource' and 'driver_path'")),
+            "{field} without {other}: {errs:?}"
+        );
+    }
+    // Both halves together: lint reports nothing besides the
+    // NotImplemented gate.
+    let mut json = pairwise_json(Some("Enemy"), serde_json::json!(0.5), serde_json::json!(1.0));
+    json["invariants"][0]["driver_resource"] = serde_json::json!("MatchClock");
+    json["invariants"][0]["driver_path"] = serde_json::json!("minutes");
+    let errs = lint_errors(json);
+    assert_eq!(errs.len(), 1, "both halves + shape-valid: {errs:?}");
+    assert!(errs[0].contains("evaluation ships"), "{errs:?}");
+}
+
+#[test]
+fn pairwise_separation_rejects_a_rate_without_a_driver() {
+    // The frame-clock default is seconds BY DEFINITION — accepting
+    // a declared rate would mis-validate the soak fit in the
+    // author's fake units and cross-contaminate the one-leaf-one-
+    // rate join with an empty ("","") leaf key.
+    let mut json = pairwise_json(Some("Enemy"), serde_json::json!(0.5), serde_json::json!(1.0));
+    json["invariants"][0]["driver_units_per_second"] = serde_json::json!(10.0);
+    let errs = lint_errors(json);
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("driver_units_per_second needs the driver declared")),
+        "{errs:?}"
+    );
+
+    // The same rate WITH a declared driver is coherent (the fit
+    // check judges it below).
+    let mut json = pairwise_json(Some("Enemy"), serde_json::json!(0.5), serde_json::json!(50.0));
+    json["invariants"][0]["driver_resource"] = serde_json::json!("MatchClock");
+    json["invariants"][0]["driver_path"] = serde_json::json!("minutes");
+    json["invariants"][0]["driver_units_per_second"] = serde_json::json!(10.0);
+    let errs = lint_errors(json);
+    assert_eq!(errs.len(), 1, "gate only: {errs:?}");
+}
+
+#[test]
+fn pairwise_separation_declared_rate_must_fit_the_run() {
+    // Same declared-rate fit arithmetic as stagnant_resource: a soak
+    // the run can never elapse is unjudgeable, rejected at load.
+    let mut json = pairwise_json(Some("Enemy"), serde_json::json!(0.5), serde_json::json!(600.0));
+    json["invariants"][0]["driver_resource"] = serde_json::json!("MatchClock");
+    json["invariants"][0]["driver_path"] = serde_json::json!("minutes");
+    json["invariants"][0]["driver_units_per_second"] = serde_json::json!(10.0);
+    let errs = lint_errors(json);
+    assert!(
+        errs.iter().any(|e| e.contains("exceeds the run duration")),
+        "600 units at 10/s = 60s > 10s run: {errs:?}"
+    );
+
+    // A fitting rate passes the fit check (the NotImplemented gate
+    // remains the only error).
+    let mut json = pairwise_json(Some("Enemy"), serde_json::json!(0.5), serde_json::json!(50.0));
+    json["invariants"][0]["driver_resource"] = serde_json::json!("MatchClock");
+    json["invariants"][0]["driver_path"] = serde_json::json!("minutes");
+    json["invariants"][0]["driver_units_per_second"] = serde_json::json!(10.0);
+    let errs = lint_errors(json);
+    assert_eq!(errs.len(), 1, "gate only: {errs:?}");
+}
+
+#[test]
 fn rejects_custom_invariants_at_parse_time() {
     // "custom" is removed from InvariantRule: it fails deserialization
     // with an unknown-variant error.
@@ -239,6 +312,140 @@ fn rejects_custom_invariants_at_parse_time() {
     assert!(
         err.to_string().contains("custom"),
         "serde error must name the variant 'custom': {err}"
+    );
+}
+
+fn pairwise_json(selector: Option<&str>, min_distance: serde_json::Value, window_s: serde_json::Value) -> serde_json::Value {
+    let selector = match selector {
+        Some(name) => serde_json::json!({ "with_component": { "name": name } }),
+        None => serde_json::json!(null),
+    };
+    serde_json::json!({
+        "bot": { "type": "chaos" },
+        "duration_s": 10.0,
+        "invariants": [{
+            "name": "no_coincident_enemies",
+            "rule": "pairwise_separation",
+            "target_selector": selector,
+            "min_distance": min_distance,
+            "window_s": window_s,
+        }],
+    })
+}
+
+fn lint_errors(json: serde_json::Value) -> Vec<String> {
+    use bevy_playtest::scenario::lint_scenario;
+    let s = parse(json);
+    lint_scenario(&s).into_iter().map(|e| e.to_string()).collect()
+}
+
+#[test]
+fn pairwise_separation_parses_and_reports_the_not_implemented_gate() {
+    // Grammar accepted, evaluation not yet shipped: the parse
+    // succeeds, the shape lint passes, and the ONE error lint
+    // reports is the NotImplemented gate naming the recorder.
+    let s = parse(pairwise_json(Some("Enemy"), serde_json::json!(0.5), serde_json::json!(1.0)));
+    assert_eq!(s.invariants[0].min_distance, Some(0.5));
+    let errs = lint_errors(pairwise_json(Some("Enemy"), serde_json::json!(0.5), serde_json::json!(1.0)));
+    let ni_count = errs
+        .iter()
+        .filter(|e| e.contains("pairwise_separation evaluation ships with the episode recorder"))
+        .count();
+    assert_eq!(ni_count, 1, "exactly one NotImplemented gate, got: {errs:?}");
+    // No shape errors accompany a well-formed declaration.
+    assert_eq!(
+        errs.len(),
+        1,
+        "well-formed grammar must lint clean besides the gate: {errs:?}"
+    );
+    // validate_scenario surfaces the gate as the first error.
+    let err = validate_scenario(&s).unwrap_err().to_string();
+    assert!(err.contains("pairwise_separation evaluation ships"), "{err}");
+}
+
+#[test]
+fn pairwise_separation_requires_a_component_selector() {
+    // "all" is the deserialized absence of a selector: pairwising
+    // every Transform in the world (walls, camera, UI) at O(n²) is
+    // never what an author means. Lint mode collects ALL errors:
+    // the gate AND the shape error appear together.
+    let errs = lint_errors(pairwise_json(None, serde_json::json!(0.5), serde_json::json!(1.0)));
+    assert!(errs.iter().any(|e| e.contains("pairwise_separation requires") && e.contains("target_selector")), "{errs:?}");
+
+    let errs = lint_errors(pairwise_json(Some("  "), serde_json::json!(0.5), serde_json::json!(1.0)));
+    assert!(errs.iter().any(|e| e.contains("name must be non-empty")), "{errs:?}");
+}
+
+#[test]
+fn pairwise_separation_requires_positive_min_distance() {
+    for bad in [0.0, -1.0] {
+        let errs = lint_errors(pairwise_json(Some("Enemy"), serde_json::json!(bad), serde_json::json!(1.0)));
+        assert!(
+            errs.iter().any(|e| e.contains("min_distance must be a finite number > 0")),
+            "min_distance={bad}: {errs:?}"
+        );
+    }
+    let errs = lint_errors(pairwise_json(
+        Some("Enemy"),
+        serde_json::json!(null),
+        serde_json::json!(1.0),
+    ));
+    assert!(
+        errs.iter().any(|e| e.contains("pairwise_separation requires 'min_distance'")),
+        "{errs:?}"
+    );
+}
+
+#[test]
+fn pairwise_separation_requires_a_soak_window() {
+    // Instant-fire form (no window_s) is rejected at load: ε
+    // semantics plus a soak is the rule's contract, and rejecting
+    // the authoring mistake once is cheaper than a post-run
+    // finding explaining fly-bys.
+    let errs = lint_errors(pairwise_json(Some("Enemy"), serde_json::json!(0.5), serde_json::json!(null)));
+    assert!(
+        errs.iter().any(|e| e.contains("pairwise_separation requires 'window_s'")),
+        "{errs:?}"
+    );
+
+    for bad in [0.0, -2.0] {
+        let errs = lint_errors(pairwise_json(Some("Enemy"), serde_json::json!(0.5), serde_json::json!(bad)));
+        assert!(
+            errs.iter().any(|e| e.contains("window_s must be a finite number > 0")),
+            "window_s={bad}: {errs:?}"
+        );
+    }
+}
+
+#[test]
+fn pairwise_separation_rejects_foreign_fields() {
+    // Rule-exclusive fields silently accepted = the reserved-field
+    // hole the schema lint exists to close.
+    for (field, value) in [
+        ("check", serde_json::json!("le")),
+        ("value", serde_json::json!(100)),
+        ("path", serde_json::json!("translation.z")),
+        ("resource", serde_json::json!("Scoreboard")),
+        ("min_x", serde_json::json!(-900.0)),
+        ("max_z", serde_json::json!(900.0)),
+    ] {
+        let mut json = pairwise_json(Some("Enemy"), serde_json::json!(0.5), serde_json::json!(1.0));
+        json["invariants"][0][field] = value;
+        let errs = lint_errors(json);
+        assert!(
+            errs.iter().any(|e| e.contains("pairwise_separation does not use")),
+            "{field}: {errs:?}"
+        );
+    }
+    // eventually_s is rejected by the GENERIC eventually-mode check
+    // (one defect, one error) — assert that message, not a
+    // pairwise-specific one.
+    let mut json = pairwise_json(Some("Enemy"), serde_json::json!(0.5), serde_json::json!(1.0));
+    json["invariants"][0]["eventually_s"] = serde_json::json!(2.0);
+    let errs = lint_errors(json);
+    assert!(
+        errs.iter().any(|e| e.contains("eventually mode is only supported")),
+        "{errs:?}"
     );
 }
 
