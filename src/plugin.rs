@@ -552,13 +552,17 @@ fn run_lint(
 fn lint_probe_wanted(scenario: &crate::scenario::Scenario) -> bool {
     use crate::enums::InvariantRule;
     scenario.invariants.iter().any(|inv| {
-        matches!(
-            inv.rule,
+        match inv.rule {
             InvariantRule::ComponentCheck
-                | InvariantRule::NodesInBounds
-                | InvariantRule::ResourceCheck
-                | InvariantRule::StagnantResource
-        )
+            | InvariantRule::ResourceCheck
+            | InvariantRule::StagnantResource => true,
+            // The probe arm for nodes_in_bounds resolves a
+            // `with_component` selector against the registry; a
+            // selector-less (all-entities) declaration gives it
+            // nothing to resolve, so the boot would be paid for a
+            // guaranteed-empty probe.
+            InvariantRule::NodesInBounds => inv.target_selector.is_some(),
+        }
     })
 }
 
