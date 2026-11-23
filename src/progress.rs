@@ -410,11 +410,61 @@ fn resolve_resource(
         .map(|(p, _)| p.as_str())
         .collect();
     match shorts.len() {
-        0 => Err(format!(
-            "no reflected resource matches '{name}' — register the \
-             resource type (Reflect + register_type) and use its full \
-             path or an unambiguous short name"
-        )),
+        0 => {
+            let mut msg = format!(
+                "no reflected resource matches '{name}' — register the \
+                 resource type (Reflect + register_type) and use its full \
+                 path or an unambiguous short name"
+            );
+            // Did-you-mean, same doctrine as invariant-name
+            // suggestions: purely advisory, resolution semantics
+            // unchanged. Substring hits list up to four candidates
+            // (a full path is the paste-ready form); otherwise the
+            // capped-distance Levenshtein helper suggests a pure
+            // typo. A short-name probe compares on the final
+            // segment only, so a module typo
+            // (`my_gane::Calendar`) still hits.
+            let base = match name.find('<') {
+                Some(open) => &name[..open],
+                None => name,
+            };
+            let probe = match base.rsplit_once("::") {
+                Some((_, last)) => last,
+                None => base,
+            };
+            let candidates: Vec<String> = pairs.iter().map(|(p, _)| p.to_string()).collect();
+            let mut similar: Vec<String> = candidates
+                .iter()
+                .filter(|p| p.contains(probe))
+                .cloned()
+                .collect();
+            fn own_segment(s: &str) -> &str {
+                let container = s.split('<').next().unwrap_or(s);
+                container.rsplit("::").next().unwrap_or(container)
+            }
+            similar.sort_by_key(|p| own_segment(p) != probe);
+            similar.truncate(4);
+            if !similar.is_empty() {
+                msg.push_str(&format!(
+                    "; known similar reflected resources: {}",
+                    similar.join(", ")
+                ));
+            } else {
+                let shorts: Vec<String> = candidates
+                    .iter()
+                    .map(|p| short_path(p).to_string())
+                    .collect();
+                if let Some(best) = crate::scenario::suggest_similar(probe, &shorts) {
+                    let full = candidates
+                        .iter()
+                        .find(|p| short_path(p) == best)
+                        .cloned()
+                        .unwrap_or(best.clone());
+                    msg.push_str(&format!("; did you mean '{full}'?"));
+                }
+            }
+            Err(msg)
+        }
         1 => Ok(shorts[0].to_string()),
         _ => Err(format!(
             "short name '{name}' is ambiguous among {} reflected \
@@ -427,6 +477,62 @@ fn resolve_resource(
 
 fn short_path(path: &str) -> &str {
     path.rsplit("::").next().unwrap_or(path)
+}
+
+/// Lint stage-2 probe for the named progress surface (markers and,
+/// in auto mode, exact `include_paths` entries): resolve every
+/// entry against the WARM-UP frame's world exactly the way the
+/// recorder resolves them at the run's first sampled frame, and
+/// return each entry's problem in the recorder's own
+/// `"{name}: {problem}"` form. Empty when everything resolves.
+///
+/// Doctrine parity with the recorder's `initialize`: the pairs are
+/// REGISTERED-AND-CURRENTLY-INSERTED reflected resources, so a
+/// typo'd marker is a DEFINITE run error (the recorder reports it
+/// at the first sample, whatever happens later), while a
+/// registered-but-not-yet-inserted resource is unconfirmable from
+/// one frame — the probe stays silent about it (absence is never a
+/// finding), exactly as it does for invariant resources. Only the
+/// `unresolved` class of initialize is front-loaded; prefix-scope
+/// (`include_paths` ending in `::`) entries are not name-typo
+/// candidates and are skipped here: their zero-match failure needs
+/// the full run's registry anyway.
+pub(crate) fn lint_probe_surface(
+    world: &World,
+    config: &crate::scenario::ProgressConfig,
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    if config.mode == ProgressMode::Off {
+        return problems;
+    }
+    let wanted = marker_names_to_resolve(config);
+    let mut include = Vec::new();
+    if config.mode == ProgressMode::Auto {
+        include = config
+            .include_paths
+            .iter()
+            .filter(|p| !p.trim().is_empty() && !p.ends_with("::"))
+            .cloned()
+            .collect();
+    }
+    if wanted.is_empty() && include.is_empty() {
+        return problems;
+    }
+    let Some(registry_arc) = world.get_resource::<bevy_ecs::reflect::AppTypeRegistry>() else {
+        return wanted
+            .iter()
+            .chain(include.iter())
+            .map(|n| format!("{n}: no type registry"))
+            .collect();
+    };
+    let registry = registry_arc.0.read();
+    let pairs = collect_resource_reflections_locked(world, &registry);
+    for name in wanted.iter().chain(include.iter()) {
+        if let Err(problem) = resolve_resource(&pairs, name) {
+            problems.push(format!("{name}: {problem}"));
+        }
+    }
+    problems
 }
 
 fn channel_key_hash(channel: &Channel) -> u64 {

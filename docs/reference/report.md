@@ -147,11 +147,16 @@ know:
   `lint_finding` — one per aggregated scenario validation error,
   plus one per definite resolution error the type-registry probe
   caught (typo'd resource/component names, numeric paths that
-  cannot resolve on the booted App). The probe is silent about
-  what it cannot confirm (a component with no instances yet);
-  its findings mirror the run's resolution machinery and message
+  cannot resolve on the booted App, and typo'd progress-surface
+  names — `liveness.progress.markers` and exact `include_paths`
+  entries, which resolve at the run's first sampled frame and so
+  fail just as certainly at run time). The probe is silent about
+  what it cannot confirm (a component with no instances yet, a
+  `include_paths` PREFIX whose zero-match judgment needs the whole
+  run); its findings mirror the run's resolution machinery and message
   builders (`resolve_registration`, `reflect_resource`,
-  `reflect_numeric_path`, `resolve_entity_numeric_path`), so
+  `reflect_numeric_path`, `resolve_entity_numeric_path`, and the
+  progress recorder's own surface resolution), so
   lint clean-ness transfers: a
   scenario that lints clean stays clean for the resolution errors
   the probe checks.
