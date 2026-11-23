@@ -31,8 +31,9 @@ my_game = { path = ".", features = ["playtest"] }
 playtest = ["dep:bevy_playtest", "bevy_playtest/takeover"]
 ```
 
-**2. `src/main.rs`** — two cfg'd helper pairs around your existing
-plugin setup (use your own package name in place of `my_game`):
+**2. `src/main.rs`** — a cfg'd plugin-picker helper plus a cfg-guarded
+call site around your existing plugin setup (use your own package
+name in place of `my_game`):
 
 ```rust
 #[cfg(feature = "playtest")]
@@ -43,19 +44,29 @@ fn default_plugins() -> bevy_playtest::PlaytestDefaultPlugins {
 fn default_plugins() -> bevy::DefaultPlugins {
     bevy::DefaultPlugins
 }
-
-#[cfg(feature = "playtest")]
-fn playtest_plugins() -> (bevy_playtest::PlaytestPlugin,) {
-    (bevy_playtest::PlaytestPlugin,)
-}
-#[cfg(not(feature = "playtest"))]
-fn playtest_plugins() -> () {}
 ```
 
 then use `.add_plugins(default_plugins().set(...))` where you had
-`DefaultPlugins`, and `.add_plugins(playtest_plugins())` before
-`.run()`. The one ordering rule: add `PlaytestPlugin` **after** any
-plugin group that sets a runner, or the takeover is silently inert (the
+`DefaultPlugins`, and — before `.run()` — a cfg-guarded block for
+the takeover plugin:
+
+```rust
+    #[cfg(feature = "playtest")]
+    app.add_plugins((bevy_playtest::PlaytestPlugin,));
+```
+
+Why not a symmetric `playtest_plugins()` helper with a
+`-> ()` arm for normal builds? Because the unit-returning arm
+trips `clippy::unused_unit` on its signature and `clippy::unit_arg`
+at the call site — and a clean `cargo clippy` is part of the
+zero-friction promise. (`()` is a legal zero-plugin tuple for
+bevy's `Plugins` bound, so the old form compiles — the lints are
+the entire problem.) The cfg-guarded call site is the idiomatic
+escape: normal builds compile the guarded line away to nothing,
+test builds get the plugin.
+
+The one ordering rule: add `PlaytestPlugin` **after** any plugin
+group that sets a runner, or the takeover is silently inert (the
 runner swap is last-set-wins).
 
 **3. `tests/playtest.rs`** — the whole file, no scenario needed:
