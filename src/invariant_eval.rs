@@ -1934,7 +1934,7 @@ fn vacuous_resource_entry(name: &str, last_frame: u64) -> crate::state::Violatio
 
 /// Bookkeeping for `pairwise_separation` invariants (same doctrine
 /// as [`WatchedInvariants`]/[`WatchedResources`]): the per-frame
-/// recorder owns one [`episode::EpisodeFolder`] per invariant, and
+/// recorder owns one [`crate::episode::EpisodeFolder`] per invariant, and
 /// the post-run vacuity audit needs the full-series observability
 /// flags.
 #[derive(Resource, Default)]
@@ -1980,7 +1980,7 @@ struct PwOutcome {
 /// the named registered component and requires every PAIR of
 /// selected entities to stay at least `min_distance` apart; frames
 /// with violating pairs fold into EPISODES (maximal stretches over
-/// time — see [`episode`]) and an episode becomes ONE finding when
+/// time — see [`crate::episode`]) and an episode becomes ONE finding when
 /// its `window_s` soak elapses (measured in the declared driver
 /// leaf's own units; the frame clock in seconds when no driver is
 /// declared).
