@@ -1044,6 +1044,27 @@ pub(crate) fn resolve_registration<'a>(
                 .iter()
                 .map(|r| r.type_info().type_path_table().short_path().to_string())
                 .collect();
+            // A full path that failed lookup may be a full-path TYPO
+            // (`my_game::Reserve` for `my_game::Reservoir`) — the
+            // error message itself recommends full paths, so leaving
+            // them suggestion-less is worse than odd. Compare the
+            // FINAL SEGMENT against the registered short names the
+            // same way; a module typo (`my_gane::Reservoir`) matches
+            // by segment and still suggests. When the queried name is
+            // a full path, a correct full-path suggestion beats a
+            // bare short name — offer the full path of the best
+            // candidate.
+            let (probe, full_probe) = match name.rsplit_once("::") {
+                Some((_, last)) => (last, true),
+                None => (name, false),
+            };
+            let full_for = |short: &str| {
+                registry
+                    .iter()
+                    .find(|r| r.type_info().type_path_table().short_path() == short)
+                    .map(|r| r.type_info().type_path_table().path().to_string())
+                    .unwrap_or_else(|| short.to_string())
+            };
             // Prefix/truncation first: a name that is a PREFIX of
             // several registered types ("Time" for Time<()>,
             // Time<Real>, …) is best served by listing those exact
@@ -1051,19 +1072,25 @@ pub(crate) fn resolve_registration<'a>(
             // ("Timer") would shadow the author's real target.
             let similar: Vec<String> = shorts
                 .iter()
-                .filter(|short| short.contains(name))
+                .filter(|short| short.contains(probe))
                 .take(4)
                 .cloned()
                 .collect();
             if !similar.is_empty() {
+                let shown: Vec<String> = if full_probe {
+                    similar.iter().map(|s| full_for(s)).collect()
+                } else {
+                    similar
+                };
                 msg.push_str(&format!(
                     "; known similar registered types: {}",
-                    similar.join(", ")
+                    shown.join(", ")
                 ));
-            } else if let Some(best) = crate::scenario::suggest_similar(name, &shorts) {
+            } else if let Some(best) = crate::scenario::suggest_similar(probe, &shorts) {
                 // Pure typo ("Kils" for "Kills"): no substring hit,
                 // but the capped-distance helper the config
                 // validator uses for keys/buttons catches it.
+                let best = if full_probe { full_for(&best) } else { best };
                 msg.push_str(&format!("; did you mean '{best}'?"));
             }
             Err(msg)
