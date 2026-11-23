@@ -74,7 +74,18 @@ Public API surface for integrators.
   evidence: spawn churn is engine bookkeeping, not state evolution.
   Channels: auto mode watches reflected component types plus
   `include_paths` resources (minus `exclude`); markers mode watches
-  only the named reflected types; `off` disables the oracle entirely.
+  only the named reflected resources; `off` disables the oracle entirely.
+  One design boundary worth reading twice: the zero-config built-in
+  battery's auto-mode surface is COUNTS-ONLY — component-type counts,
+  not component values. Structural change (spawns, deaths, archetype
+  moves) is visible; value mutation on stable structure (an economy
+  growing, units repositioning, meters filling) is not. Games whose
+  state evolves purely in value-space hit `stalled_progress` on the
+  bare battery without anything being wrong — the remedy is an
+  authored scenario declaring `include_paths`/`markers` naming the
+  reflected resources that carry the live state, which adds VALUE
+  channels (each resource's canonical value hash, compared per
+  sample), never a change to the game.
   Authored configs are held to a coherent sampling grid:
   `sample_s·tps` must be a whole frame count and `window_s` a whole
   multiple of it (the default config rides along unvalidated and is

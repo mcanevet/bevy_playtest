@@ -96,7 +96,6 @@ seeded bot typed and clicked through your game while every oracle
 watched — and nothing fired. When something does, the test prints the
 findings (violation, tick, entities involved) instead.
 
-
 ### Under Bazel instead of cargo
 
 `env!("CARGO_BIN_EXE_…")` is a cargo-ism: it is set for cargo test
@@ -193,9 +192,30 @@ prove determinism itself, enable
 [replay verification](docs/how-to/how-to-prove-a-scenario-is-deterministic.md),
 which runs the scenario twice and compares per-frame fingerprints.
 
-Declaring nothing is the point. When you need to target a specific
-situation, authored scenarios are data files referenced from the same
-helper — `battery::run_and_expect_clean(binary, "playtests/menu.json")`
+Declaring nothing is the point — with one honest boundary. The
+zero-config battery's progress oracle (auto mode) watches *structural*
+state: entity, archetype, and registered component-type counts, plus
+any `include_paths`/`markers` you declared. It cannot see values
+mutating in place: an economy whose balance grows on a fixed
+population, an RTS whose units reposition without spawning or dying,
+an XP bar filling — all look identical to the counts-only surface.
+If your game hits `stalled_progress` while visibly alive, the sim is
+almost certainly fine; the surface is counts-only by design. (A game
+with NO reflected game types never gets that far — the battery's
+`require_surface` fails the run outright with `progress_surface_empty`;
+registering state types first, then naming the live resources, is the
+path.) The fix
+is one authored scenario adding value channels for the live state —
+`liveness.progress.include_paths` or `markers` naming the reflected
+resources whose values evolve (`my_game::Economy` and friends) —
+not debugging your simulation. See
+[the progress heartbeat
+reference](docs/reference/README.md#oracles) for the full channel
+semantics.
+
+To target a specific situation, authored scenarios are data files
+referenced from the same helper —
+`battery::run_and_expect_clean(binary, "playtests/menu.json")`
 (see the [scenario reference](docs/reference/scenario-schema.md) for the
 full JSON schema, and [script keys instead of
 chaos](docs/how-to/how-to-script-keys-instead-of-chaos.md) for scripted
