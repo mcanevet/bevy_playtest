@@ -26,6 +26,7 @@ mod common;
 mod battery;
 mod census;
 mod component_check;
+mod derived_transform_consistency;
 mod doc_examples;
 mod driver_smoke;
 mod engine_clock_drivers;

@@ -877,11 +877,9 @@ fn dtc_json(selector: Option<&str>, window_s: serde_json::Value) -> serde_json::
 
 #[test]
 fn dtc_parses_and_lints_the_full_authoring_surface() {
-    // The full surface is real and parseable; the evaluator is not
-    // shipped yet, so validation gates with NotImplemented — but
-    // the shape lint must collect NOTHING (the grammar is sound)
-    // and the gate must be present so the rule can never run and
-    // silently prove nothing.
+    // The full surface is real and parseable, and the consistency
+    // recorder evaluates it at run time — so the shape lint must
+    // collect NOTHING: the grammar is sound and the rule is live.
     let full = serde_json::json!({
         "bot": { "type": "chaos" },
         "duration_s": 10.0,
@@ -902,34 +900,20 @@ fn dtc_parses_and_lints_the_full_authoring_surface() {
         s.invariants[0].exclude_components,
         vec!["CameraSmoothGhost"]
     );
-    // The lint collects ALL errors INCLUDING the gate: the surface
-    // is coherent, the gate fires alone.
+    // The gate is gone: the full authoring surface lints clean.
     let errs = lint_errors(full);
     assert!(
-        errs.iter().any(|e| e.contains(
-            "derived_transform_consistency evaluation \
-             ships with the consistency recorder"
-                .replace('\\', "")
-                .trim()
-        )),
-        "gate must fire under the lint: {errs:?}"
+        errs.is_empty(),
+        "well-formed grammar must lint clean now that the \
+         recorder evaluates it: {errs:?}"
     );
-    assert_eq!(
-        errs.len(),
-        1,
-        "well-formed grammar must contribute no error besides the \
-         evaluation gate: {errs:?}"
-    );
-    // validate: first error IS the gate (parse-success /
-    // lint-collect / validate-first trio).
+    // validate: a fully-coherent DTC rule is accepted outright
+    // (parse-success / lint-collect / validate-accept trio).
     let s = parse(dtc_json(Some("Cabin"), serde_json::json!(1.0)));
-    match validate_scenario(&s) {
-        Err(ScenarioError::NotImplemented(msg)) => assert!(
-            msg.contains("consistency recorder"),
-            "gate message must name the recorder: {msg}"
-        ),
-        other => panic!("expected NotImplemented gate, got {other:?}"),
-    }
+    assert!(
+        validate_scenario(&s).is_ok(),
+        "a well-formed consistency rule must validate"
+    );
 }
 
 #[test]
@@ -938,8 +922,7 @@ fn dtc_all_selector_is_the_documented_default_not_a_requirement() {
     // whole hierarchy is exactly what the rule is FOR. Only an
     // explicit selector is validated at load; absence means all.
     let errs = lint_errors(dtc_json(None, serde_json::json!(1.0)));
-    assert_eq!(errs.len(), 1, "gate alone: {errs:?}");
-    assert!(errs[0].contains("consistency recorder"));
+    assert!(errs.is_empty(), "gate-free clean lint: {errs:?}");
 }
 
 #[test]
@@ -992,6 +975,90 @@ fn dtc_declared_rate_must_fit_the_run() {
         errs.iter().any(|e| e.contains("exceeds the run duration")),
         "{errs:?}"
     );
+}
+
+#[test]
+fn dtc_frame_clock_window_must_fit_the_run() {
+    // The DEFAULT driver (frame clock, seconds) is the path most
+    // authors take — and without this check, an over-long window
+    // made the recorder silently discard every episode as
+    // sub-soak: a run that proves nothing, reported as Pass.
+    // The window compares straight against duration_s (1 unit/s).
+    let errs = lint_errors(dtc_json(Some("Cabin"), serde_json::json!(20.0)));
+    assert!(
+        errs.iter().any(|e| e.contains("exceeds the run duration")),
+        "20s soak against a 10s run: {errs:?}"
+    );
+    // Equal-to-run stays legal: the episode may sustain to the
+    // very end of the run and exactly elapse it (the fixture
+    // corpus pins this shape: a fly-by control with window ==
+    // duration).
+    let errs = lint_errors(dtc_json(Some("Cabin"), serde_json::json!(10.0)));
+    assert!(errs.is_empty(), "window == duration is judgeable: {errs:?}");
+}
+
+#[test]
+fn pairwise_frame_clock_window_must_fit_the_run() {
+    // Same hole, same fix, for the sibling episode-fold rule.
+    let errs = lint_errors(pairwise_json(
+        Some("Enemy"),
+        serde_json::json!(0.5),
+        serde_json::json!(20.0),
+    ));
+    assert!(
+        errs.iter().any(|e| e.contains("exceeds the run duration")),
+        "20s soak against a 10s run: {errs:?}"
+    );
+    let errs = lint_errors(pairwise_json(
+        Some("Enemy"),
+        serde_json::json!(0.5),
+        serde_json::json!(10.0),
+    ));
+    assert!(errs.is_empty(), "window == duration is judgeable: {errs:?}");
+}
+
+#[test]
+fn dtc_grace_and_window_must_share_the_frame_budget() {
+    // The compound fit: an episode accrues span only on JUDGED
+    // (post-grace) frames, so a window that fits the whole run
+    // can still be unjudgeable — the grace ate the only frames
+    // that could have accrued the span. 3s run at 60tps = 180
+    // frames; grace 150 (2.5s) leaves 0.5s judged; a 1.0s window
+    // can never be elapsed.
+    let json = serde_json::json!({
+        "bot": { "type": "chaos" },
+        "duration_s": 3.0,
+        "tps": 60,
+        "invariants": [{
+            "name": "globals_follow_parents",
+            "rule": "derived_transform_consistency",
+            "target_selector": { "with_component": { "name": "Cabin" } },
+            "grace_frames": 150,
+            "window_s": 1.0,
+        }],
+    });
+    let errs = lint_errors(json);
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("does not fit the judged frames")),
+        "1.0s window against a 0.5s judged remainder: {errs:?}"
+    );
+    // The fix that fits: a window the grace-adjusted run can
+    // elapse lints clean.
+    let json = serde_json::json!({
+        "bot": { "type": "chaos" },
+        "duration_s": 3.0,
+        "tps": 60,
+        "invariants": [{
+            "name": "globals_follow_parents",
+            "rule": "derived_transform_consistency",
+            "target_selector": { "with_component": { "name": "Cabin" } },
+            "grace_frames": 150,
+            "window_s": 0.4,
+        }],
+    });
+    let errs = lint_errors(json);
+    assert!(errs.is_empty(), "fitting grace+window: {errs:?}");
 }
 
 #[test]

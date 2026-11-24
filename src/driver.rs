@@ -1649,6 +1649,7 @@ fn frozen_world_oracle_system(
                     entry.meta = Some(crate::discovery::surface::ViolationMeta {
                         stepping,
                         pairwise_episode: None,
+                        consistency_episode: None,
                     });
                 }
             }
@@ -2126,6 +2127,16 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         // vacuity audit read it.
         app.init_resource::<crate::invariant_eval::PairwiseBookkeeping>();
     }
+    if scenario
+        .invariants
+        .iter()
+        .any(|i| i.rule == crate::enums::InvariantRule::DerivedTransformConsistency)
+    {
+        // Episode-fold bookkeeping for derived_transform_consistency
+        // (the same doctrine): per-frame recorder folds into this,
+        // the run-end drain and hierarchy-absent audit read it.
+        app.init_resource::<crate::invariant_eval::ConsistencyBookkeeping>();
+    }
     if scenario.verify_replay {
         app.insert_resource(crate::replay::ReplaySeries::default());
     }
@@ -2466,6 +2477,11 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             // the settled frame) — selects, enumerates pairs, folds
             // into episodes via the shared fold engine.
             crate::invariant_eval::record_pairwise_separation(app.world_mut(), i, tps);
+            // derived_transform_consistency: same driver-loop
+            // recorder doctrine — post-propagation observation of
+            // the settled frame; per-entity episodes, judged
+            // against a persistence soak.
+            crate::invariant_eval::record_derived_transform_consistency(app.world_mut(), i, tps);
             // Progress-surface sampling: same driver-loop recorder
             // doctrine as the digest above.
             crate::progress::record_progress_sample(app.world_mut(), i);
@@ -2529,6 +2545,10 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     // (it reports into it) and before the pairwise bookkeeping is
     // removed for the vacuity audit below.
     crate::invariant_eval::close_pairwise_episodes(app.world_mut());
+    // Same drain for the consistency recorder: an episode still open
+    // at the last frame is judged on its own accumulated span,
+    // before the bookkeeping is removed for the audit below.
+    crate::invariant_eval::close_consistency_episodes(app.world_mut());
     let violations = app
         .world_mut()
         .remove_resource::<RunViolations>()
@@ -2698,6 +2718,27 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     for entry in crate::invariant_eval::audit_pairwise_separation(
         &scenario.invariants,
         &pairwise_book,
+        state.frame,
+    ) {
+        // Same dedupe doctrine as the audits above.
+        if !snap
+            .iter()
+            .any(|v| v.rule == entry.rule && v.target == entry.target)
+        {
+            snap.push(entry);
+        }
+    }
+    // derived_transform_consistency vacuity audit: a rule that
+    // never found a parented entity reports the INFORMATIONAL
+    // `hierarchy_absent` — a flat world is a coherent scene the
+    // rule cannot judge, so it never gates as vacuous_invariant.
+    let consistency_book = app
+        .world_mut()
+        .remove_resource::<crate::invariant_eval::ConsistencyBookkeeping>()
+        .unwrap_or_default();
+    for entry in crate::invariant_eval::audit_derived_transform_consistency(
+        &scenario.invariants,
+        &consistency_book,
         state.frame,
     ) {
         // Same dedupe doctrine as the audits above.

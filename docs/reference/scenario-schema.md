@@ -273,10 +273,21 @@ loader additionally checks the window's *wall cost*: a window
 larger than what the run can deliver (`window_s /
 driver_units_per_second > duration_s`) rejects at load with the
 rate quoted in the error, so the author learns the mismatch
-before paying for a run. Without a declared rate the loader does
-not (and cannot) reason about the driver's speed — reason in
-driver units first, then sanity-check the wall cost once by
-dividing by the clock scale.
+before paying for a run. Without a declared rate the default
+frame-clock driver is seconds by definition (1 unit/s), so the
+same fit check applies directly: a `window_s` at or above the
+run's `duration_s` (checked strictly greater, so a window equal
+to the full run stays accepted — fly-by controls pin this shape:
+a judged episode approaches but, by the grace and frame budget,
+never exactly reaches a full-run span) rejects at load for the
+soak-family rules (`pairwise_separation`,
+`derived_transform_consistency`). Otherwise the recorder would
+silently discard every episode as sub-soak — a run that proves
+nothing, reported as Pass. For `derived_transform_consistency`
+the check compounds with `grace_frames`: episodes accrue span
+only on judged (post-grace) frames, so a window longer than the
+post-grace remainder of the run rejects too — the grace would eat
+the only frames that could have accrued the span.
 
 Three scales, worked:
 
@@ -697,11 +708,9 @@ Two distinct error classes, at different stages:
   `window_s` (in driver units — the same
   both-halves-or-neither driver grammar as
   `pairwise_separation`, frame-clock default in seconds) counts
-  as a finding. NOTE: this rule's run-time evaluation is NOT YET
-  SHIPPED — the authoring grammar parses and lints (including
-  the lint-time registry probe of an explicit selector), but
-  validation gates the rule with `NotImplemented` ("evaluation
-  ships with the consistency recorder") so a parseable, inert
-  rule can never run and silently prove nothing.
-  `check`/`value`/`eventually_s`/`path`/`resource`/
-  `min_distance` and the bounds fields are rejected at load.
+  as a finding. NOTE: findings ship WARN-phase (informational)
+  until flip-test evidence promotes the rule — the consistency
+  recorder's verdicts never fail a run on their own while the
+  rule earns trust. `check`/`value`/`eventually_s`/`path`/
+  `resource`/`min_distance` and the bounds fields are rejected
+  at load.
