@@ -2109,12 +2109,15 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             i.rule,
             crate::enums::InvariantRule::ResourceCheck
                 | crate::enums::InvariantRule::StagnantResource
+                | crate::enums::InvariantRule::ComponentCheck
+                | crate::enums::InvariantRule::NodesInBounds
         )
     }) {
         app.init_resource::<crate::invariant_eval::WatchedResources>();
-        // Held-invariant evidence accumulators (passing-invariant trace): the
-        // resource_check/stagnant_resource recorders fold into this
-        // on every observed frame.
+        // Held-invariant evidence accumulators (passing-invariant
+        // trace): the resource_check/stagnant_resource and the
+        // component-tier (component_check/nodes_in_bounds) recorders
+        // fold into this on every observed frame.
         app.init_resource::<crate::held::HeldBookkeeping>();
     }
     if scenario
@@ -3068,10 +3071,13 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         .world_mut()
         .remove_resource::<crate::held::HeldBookkeeping>()
         .unwrap_or_default();
-    let held_invariants =
-        held_bookkeeping.collect(&scenario.invariants, &watched_resources, tps, &|name| {
-            snap.iter().any(|v| v.target == name)
-        });
+    let held_invariants = held_bookkeeping.collect(
+        &scenario.invariants,
+        &watched_resources,
+        &watched,
+        tps,
+        &|name| snap.iter().any(|v| v.target == name),
+    );
     Ok(PlaytestReport {
         schema_version: 1,
         status,

@@ -1,6 +1,7 @@
 //! `held_invariants` report section (the passing-invariant trace): the
 //! pass-side evidence trace — one compact object per PASSING
-//! resource_check / stagnant_resource invariant.
+//! resource_check / stagnant_resource / component_check /
+//! nodes_in_bounds invariant.
 //!
 //! Fixture doctrine mirrors `resource_check.rs`: frame-counter time
 //! (60 tps ⇒ dt = 1/60), the scenario JSON harness, and
@@ -244,6 +245,11 @@ fn held_section_round_trips_through_serde() {
         driver: None,
         eventually_s: None,
         window_s: None,
+        entity_judgments: None,
+        peak_entities: None,
+        peak_entities_frame: None,
+        nearest_margin: None,
+        nearest_margin_frame: None,
     };
     let json = serde_json::to_string(&entry).unwrap();
     let back: HeldInvariant = serde_json::from_str(&json).unwrap();
@@ -259,6 +265,40 @@ fn held_section_round_trips_through_serde() {
     let back: bevy_playtest::state::PlaytestReport = serde_json::from_str(&json).unwrap();
     assert!(back.held_invariants.is_empty());
     assert_eq!(back.schema_version, 1);
+    // Component-tier wire contract: the component fields' wire names
+    // and types round-trip exactly (the entry shapes finding 1's
+    // all-selector fix emits depend on).
+    let component_entry = HeldInvariant {
+        name: "marker".to_string(),
+        rule: "component_check".to_string(),
+        target: "HeldMarker.translation.z".to_string(),
+        predicate: Some("ge 0".to_string()),
+        frames_matched: 240,
+        observed_min: None,
+        observed_max: None,
+        worst_frame: None,
+        met_at_frame: Some(100),
+        deadline_frame: Some(180),
+        episodes_fired: None,
+        driver_advanced: None,
+        driver: None,
+        eventually_s: Some(3.0),
+        window_s: None,
+        entity_judgments: Some(240),
+        peak_entities: Some(4),
+        peak_entities_frame: Some(57),
+        nearest_margin: Some(0.0107),
+        nearest_margin_frame: Some(12),
+    };
+    let json = serde_json::to_string(&component_entry).unwrap();
+    let back: HeldInvariant = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.entity_judgments, Some(240));
+    assert_eq!(back.peak_entities, Some(4));
+    assert_eq!(back.peak_entities_frame, Some(57));
+    assert!((back.nearest_margin.unwrap() - 0.0107).abs() < 1e-9);
+    assert_eq!(back.nearest_margin_frame, Some(12));
+    assert_eq!(back.met_at_frame, Some(100));
+    assert_eq!(back.deadline_frame, Some(180));
 }
 
 // ---------------------------------------------------------------------------
@@ -343,6 +383,257 @@ fn fired_stagnant_check_is_not_held() {
 }
 
 // ---------------------------------------------------------------------------
+// Component-tier fixtures
+// ---------------------------------------------------------------------------
+
+/// Selector marker for the component tier (mirrors `component_check.rs`:
+/// a reflected marker so the judge resolves entities by type name).
+#[derive(Component, Reflect, Default)]
+#[reflect(Component)]
+struct HeldMarker;
+
+/// Slow forward drift: z advances 0.01/frame from 1.0. Under a
+/// `ge 0` always-check the value holds every frame and the FIRST
+/// observed frame is already the worst (minimum) sample.
+fn drift_forward(mut q: Query<&mut Transform, With<HeldMarker>>) {
+    for mut t in q.iter_mut() {
+        t.translation.z += 0.01;
+    }
+}
+
+fn marker_app(movement: fn(Query<&mut Transform, With<HeldMarker>>)) -> App {
+    let mut app = App::new();
+    app.register_type::<HeldMarker>();
+    app.register_type::<Transform>();
+    app.add_systems(Update, movement);
+    app.world_mut()
+        .spawn((HeldMarker, Transform::from_xyz(0.0, 1.0, 1.0)));
+    app
+}
+
+const MARKER_Z_NONNEGATIVE: &str = r#"
+    "name": "marker_z_nonnegative",
+    "rule": "component_check",
+    "target_selector": {"with_component": {"name": "HeldMarker"}},
+    "path": "translation.z",
+    "check": "ge",
+    "value": 0.0"#;
+
+// ---------------------------------------------------------------------------
+// component_check: held fields (workload + nearest margin)
+// ---------------------------------------------------------------------------
+
+/// A passing always-mode `component_check` names what was judged:
+/// entity-judgment totals, peak scope, and the nearest-margin
+/// sample — the component tier's analogue of the resource tier's
+/// extrema-and-margin-frame story.
+#[test]
+fn component_check_reports_workload_and_nearest_margin() {
+    let _slot = common::run_slot();
+    let mut app = marker_app(drift_forward);
+    let report = run_scenario(&mut app, &scenario_with_invariants(MARKER_Z_NONNEGATIVE)).unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    let held = report
+        .held_invariants
+        .iter()
+        .find(|h| h.name == "marker_z_nonnegative")
+        .expect("held entry for passing component_check");
+    assert_eq!(held.rule, "component_check");
+    assert_eq!(held.target, "HeldMarker.translation.z");
+    assert_eq!(held.predicate.as_deref(), Some("ge 0"));
+    // One entity judged every frame: frames_matched == the run's
+    // frame count, every frame was a judged frame, and the run-total
+    // judgment count equals frames × entities.
+    assert_eq!(held.frames_matched, report.frame_count);
+    assert_eq!(held.entity_judgments, Some(report.frame_count));
+    assert_eq!(held.peak_entities, Some(1));
+    assert_eq!(held.peak_entities_frame, Some(0));
+    // Resource-tier fields stay absent: no single leaf exists to
+    // take extrema over (each entity has its own).
+    assert!(held.observed_min.is_none());
+    assert!(held.observed_max.is_none());
+    assert!(held.worst_frame.is_none());
+    // z starts at 1.0 and grows: the closest any judged entity came
+    // to breaching `ge 0` is the FIRST observed frame's sample
+    // (post-drift 1.0 + 0.01; later frames only get further).
+    // Epsilon sized for f32 accumulation, comfortably above the
+    // representational error (~1e-7 here) so drift-constant tweaks
+    // don't silently exhaust the headroom.
+    let eps = 1e-4;
+    assert!((held.nearest_margin.unwrap() - 1.01).abs() < eps);
+    assert_eq!(held.nearest_margin_frame, Some(0));
+    // Stagnant-tier fields stay absent too.
+    assert!(held.episodes_fired.is_none());
+    assert!(held.driver_advanced.is_none());
+    assert!(held.driver.is_none());
+}
+
+/// A FAILING component_check lands in violations, never in the
+/// held section — the partition-by-verdict doctrine holds for the
+/// component tier exactly as for the resource tier.
+#[test]
+fn failing_component_check_is_not_held() {
+    let _slot = common::run_slot();
+    let mut app = marker_app(drift_forward);
+    let report = run_scenario(
+        &mut app,
+        &scenario_with_invariants(
+            r#""name": "impossible", "rule": "component_check",
+               "target_selector": {"with_component": {"name": "HeldMarker"}},
+               "path": "translation.z", "check": "lt", "value": -100.0"#,
+        ),
+    )
+    .unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
+    assert!(report.held_invariants.is_empty());
+    assert!(report
+        .violations
+        .iter()
+        .any(|v| v.rule == "component_check" && v.target == "impossible"));
+}
+
+/// An unknown selector component is a config error: the run fails
+/// with an oracle_error and the invariant never reaches the held
+/// section — a held entry would be evidence for a check that never
+/// judged anything.
+#[test]
+fn component_check_config_error_excludes_held_entry() {
+    let _slot = common::run_slot();
+    let mut app = marker_app(drift_forward);
+    let report = run_scenario(
+        &mut app,
+        &scenario_with_invariants(
+            r#""name": "typo", "rule": "component_check",
+               "target_selector": {"with_component": {"name": "NoSuchComponent"}},
+               "path": "translation.z", "check": "ge", "value": 0.0"#,
+        ),
+    )
+    .unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
+    assert!(report.held_invariants.is_empty());
+}
+
+/// A vacuous component_check (selector matches nothing all run)
+/// carries a vacuous_invariant finding and no held entry. The shape
+/// needs a REGISTERED-but-unspawned component: an unregistered name
+/// is a config error instead.
+#[test]
+fn vacuous_component_check_gets_no_held_entry() {
+    let _slot = common::run_slot();
+    #[derive(Component, Reflect, Default)]
+    #[reflect(Component)]
+    struct SpawnlessMarker;
+    let mut app = marker_app(drift_forward);
+    app.register_type::<SpawnlessMarker>();
+    let report = run_scenario(
+        &mut app,
+        &scenario_with_invariants(
+            r#""name": "ghost_scope", "rule": "component_check",
+               "target_selector": {"with_component": {"name": "SpawnlessMarker"}},
+               "path": "translation.z", "check": "ge", "value": 0.0"#,
+        ),
+    )
+    .unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|v| v.rule == "vacuous_invariant" && v.target == "ghost_scope"),
+        "expected a vacuous_invariant finding among {:?}",
+        report
+            .violations
+            .iter()
+            .map(|v| (v.rule.clone(), v.target.clone()))
+            .collect::<Vec<_>>()
+    );
+    assert!(!report
+        .held_invariants
+        .iter()
+        .any(|h| h.name == "ghost_scope"));
+}
+
+// ---------------------------------------------------------------------------
+// nodes_in_bounds: held fields (workload, no margin)
+// ---------------------------------------------------------------------------
+
+/// A passing always-mode `nodes_in_bounds` (with_component selector)
+/// reports the judge's workload — entity judgments, peak scope, its
+/// frame — but no nearest margin: bounds judge containment in a
+/// box, not a thresholded leaf.
+#[test]
+fn nodes_in_bounds_reports_workload_without_margin() {
+    let _slot = common::run_slot();
+    let mut app = marker_app(drift_forward);
+    let report = run_scenario(
+        &mut app,
+        &scenario_with_invariants(
+            r#""name": "markers_stay_close", "rule": "nodes_in_bounds",
+               "target_selector": {"with_component": {"name": "HeldMarker"}},
+               "min_z": -10.0, "max_z": 10.0"#,
+        ),
+    )
+    .unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    let held = report
+        .held_invariants
+        .iter()
+        .find(|h| h.name == "markers_stay_close")
+        .expect("held entry for passing nodes_in_bounds");
+    assert_eq!(held.rule, "nodes_in_bounds");
+    // The selector component is the judged scope, not a leaf.
+    assert_eq!(held.target, "HeldMarker");
+    assert_eq!(held.frames_matched, report.frame_count);
+    assert_eq!(held.entity_judgments, Some(report.frame_count));
+    assert_eq!(held.peak_entities, Some(1));
+    assert_eq!(held.peak_entities_frame, Some(0));
+    // No thresholds judged ⇒ no predicate, no margin.
+    assert!(held.predicate.is_none());
+    assert!(held.nearest_margin.is_none());
+    assert!(held.nearest_margin_frame.is_none());
+    assert!(held.observed_min.is_none());
+    assert!(held.episodes_fired.is_none());
+}
+
+/// The all-selector `nodes_in_bounds` shape: no writer ever inserts
+/// it into `WatchedInvariants.matched` (the scheduled judge cannot
+/// touch that bookkeeping), so the collector MUST admit it on
+/// judged-frames evidence alone — `frames_judged > 0` is its sole
+/// vacuity test. Regression pin: this entry was previously computed
+/// by the judge, accumulated by the fold, then silently discarded by
+/// the collector's matched-set guard (evidence-less pass — the exact
+/// hole this slice closes).
+#[test]
+fn all_selector_nodes_in_bounds_gets_held_entry() {
+    let _slot = common::run_slot();
+    let mut app = marker_app(drift_forward);
+    let report = run_scenario(
+        &mut app,
+        &scenario_with_invariants(
+            r#""name": "everything_stays_close", "rule": "nodes_in_bounds",
+               "min_z": -10.0, "max_z": 10.0"#,
+        ),
+    )
+    .unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    let held = report
+        .held_invariants
+        .iter()
+        .find(|h| h.name == "everything_stays_close")
+        .expect("held entry for passing all-selector nodes_in_bounds");
+    assert_eq!(held.rule, "nodes_in_bounds");
+    // Documented leaf target for the all-selector: the whole world
+    // is the judged scope.
+    assert_eq!(held.target, "all");
+    assert_eq!(held.frames_matched, report.frame_count);
+    // One judged entity (the marker) every frame.
+    assert_eq!(held.entity_judgments, Some(report.frame_count));
+    assert_eq!(held.peak_entities, Some(1));
+    assert!(held.nearest_margin.is_none());
+    assert!(held.predicate.is_none());
+}
+
+// ---------------------------------------------------------------------------
 // Sizing: 20 invariants ≈ 3 KB (the documented constant-size claim)
 // ---------------------------------------------------------------------------
 
@@ -369,6 +660,11 @@ fn twenty_held_invariants_serialize_under_4kb() {
             driver: None,
             eventually_s: None,
             window_s: None,
+            entity_judgments: None,
+            peak_entities: None,
+            peak_entities_frame: None,
+            nearest_margin: None,
+            nearest_margin_frame: None,
         });
     }
     let json = serde_json::to_string(&entries).unwrap();
