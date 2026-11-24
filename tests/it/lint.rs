@@ -418,6 +418,61 @@ fn lint_e2e_stage2_typo_resource_name() {
     );
 }
 
+/// A GATED rule's author still gets stage-2 feedback: while the
+/// rule's run-time evaluation rejects at stage 1 with NotImplemented,
+/// its selector probe still runs — the gate tells the author WHAT
+/// is gated, the probe catches the typo'd selector NOW instead of
+/// after the recorder ships. Both findings ride the same lint run.
+#[test]
+fn lint_e2e_gated_dtc_rule_still_probes_its_selector() {
+    let _slot = common::run_slot();
+    let dir = unique_dir("e2e_gated_probe");
+    let (out, report_path) = spawn_lint_child(
+        r#"{"bot":{"type":"chaos","seed":42},"duration_s":1.0,"tps":60,
+            "invariants":[{"name":"globals_follow_parents",
+                           "rule":"derived_transform_consistency",
+                           "target_selector":{"with_component":{"name":"Cabinn"}},
+                           "window_s":1.0}]}"#,
+        &dir,
+        "gated_probe",
+        &[],
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(exit_code::FAIL),
+        "findings must exit 1: {stderr}"
+    );
+    // The gate itself...
+    assert!(
+        stderr.contains("ships with the consistency recorder"),
+        "the NotImplemented gate must still surface: {stderr}"
+    );
+    // ...AND the probe finding the gated rule could never earn
+    // under the old stage-1-empty-only gate.
+    assert!(stderr.contains("Cabinn"), "{stderr}");
+    assert!(
+        stderr.contains("not registered in this game's TypeRegistry"),
+        "{stderr}"
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
+    assert_eq!(report["status"], "fail", "{report}");
+    let violations = report["violations"].as_array().unwrap();
+    assert!(
+        violations.iter().any(|v| v["rule"] == "lint_finding"
+            && v["detail"].as_str().is_some_and(|d| d.contains("Cabinn"))),
+        "the probe finding must ride the report: {report}"
+    );
+    assert!(
+        violations.iter().any(|v| v["rule"] == "lint_finding"
+            && v["detail"]
+                .as_str()
+                .is_some_and(|d| d.contains("ships with the consistency recorder"))),
+        "the gate must ride the report too: {report}"
+    );
+}
+
 /// A stage-1-clean scenario whose resource and path are valid lints
 /// CLEAN even though the game never ran a real frame: the config is
 /// coherent, and coherence is all lint claims. (GameClock's tuple

@@ -47,6 +47,7 @@
 //! be mistaken for a configured option.
 
 use bevy_app::prelude::*;
+use bevy_ecs::prelude::Component;
 
 /// Env var holding the scenario path. Absent => plugin inert.
 /// Special literals: `"smoke"` (built-in smoke scenario) and
@@ -193,6 +194,19 @@ pub struct TakeoverConfig {
     pub report_path: String,
 }
 
+/// Per-entity opt-out honored by `derived_transform_consistency` in
+/// ANY selection mode: attach it once to an entity that legitimately
+/// writes its `GlobalTransform` after transform propagation (camera
+/// smoothing ghosts, interpolation layers) and the rule ignores that
+/// entity, scoped to that rule alone — no other enumeration or
+/// oracle consults it. Reflect-registered under takeover so the
+/// selector/exclude grammar can coherently co-name it, but never a
+/// requirement: the component is plain ECS, usable whether or not
+/// this game reflects its own types.
+#[derive(Component, Debug, Default, Clone, Copy, PartialEq, Eq, bevy_reflect::Reflect)]
+#[reflect(bevy_ecs::reflect::ReflectComponent)]
+pub struct SkipDerivedConsistency;
+
 fn read_env_config() -> Result<Takeover, String> {
     for (key, _) in std::env::vars_os() {
         let Some(key) = key.to_str() else { continue };
@@ -261,6 +275,13 @@ fn assert_headless(app: &App) {
 fn assert_headless(_app: &App) {}
 
 fn take_over(app: &mut App, config: TakeoverConfig) {
+    // Register the derived-consistency opt-out marker: like the other
+    // takeover-only mutations below, the game world only pays for
+    // harness vocabulary when a harness run is actually happening —
+    // the inert plugin adds no registry entries. Registration (not
+    // just definition) keeps the type resolvable in the registry the
+    // lint probe and the consistency recorder share.
+    app.register_type::<SkipDerivedConsistency>();
     // Silence game audio for the run. Audio keeps working (sinks are
     // still created and played, so games that inspect their audio
     // behave as usual); only the output volume is zero. Bevy multiplies
@@ -456,12 +477,20 @@ fn run_lint(
     source: &str,
 ) -> ! {
     let mut findings = crate::scenario::lint_scenario(scenario);
-    // Stage 2 — the type-registry probe: ONLY when stage 1 found
-    // nothing, because every stage-2 check presupposes the stage-1
-    // shape (a resource_check with no `resource` field, say, has
-    // nothing to probe). Findings append to the same aggregate list:
-    // the author fixes stage 1 first when both stages fire, exactly
-    // like fixing the first error before seeing the second today.
+    // Stage 2 — the type-registry probe: when stage 1 found nothing,
+    // or when its findings are all NotImplemented gates (a rule whose
+    // shape is fully validated but whose EVALUATION is gated off —
+    // a gated rule's author still needs selector/exclude feedback).
+    // Hard Rejected errors still suppress stage 2, because every
+    // stage-2 check presupposes the stage-1 shape (a resource_check
+    // with no `resource` field, say, has nothing to probe): findings
+    // append to the same aggregate list, and the author fixes stage
+    // 1 first when both stages fire, exactly like fixing the first
+    // error before seeing the second today. A typo'd selector under
+    // a gated rule surfaces at lint time instead of after the
+    // recorder ships — the docs' "probe is live while gated" claim
+    // is thereby true at every commit of the slice, not just after
+    // the gate lifts.
     //
     // The probe runs REAL game schedules (plugin finishing plus one
     // warm-up frame) and shares the run's crash contract exactly: a
@@ -470,7 +499,11 @@ fn run_lint(
     // panic hook, run guard, and catch_unwind mirror run_scenario's
     // doctrine — the game crashed, the config was never linted —
     // and the report says so in lint's schema (exit CRASH).
-    let probe_crashed = if findings.is_empty() && lint_probe_wanted(scenario) {
+    let probe_gated_only = findings
+        .iter()
+        .all(|f| matches!(f, crate::scenario::ScenarioError::NotImplemented(_)));
+    let probe_crashed = if (findings.is_empty() || probe_gated_only) && lint_probe_wanted(scenario)
+    {
         crate::driver::install_panic_hook();
         let guard = crate::sinks::try_acquire_run().ok();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -567,6 +600,13 @@ fn lint_probe_wanted(scenario: &crate::scenario::Scenario) -> bool {
             // (the driver-loop episode recorder uses the same
             // resolution).
             InvariantRule::PairwiseSeparation => true,
+            // derived_transform_consistency resolves its optional
+            // selector and exclude_components prefixes via the
+            // same registry machinery at probe time (its
+            // run-time recorder ships with the consistency
+            // slice; until then the rule rejects at stage 1 with
+            // NotImplemented).
+            InvariantRule::DerivedTransformConsistency => true,
         }
     });
     invariant_probe || progress_surface_probe_wanted(scenario)
@@ -663,6 +703,9 @@ fn lint_registry_probe(
                     "reflected resource checks"
                 }
                 InvariantRule::PairwiseSeparation => "pairwise separation selector probes",
+                InvariantRule::DerivedTransformConsistency => {
+                    "derived-transform consistency selector probes"
+                }
             };
             findings.push(ScenarioError::Rejected(format!(
                 "invariant '{}': {}",
@@ -711,6 +754,26 @@ fn lint_registry_probe(
                 // Same probe doctrine as nodes_in_bounds: the
                 // selector names a component TYPE that must resolve
                 // at run time; there is no numeric path to confirm.
+                if let Some(crate::enums::TargetSelector::WithComponent { name }) =
+                    inv.target_selector.as_ref()
+                {
+                    if let Err(why) =
+                        crate::invariant_eval::resolve_registration(&registry, name, "component")
+                    {
+                        findings.push(ScenarioError::Rejected(inv_name(&why)));
+                    }
+                }
+            }
+            InvariantRule::DerivedTransformConsistency => {
+                // Same probe doctrine: an optional selector names a
+                // component TYPE that must resolve at run time
+                // (absent = the `*` default, the whole hierarchy).
+                // exclude_components entries are deliberately NOT
+                // probed — they are type-path PREFIXES
+                // (progress-surface exclude grammar), so exact
+                // resolution is the wrong question, and the
+                // progress surface sets the precedent of leaving
+                // excludes unprobed.
                 if let Some(crate::enums::TargetSelector::WithComponent { name }) =
                     inv.target_selector.as_ref()
                 {

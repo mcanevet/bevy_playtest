@@ -505,6 +505,37 @@ pub struct Invariant {
     /// (`window_s`) discards the rest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_distance: Option<f32>,
+    /// Numerical tolerance for the compositional identity
+    /// (`derived_transform_consistency` only): the absolute
+    /// per-element slack between the observed GlobalTransform and
+    /// the parent-composed expectation. Composition of healthy
+    /// f32 chains sits at ~1e-6..1e-5; real misses diverge by
+    /// whole units, so the recorder's default (when this is
+    /// omitted) separates noise from signal by orders of
+    /// magnitude. Loosen for deep hierarchies
+    /// (per-depth growth is a deliberate author decision here,
+    /// not a hidden formula) or tighten for near-identity scenes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tolerance: Option<f32>,
+    /// Frames to skip at run start before judging consistency
+    /// (`derived_transform_consistency` only): relationship
+    /// application and first propagation settle asynchronously
+    /// during the startup sequence, so the earliest frames can
+    /// legitimately disagree. Whole-run skip; judged frames run
+    /// [grace_frames, end).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grace_frames: Option<u32>,
+    /// Entity/component exclusion prefixes for the consistency
+    /// check (`derived_transform_consistency` only): camera
+    /// smoothing ghosts and interpolation layers legitimately
+    /// write GlobalTransform after propagation, so they look
+    /// incoherent EVERY frame. Entries are component type-path
+    /// PREFIXES (the progress-surface exclude grammar): an entity
+    /// carrying any component whose registered name starts with
+    /// a prefix is skipped. Prefer the in-game marker
+    /// (`SkipDerivedConsistency`) for per-instance opt-outs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude_components: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1183,6 +1214,39 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
         }
     };
     for rule in &scenario.invariants {
+        // Single-owner optional fields (derived_transform_consistency
+        // only): accepted-and-ignored on any other rule would be the
+        // reserved-field hole in reverse — the author writes a knob,
+        // the harness parses it, no rule ever reads it.
+        if rule.rule != InvariantRule::DerivedTransformConsistency {
+            let mut foreign: Vec<&str> = Vec::new();
+            if rule.tolerance.is_some() {
+                foreign.push("'tolerance'");
+            }
+            if rule.grace_frames.is_some() {
+                foreign.push("'grace_frames'");
+            }
+            if !rule.exclude_components.is_empty() {
+                foreign.push("'exclude_components'");
+            }
+            if !foreign.is_empty() {
+                errors.push(ScenarioError::Rejected(format!(
+                    "invariant '{}': {} {} not supported by {} — {} \
+                     derived_transform_consistency only",
+                    rule.name,
+                    foreign.join(", "),
+                    if foreign.len() == 1 { "is" } else { "are" },
+                    rule.rule,
+                    if foreign.len() == 1 {
+                        "this field is"
+                    } else {
+                        "these fields are"
+                    }
+                )));
+            }
+        }
+    }
+    for rule in &scenario.invariants {
         if let Some(rate) = rule.driver_units_per_second {
             let driver_resource = rule
                 .driver_resource
@@ -1344,7 +1408,8 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                         "invariant '{}': component_check has no window — its \
                          predicate must hold every matched frame (or eventually \
                          within 'eventually_s'); 'window_s' belongs to \
-                         stagnant_resource",
+                         stagnant_resource, pairwise_separation, or \
+                         derived_transform_consistency",
                         rule.name
                     )));
                 }
@@ -1492,7 +1557,9 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                 match rule.window_s {
                     Some(_window_s) if !expect_window => {
                         errors.push(ScenarioError::Rejected(format!(
-                            "invariant '{}': window_s belongs to stagnant_resource only",
+                            "invariant '{}': window_s belongs to \
+                             stagnant_resource/pairwise_separation/\
+                             derived_transform_consistency only",
                             rule.name
                         )));
                     }
@@ -1863,6 +1930,185 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                          pair DISTANCE against min_distance and folds \
                          consecutive violating frames into episodes within \
                          window_s",
+                        rule.name
+                    )));
+                }
+            }
+            InvariantRule::DerivedTransformConsistency => {
+                // The compositional identity over Bevy's one
+                // canonical derived relationship: for every entity
+                // with a Parent, GlobalTransform must equal the
+                // parent's GlobalTransform composed with the
+                // entity's own Transform, as observed at the SAME
+                // settled frame (the driver-loop recorder doctrine
+                // — internal consistency of the stored pair, never
+                // "did the game call propagate"). Both FP sources
+                // the design doc names are addressed by grammar:
+                // the `*` default selector means the whole
+                // hierarchy is checked unless scoped, and
+                // legitimate late-frame GlobalTransform writers
+                // (camera smoothing, interpolation ghosts) opt out
+                // via `exclude_components` prefixes or the in-game
+                // `SkipDerivedConsistency` marker. Until the
+                // recorder ships, the rule is gated with
+                // NotImplemented so a parseable, lintable, inert
+                // rule can never silently prove nothing — the
+                // shape checks below still run so lint mode
+                // collects the full authoring surface.
+                errors.push(ScenarioError::NotImplemented(
+                    "derived_transform_consistency evaluation ships with \
+                     the consistency recorder — the authoring grammar \
+                     (target_selector, tolerance, grace_frames, \
+                     exclude_components, window_s) is validated below, \
+                     but the rule is not yet evaluated at run time"
+                        .to_string(),
+                ));
+                // window_s here is the PERSISTENCE soak, not a
+                // fly-by discard: consistency defects are state
+                // bugs (frozen/stale globals), so a single
+                // violating frame is noise and an episode must
+                // persist past the soak to count. Required for the
+                // same reason as pairwise's: the instant-fire form
+                // is an authoring mistake caught once at load.
+                match rule.window_s {
+                    None => {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': derived_transform_consistency \
+                             requires 'window_s' — the persistence soak in \
+                             driver-leaf units (default driver: the frame \
+                             clock, so seconds); an inconsistency episode \
+                             shorter than the soak is transient noise, not a \
+                             state defect",
+                            rule.name
+                        )));
+                    }
+                    Some(window_s) => {
+                        if !window_s.is_finite() || window_s <= 0.0 {
+                            errors.push(ScenarioError::Rejected(format!(
+                                "invariant '{}': window_s must be a finite \
+                                 number > 0 (got {window_s})",
+                                rule.name
+                            )));
+                        }
+                        // Declared-rate fit check: same doctrine and
+                        // arithmetic as the other driver-leaf rules
+                        // — a soak the run can never elapse is
+                        // unjudgeable, rejected at load.
+                        if let Some(rate) = rule.driver_units_per_second {
+                            if !rate.is_finite() || rate <= 0.0 {
+                                errors.push(ScenarioError::Rejected(format!(
+                                    "invariant '{}': driver_units_per_second must be a \
+                                     finite number > 0 (got {rate})",
+                                    rule.name
+                                )));
+                            } else {
+                                let effective_wall_s = (window_s / rate) as f64;
+                                if effective_wall_s > scenario.duration_s as f64 {
+                                    errors.push(ScenarioError::Rejected(format!(
+                                        "invariant '{}': soak window ({window_s} driver units \
+                                         at declared {rate} units/s = {effective_wall_s:.1}s) \
+                                         exceeds the run duration ({duration}s) — either the \
+                                         soak or the declared rate makes it unjudgeable; check \
+                                         driver_units_per_second",
+                                        rule.name,
+                                        duration = scenario.duration_s
+                                    )));
+                                }
+                            }
+                        }
+                    }
+                }
+                // Driver fields: pairwise's both-halves-or-neither
+                // doctrine — there is no `resource` to default the
+                // host to, and the frame-clock default is seconds
+                // by definition (no declarable rate without a
+                // driver).
+                let has_dr = rule.driver_resource.is_some();
+                let has_dp = rule.driver_path.is_some();
+                if has_dr != has_dp {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': derived_transform_consistency's driver \
+                         needs both 'driver_resource' and 'driver_path' — omit \
+                         both to soak against the frame clock in seconds",
+                        rule.name
+                    )));
+                }
+                if rule.driver_units_per_second.is_some() && !(has_dr && has_dp) {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': driver_units_per_second needs the \
+                         driver declared ('driver_resource' + 'driver_path') — \
+                         the default frame-clock driver is seconds by \
+                         definition and has no declarable rate",
+                        rule.name
+                    )));
+                }
+                for dp in [rule.driver_path.as_deref()].into_iter().flatten() {
+                    if dp.trim().is_empty() {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': 'driver_path' must be non-empty — \
+                             a blank reflect path resolves the resource root, \
+                             never a numeric leaf",
+                            rule.name
+                        )));
+                    }
+                }
+                for dr in [rule.driver_resource.as_deref()].into_iter().flatten() {
+                    if dr.trim().is_empty() {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': 'driver_resource' must be non-empty",
+                            rule.name
+                        )));
+                    }
+                }
+                // Tolerance: optional, but a nonsense ε (zero or
+                // negative) fires on float noise; a non-finite one
+                // accepts everything.
+                if let Some(tol) = rule.tolerance {
+                    if !tol.is_finite() || tol <= 0.0 {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': tolerance must be a finite \
+                             number > 0 (got {tol}) — it is the per-element \
+                             slack between observed and parent-composed \
+                             GlobalTransform; zero fires on f32 composition \
+                             noise, non-finite accepts everything",
+                            rule.name
+                        )));
+                    }
+                }
+                // exclude_components entries must be non-empty
+                // strings; blank prefixes match every component.
+                for prefix in &rule.exclude_components {
+                    if prefix.trim().is_empty() {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': exclude_components entries must \
+                             be non-empty — a blank prefix excludes every \
+                             component",
+                            rule.name
+                        )));
+                    }
+                }
+                // Foreign fields: the reserved-field doctrine.
+                // eventually_s is left to the generic check so one
+                // defect yields one error.
+                if rule.check.is_some()
+                    || rule.value.is_some()
+                    || rule.path.is_some()
+                    || rule.resource.is_some()
+                    || rule.min_distance.is_some()
+                    || rule.min_x.is_some()
+                    || rule.max_x.is_some()
+                    || rule.min_y.is_some()
+                    || rule.max_y.is_some()
+                    || rule.min_z.is_some()
+                    || rule.max_z.is_some()
+                {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': derived_transform_consistency does \
+                         not use check/value/path/resource/min_distance/bounds — \
+                         it checks the GlobalTransform == \
+                         parent-GlobalTransform ∘ Transform identity with \
+                         tolerance and folds violating frames into \
+                         episodes within window_s",
                         rule.name
                     )));
                 }
