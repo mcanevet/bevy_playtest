@@ -273,11 +273,17 @@ every existing oracle):
     against the sports sim's hierarchy in implementation; the
     schema will document the landed formula, not promise a
     universal one here.
-- Default posture: WARN-only until the sports sim's pile-bug pin
-  proves the rule discriminates fix-present-green /
-  fix-reverted-red on their real hierarchy (the §8 item 5
+- Default posture: WARN-only until the pile-up incident class's
+  pin proves the rule discriminates fix-present-green /
+  fix-reverted-red on a real hierarchy (the §8 item 5
   flip-test discipline) — then promote to fail. An opt-in rule
-  promoted on evidence, not optimism.
+  promoted on evidence, not optimism. PROMOTED: the harness's
+  own battery demonstrates the flip-test — a multi-child pile
+  (foreign-written globals under a moving parent) comes out RED
+  with the full per-entity roster, the identical
+  defect-free pile GREEN, and rotating/scaling hierarchies
+  coherent — so `derived_transform_consistency` findings now
+  gate the run.
 - Finding carries both sides' values and the frame — the sports sim's
   `src/scratch_pile.rs` diagnostic (reverted, technique documented in
   its round-3 notes) is the working prototype for the evidence format.
@@ -689,7 +695,7 @@ example that exempts its own litmus must not survive to the plan).
 | Respawn ring spawns in attack range (arena shooter) | `spawn_safety` (archetype-entry semantics, same-frame anchors) | RED: violation at the spawn frame with distance | GREEN |
 | Grounded rail tunneling (skate sandbox) | `forbidden_region`, NO `allow_if` on `GroundedOnRail` (exempting the tunneling state would exempt the bug — §1's flip-test) | RED: incursion episode with entry frame + position | GREEN (legitimate rail-surface presence, if any, exempted by a correctly-authored clause that keeps pre-fix RED) |
 | Decorative cover, no collision (arena shooter, Litmus 3) | none — judged only via declared intent (`forbidden_region` + `allow_if`); game defect | n/a (out of harness scope, §6) | n/a |
-| Player pile-up; GlobalTransform ≠ Parent composition (sports sim) | `derived_transform_consistency` | RED: both sides' values + frame | GREEN |
+| Player pile-up; GlobalTransform ≠ Parent composition (sports sim) | `derived_transform_consistency` — PROMOTED on the harness battery's flip-test (multi-child pile RED with full roster, propagated pile GREEN, rotating/scaling hierarchy coherent) | RED: both sides' values + frame | GREEN — demonstrated |
 | Possession frozen five clock-minutes under zero input (sports sim) | expressible TODAY: `passive: true` + `stagnant_resource` — ALREADY DEMONSTRABLE, free to verify now, not future work | RED on the frozen resource | GREEN |
 | Queue-on-dead-ride soft-lock: immortal queued guests (park sim) | `entity_stagnation` (`leaf_where state==Queued`, scoped `waited` watch, `global_time` driver) | RED: stagnation episode per guest, `_meta` roster | GREEN (despawn or state change acquires the episode) |
 | Crowd congestion (park sim, candidate owner — NO measured litmus yet on record) | `occupancy_cap` — ships as grammar, unpromoted (§1): the park sim's queued-at-entrance crowds are the natural first owner; until a crowding incident demonstrates pre-fix-RED / post-fix-GREEN, the rule carries no fail-power claim and blocks nothing else | PLACEHOLDER: awaiting an owned crowding incident | PLACEHOLDER |

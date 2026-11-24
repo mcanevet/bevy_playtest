@@ -7,10 +7,12 @@
 //! per-entity episodes and only an episode soaking past `window_s`
 //! (in driver units) becomes a finding.
 //!
-//! Warn-phase doctrine: findings ride the report but never gate the
-//! run status until flip-test evidence promotes the rule (proposal
-//! §2). A flat world is `hierarchy_absent` — informational, never
-//! a vacuous_invariant failure.
+//! Warn-phase doctrine, retired: findings rode the report without
+//! gating until flip-test evidence promoted the rule (proposal
+//! §2) — the pile-up RED/GREEN pair demonstrated the
+//! discrimination, and a soaked divergence now fails the run.
+//! `hierarchy_absent` stays informational — a flat world is a
+//! coherent scene; nothing was judged.
 //!
 //! The planted-defect shape mirrors the pile-up incident class on
 //! record (proposal §1: a Transform edited without propagation):
@@ -158,16 +160,17 @@ fn blip_for_a_third_of_a_second(
 /// THE incident shape: the child's GlobalTransform is
 /// foreign-written to identity while its parent keeps moving —
 /// the stored pair is incoherent every settled frame, the episode
-/// soaks past the window, and the finding fires (informationally,
-/// never gating).
+/// soaks past the window, and the finding GATES the run (the rule
+/// is promoted: flip-test evidence demonstrated the pile-up
+/// discrimination, proposal §2).
 #[test]
-fn stale_child_global_fails_the_soak_as_informational() {
+fn stale_child_global_soak_fails_the_run() {
     let _slot = common::run_slot();
     let mut app = healthy_hierarchy_fixture();
     add_defect(&mut app);
     let report = run_scenario(&mut app, &scenario_with_invariant(CONSISTENCY_INV)).unwrap();
-    // Warn-phase: the finding rides the report, status stays Pass.
-    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    // Promoted: a soaked divergence failure fails the run.
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
     let v = report
         .violations
         .iter()
@@ -290,14 +293,14 @@ fn advance_authored_transforms(mut q: Query<&mut Transform>) {
 /// stuck), not the single-child defect. Each child must fold
 /// into its own roster entry: the episode evidence has to name
 /// every diverging entity individually, not just the worst one.
+/// After the promotion the soaked pile GATES the run.
 #[test]
 fn multi_child_pile_soaks_every_child_into_the_roster() {
     let _slot = common::run_slot();
     let mut app = pileup_fixture(true);
     let report = run_scenario(&mut app, &scenario_with_invariant(CONSISTENCY_INV)).unwrap();
-    // Warn-phase (still informational at the time of authoring):
-    // the finding rides the report, the status stays Pass.
-    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    // Promoted: the soaked pile-up episode is a gating failure.
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
     let findings: Vec<_> = report
         .violations
         .iter()
@@ -340,8 +343,6 @@ fn multi_child_pile_soaks_every_child_into_the_roster() {
 /// honest population — while the per-entity roster carries only
 /// the cap's worth, flagged `roster_truncated`. The evidence must
 /// not silently lose entities nor silently shorten the count.
-/// Asserted warn-phase: the promotion flip lands separately, so
-/// here the finding rides the report without gating.
 #[test]
 fn pile_beyond_the_roster_cap_discloses_truncation() {
     let _slot = common::run_slot();
@@ -360,9 +361,8 @@ fn pile_beyond_the_roster_cap_discloses_truncation() {
     }
     add_defect(&mut app);
     let report = run_scenario(&mut app, &scenario_with_invariant(CONSISTENCY_INV)).unwrap();
-    // Warn-phase: the finding rides the report, the status stays
-    // Pass until the promotion flips the rule.
-    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    // Promoted: the soaked pile gates the run.
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
     let v = report
         .violations
         .iter()

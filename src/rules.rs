@@ -58,7 +58,7 @@ impl Rule {
             Self::ResourceCheck => "An authored-intent check: a numeric field on a reflected resource must satisfy the declared comparison (always, or eventually within a deadline) — the resource sibling of component_check: game-wide state like scores, economies and cooldowns.",
             Self::StagnantResource => "Rate-form liveness: a watched numeric leaf on a reflected resource must change at least once per window of game time while a declared driver leaf strictly advances — constant scoreboards on a running clock are livelocks, not gameplay.",
             Self::PairwiseSeparation => "Coincident-bodies spatial oracle: every pair of selected entities (via a with_component selector) must stay at least min_distance apart; violating frames fold into episodes, and only an episode that soaks past window_s (in driver units) becomes a finding — sub-soak overlaps are transient fly-bys, not bugs.",
-            Self::DerivedTransformConsistency => "Compositional identity over Bevy's derived Transform relationship: every parented entity's GlobalTransform must equal the parent's GlobalTransform composed with its own Transform, both read at the same settled frame — stale or foreign-written globals (sprites frozen at identity under a moving parent) are state bugs, folded into episodes that must persist past a window_s soak.",
+            Self::DerivedTransformConsistency => "Compositional identity over Bevy's derived Transform relationship: every parented entity's GlobalTransform must equal the parent's GlobalTransform composed with its own Transform, both read at the same settled frame — stale or foreign-written globals (sprites frozen at identity under a moving parent) are state bugs, folded into episodes that must persist past a window_s soak. Promoted to gating (fail-power) on flip-test evidence: the multi-child pile-up fixture comes out RED with the defect present and GREEN with it absent, and the rotating/scaling hierarchy stays coherent — the rule earned trust by demonstrating the discrimination, not by optimism (proposal §2).",
             Self::HierarchyAbsent => "A derived_transform_consistency rule found no parented entities over the whole run: no hierarchy, no identity to check. Informational, not vacuous — a flat world is a coherent scene the rule simply cannot judge.",
             Self::FiniteTransforms => "Every entity's Transform holds finite values (no NaN/inf).",
             #[cfg(feature = "render-liveness")]
@@ -88,8 +88,7 @@ impl Rule {
             | Self::LogLevelTampered
             | Self::ProgressSurfaceEmpty
             | Self::WindowUnelapsed
-            | Self::HierarchyAbsent
-            | Self::DerivedTransformConsistency => true,
+            | Self::HierarchyAbsent => true,
             #[cfg(feature = "render-liveness")]
             Self::RenderLiveness => true,
             #[cfg(feature = "screen-liveness")]
