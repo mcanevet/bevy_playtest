@@ -452,7 +452,8 @@ Two distinct error classes, at different stages:
   reject with `Rejected` naming the invariant: the resource vocabulary
   (`resource`, `window_s`, `driver_resource`, `driver_path`) is
   meaningful only on `resource_check` / `stagnant_resource`
-  (`window_s`/`driver_*` also on `pairwise_separation`), and
+  (`window_s`/`driver_*` also on `pairwise_separation` and
+  `derived_transform_consistency`), and
   binding any of it to `component_check` or `nodes_in_bounds` fails
   at load — a silently-ignored `window_s` on a component check
   would masquerade as a temporal bound that never existed. Blank
@@ -667,3 +668,40 @@ Two distinct error classes, at different stages:
   never has a pair to check over the whole run →
   `vacuous_invariant`. `check`/`value`/`eventually_s`/`path`/
   `resource` and the bounds fields are rejected at load.
+- `derived_transform_consistency`: the compositional identity over
+  Bevy's one canonical derived relationship — every entity with a
+  `Parent` must observe
+  `GlobalTransform == parent's GlobalTransform ∘ own Transform`,
+  with both sides read at the SAME settled frame (the check asks
+  "is the stored pair internally consistent", never "did the game
+  call propagate"). `target_selector` is OPTIONAL: unlike
+  `pairwise_separation` (whose O(n²) over "all" is never what an
+  author means), the whole hierarchy is exactly what this rule is
+  for, so absence means every parented entity. Optional knobs:
+  `tolerance` (absolute per-element slack between observed and
+  composed GlobalTransform; healthy f32 composition sits at
+  ~1e-6..1e-5, real misses diverge by whole units — loosen for
+  deep hierarchies, a deliberate author decision rather than a
+  hidden growth formula), `grace_frames` (startup-settle skip;
+  relationship application and first propagation land
+  asynchronously in the startup sequence), and
+  `exclude_components` (type-path PREFIX list — the
+  progress-surface exclude grammar — for entities that
+  legitimately write `GlobalTransform` after propagation:
+  camera-smoothing ghosts, interpolation layers; prefer the
+  in-game `SkipDerivedConsistency` marker component for
+  per-instance opt-outs). `window_s` is REQUIRED and is the
+  PERSISTENCE soak, not a fly-by discard: consistency defects
+  are state bugs (frozen/stale globals), so violating frames
+  fold into episodes and only an episode that soaks past
+  `window_s` (in driver units — the same
+  both-halves-or-neither driver grammar as
+  `pairwise_separation`, frame-clock default in seconds) counts
+  as a finding. NOTE: this rule's run-time evaluation is NOT YET
+  SHIPPED — the authoring grammar parses and lints (including
+  the lint-time registry probe of an explicit selector), but
+  validation gates the rule with `NotImplemented` ("evaluation
+  ships with the consistency recorder") so a parseable, inert
+  rule can never run and silently prove nothing.
+  `check`/`value`/`eventually_s`/`path`/`resource`/
+  `min_distance` and the bounds fields are rejected at load.

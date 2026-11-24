@@ -853,3 +853,297 @@ fn verify_replay_defaults_false_and_parses() {
     .unwrap();
     assert!(s.verify_replay);
 }
+
+// ---------------------------------------------------------------------------
+// derived_transform_consistency — the authoring grammar (slice 2, part 1)
+// ---------------------------------------------------------------------------
+
+fn dtc_json(selector: Option<&str>, window_s: serde_json::Value) -> serde_json::Value {
+    let selector = match selector {
+        Some(name) => serde_json::json!({ "with_component": { "name": name } }),
+        None => serde_json::json!(null),
+    };
+    serde_json::json!({
+        "bot": { "type": "chaos" },
+        "duration_s": 10.0,
+        "invariants": [{
+            "name": "globals_follow_parents",
+            "rule": "derived_transform_consistency",
+            "target_selector": selector,
+            "window_s": window_s,
+        }],
+    })
+}
+
+#[test]
+fn dtc_parses_and_lints_the_full_authoring_surface() {
+    // The full surface is real and parseable; the evaluator is not
+    // shipped yet, so validation gates with NotImplemented — but
+    // the shape lint must collect NOTHING (the grammar is sound)
+    // and the gate must be present so the rule can never run and
+    // silently prove nothing.
+    let full = serde_json::json!({
+        "bot": { "type": "chaos" },
+        "duration_s": 10.0,
+        "invariants": [{
+            "name": "globals_follow_parents",
+            "rule": "derived_transform_consistency",
+            "target_selector": { "with_component": { "name": "Cabin" } },
+            "tolerance": 0.0001,
+            "grace_frames": 3,
+            "exclude_components": ["CameraSmoothGhost"],
+            "window_s": 1.0,
+        }],
+    });
+    let s = parse(full.clone());
+    assert_eq!(s.invariants[0].tolerance, Some(0.0001));
+    assert_eq!(s.invariants[0].grace_frames, Some(3));
+    assert_eq!(
+        s.invariants[0].exclude_components,
+        vec!["CameraSmoothGhost"]
+    );
+    // The lint collects ALL errors INCLUDING the gate: the surface
+    // is coherent, the gate fires alone.
+    let errs = lint_errors(full);
+    assert!(
+        errs.iter().any(|e| e.contains(
+            "derived_transform_consistency evaluation \
+             ships with the consistency recorder"
+                .replace('\\', "")
+                .trim()
+        )),
+        "gate must fire under the lint: {errs:?}"
+    );
+    assert_eq!(
+        errs.len(),
+        1,
+        "well-formed grammar must contribute no error besides the \
+         evaluation gate: {errs:?}"
+    );
+    // validate: first error IS the gate (parse-success /
+    // lint-collect / validate-first trio).
+    let s = parse(dtc_json(Some("Cabin"), serde_json::json!(1.0)));
+    match validate_scenario(&s) {
+        Err(ScenarioError::NotImplemented(msg)) => assert!(
+            msg.contains("consistency recorder"),
+            "gate message must name the recorder: {msg}"
+        ),
+        other => panic!("expected NotImplemented gate, got {other:?}"),
+    }
+}
+
+#[test]
+fn dtc_all_selector_is_the_documented_default_not_a_requirement() {
+    // Unlike pairwise, the '*' default selector is legal: the
+    // whole hierarchy is exactly what the rule is FOR. Only an
+    // explicit selector is validated at load; absence means all.
+    let errs = lint_errors(dtc_json(None, serde_json::json!(1.0)));
+    assert_eq!(errs.len(), 1, "gate alone: {errs:?}");
+    assert!(errs[0].contains("consistency recorder"));
+}
+
+#[test]
+fn dtc_requires_a_persistence_soak_window() {
+    // Consistency defects are STATE bugs: a single violating
+    // frame is noise, so window_s is required and must be a
+    // finite positive number — the same instant-fire rejection
+    // doctrine as pairwise.
+    let errs = lint_errors(dtc_json(Some("Cabin"), serde_json::json!(null)));
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("derived_transform_consistency requires 'window_s'")),
+        "{errs:?}"
+    );
+    for bad in [0.0, -2.0] {
+        let errs = lint_errors(dtc_json(Some("Cabin"), serde_json::json!(bad)));
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("window_s must be a finite number > 0")),
+            "window_s={bad}: {errs:?}"
+        );
+    }
+}
+
+#[test]
+fn dtc_rejects_a_rate_without_a_driver() {
+    // Frame-clock default is seconds by definition; a declared
+    // rate would mis-validate the soak fit in fake units.
+    let mut json = dtc_json(Some("Cabin"), serde_json::json!(1.0));
+    json["invariants"][0]["driver_units_per_second"] = serde_json::json!(60.0);
+    let errs = lint_errors(json);
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("driver_units_per_second needs the driver declared")),
+        "{errs:?}"
+    );
+}
+
+#[test]
+fn dtc_declared_rate_must_fit_the_run() {
+    // A soak the run can never elapse is unjudgeable — the shared
+    // driver-leaf arithmetic, same as pairwise/stagnant.
+    let mut json = dtc_json(Some("Cabin"), serde_json::json!(600.0));
+    json["invariants"][0]["driver_resource"] = serde_json::json!("MatchClock");
+    json["invariants"][0]["driver_path"] = serde_json::json!("ticks");
+    json["invariants"][0]["driver_units_per_second"] = serde_json::json!(10.0);
+    // 600 units at 10/s = 60s > the 10s run: rejected.
+    let errs = lint_errors(json);
+    assert!(
+        errs.iter().any(|e| e.contains("exceeds the run duration")),
+        "{errs:?}"
+    );
+}
+
+#[test]
+fn dtc_driver_needs_both_halves() {
+    // Both halves or neither: there is no `resource` to default
+    // the host to (pairwise's doctrine carried over).
+    for (dr, dp) in [(Some("MatchClock"), None), (None, Some("ticks"))] {
+        let mut json = dtc_json(Some("Cabin"), serde_json::json!(1.0));
+        if let Some(dr) = dr {
+            json["invariants"][0]["driver_resource"] = serde_json::json!(dr);
+        }
+        if let Some(dp) = dp {
+            json["invariants"][0]["driver_path"] = serde_json::json!(dp);
+        }
+        let errs = lint_errors(json);
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("needs both 'driver_resource' and 'driver_path'")),
+            "{dr:?}/{dp:?}: {errs:?}"
+        );
+    }
+}
+
+#[test]
+fn dtc_rejects_a_bad_tolerance() {
+    // Zero fires on f32 composition noise; negative/NaN accept or
+    // invert the check. Positive finite is the only sound ε.
+    for bad in [0.0, -0.001] {
+        let mut json = dtc_json(Some("Cabin"), serde_json::json!(1.0));
+        json["invariants"][0]["tolerance"] = serde_json::json!(bad);
+        let errs = lint_errors(json);
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("tolerance must be a finite number > 0")),
+            "tolerance={bad}: {errs:?}"
+        );
+    }
+}
+
+#[test]
+fn dtc_rejects_blank_exclusions_and_driver_blanks() {
+    // A blank exclude_components prefix matches every component;
+    // a blank driver path resolves the resource root, never a
+    // numeric leaf — both authoring mistakes caught at load.
+    let mut json = dtc_json(Some("Cabin"), serde_json::json!(1.0));
+    json["invariants"][0]["exclude_components"] = serde_json::json!(["   "]);
+    json["invariants"][0]["driver_resource"] = serde_json::json!("MatchClock");
+    json["invariants"][0]["driver_path"] = serde_json::json!("");
+    let errs = lint_errors(json);
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("exclude_components entries must be non-empty")),
+        "{errs:?}"
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("'driver_path' must be non-empty")),
+        "{errs:?}"
+    );
+}
+
+#[test]
+fn dtc_rejects_foreign_fields() {
+    // The reserved-field doctrine: fields that belong to other
+    // rules silently accepted = the hole the lint closes. Every
+    // foreign field must reject with the rule-named message.
+    for (field, value) in [
+        ("check", serde_json::json!("le")),
+        ("value", serde_json::json!(100)),
+        ("path", serde_json::json!("translation.z")),
+        ("resource", serde_json::json!("Scoreboard")),
+        ("min_distance", serde_json::json!(0.5)),
+        ("min_x", serde_json::json!(-900.0)),
+        ("max_z", serde_json::json!(900.0)),
+    ] {
+        let mut json = dtc_json(Some("Cabin"), serde_json::json!(1.0));
+        json["invariants"][0][field] = value;
+        let errs = lint_errors(json);
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("derived_transform_consistency does not use")),
+            "{field}: {errs:?}"
+        );
+    }
+}
+
+#[test]
+fn dtc_owned_fields_reject_on_foreign_rules() {
+    // The reverse direction of the reserved-field doctrine: the
+    // three consistency-owned knobs parsed-and-ignored on any other
+    // rule would be a silently dead knob — the author writes it,
+    // the harness accepts it, no rule ever reads it. Every
+    // combination must reject, naming the fields.
+    for (field, value) in [
+        ("tolerance", serde_json::json!(0.001)),
+        ("grace_frames", serde_json::json!(3)),
+        ("exclude_components", serde_json::json!(["Foo"])),
+    ] {
+        let value = &value;
+        for rule in [
+            "component_check",
+            "pairwise_separation",
+            "stagnant_resource",
+        ] {
+            let mut json = serde_json::json!({
+                "bot": { "type": "chaos" },
+                "duration_s": 10.0,
+                "invariants": [{
+                    "name": "foreign_knob",
+                    "rule": rule,
+                }],
+            });
+            // Give each rule its required fields so the ONLY error
+            // is the foreign-knob rejection.
+            match rule {
+                "component_check" => {
+                    json["invariants"][0]["target_selector"] =
+                        serde_json::json!({"with_component": {"name": "Cabin"}});
+                    json["invariants"][0]["path"] = serde_json::json!("translation.x");
+                    json["invariants"][0]["check"] = serde_json::json!("lt");
+                    json["invariants"][0]["value"] = serde_json::json!(900.0);
+                }
+                "pairwise_separation" => {
+                    json["invariants"][0]["target_selector"] =
+                        serde_json::json!({"with_component": {"name": "Cabin"}});
+                    json["invariants"][0]["min_distance"] = serde_json::json!(0.5);
+                    json["invariants"][0]["window_s"] = serde_json::json!(1.0);
+                }
+                "stagnant_resource" => {
+                    json["invariants"][0]["resource"] = serde_json::json!("MatchClock");
+                    json["invariants"][0]["path"] = serde_json::json!("ticks");
+                    json["invariants"][0]["driver_path"] = serde_json::json!("ticks");
+                    json["invariants"][0]["window_s"] = serde_json::json!(1.0);
+                }
+                _ => unreachable!(),
+            }
+            json["invariants"][0][field] = value.clone();
+            let errs = lint_errors(json.clone());
+            let expected = format!("'{field}'");
+            assert!(
+                errs.iter()
+                    .any(|e| e.contains(&expected)
+                        && e.contains("derived_transform_consistency only")),
+                "{rule} + {field}: {errs:?}"
+            );
+            // And the rejection is the ONLY error: the required
+            // fields are satisfied, so nothing else fires.
+            assert!(
+                errs.len() == 1,
+                "the foreign-knob rejection must be the only error \
+                 (rule {rule}, field {field}): {errs:?}"
+            );
+        }
+    }
+}

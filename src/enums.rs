@@ -32,6 +32,7 @@ pub enum InvariantRule {
     ResourceCheck,
     StagnantResource,
     PairwiseSeparation,
+    DerivedTransformConsistency,
 }
 
 impl std::fmt::Display for InvariantRule {
@@ -42,6 +43,7 @@ impl std::fmt::Display for InvariantRule {
             Self::ResourceCheck => f.write_str("resource_check"),
             Self::StagnantResource => f.write_str("stagnant_resource"),
             Self::PairwiseSeparation => f.write_str("pairwise_separation"),
+            Self::DerivedTransformConsistency => f.write_str("derived_transform_consistency"),
         }
     }
 }
