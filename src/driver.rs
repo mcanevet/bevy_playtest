@@ -3073,8 +3073,12 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         .unwrap_or_default();
     let held_invariants = held_bookkeeping.collect(
         &scenario.invariants,
-        &watched_resources,
-        &watched,
+        &crate::held::HeldSources {
+            watched: &watched_resources,
+            watched_inv: &watched,
+            pw_book: &pairwise_book,
+            dtc_book: &consistency_book,
+        },
         tps,
         &|name| snap.iter().any(|v| v.target == name),
     );

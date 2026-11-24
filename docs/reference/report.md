@@ -34,21 +34,30 @@
 - `held_invariants` (absent when no invariant passed):
   the pass-side evidence trace — one compact object per PASSING
   `resource_check` / `stagnant_resource` / `component_check` /
-  `nodes_in_bounds` invariant, the mirror of the
+  `nodes_in_bounds` / `pairwise_separation` /
+  `derived_transform_consistency` invariant, the mirror of the
   violations list for invariants that held. A passing run previously
   carried zero per-invariant evidence (a deadline met at frame 299 of
   300 was indistinguishable from one met at frame 3):
   - `name`, `rule`, `target` — the invariant's identity, the rule
     kind, and the reflect target (`Resource.leaf` for the resource
     tier; `Component.leaf` for `component_check`, the selector
-    component for `nodes_in_bounds`, `all` for the all-selector)
+    component for `nodes_in_bounds`, `all` for the all-selector;
+    for the episode rules the selector component, or `all` for
+    DTC's whole-hierarchy scope)
   - `frames_matched` — frames on which the check resolved and
     judged something (existence evidence; `frames_matched: 0` plus a
     `vacuous_invariant` finding is the wrong-path signal, since
     vacuous invariants get no entry; for the component tier, the
-    frames the selector matched ≥1 entity)
-  - `predicate` (`resource_check` and `component_check`) — the
-    authored predicate in wire syntax, e.g. `ge 0`
+    frames the selector matched ≥1 entity; for the episode rules,
+    the frames the rule had something to judge — pairwise: ≥2
+    checkable entities co-existed, DTC: ≥1 checkable parented
+    entity past the grace window)
+  - `predicate` (`resource_check` and `component_check`: the
+    authored predicate in wire syntax, e.g. `ge 0`; episode rules:
+    the rule's threshold rendered the same way — `ge <min_distance>`
+    for pairwise, `le <tolerance>` for DTC with the documented
+    default when the author omitted it)
   - `observed_min` / `observed_max` (`resource_check` only) —
     extrema of the sampled leaf across matched frames
   - `worst_frame` (`resource_check`, ordered predicates only) — the
@@ -63,8 +72,12 @@
     a passing run) and the run-total driver-leaf advance (sum of
     positive deltas across fully-observed frames; gaps and rewinds
     are never credited), plus the driver reflect path
+  - `eventually_s` / `window_s` — the authored parameters, when
+    present; `window_s` rides the episode rules' entries too (the
+    soak the worst-span witness is compared against)
   - `entity_judgments` (component tier: `component_check` /
-    `nodes_in_bounds`) — run-total entity-judgments: the sum of
+    `nodes_in_bounds`; also `derived_transform_consistency`) —
+    run-total entity-judgments: the sum of
     per-frame matched-entity counts over observed frames. A
     workload figure ("N entity-judgments were made"), not a census —
     an entity surviving many frames is counted once per observed
@@ -78,6 +91,29 @@
     and the frame of that sample: the component tier's "how close did
     it get" evidence. Bounds judge containment, not a thresholded
     leaf, so `nodes_in_bounds` carries workload fields only
+  - `episodes_observed` (episode rules: `pairwise_separation`,
+    `derived_transform_consistency`) — total episodes observed this
+    run INCLUDING the sub-soak ones the soak judgment discarded as
+    transients: a passing run's episodes are precisely its
+    near-misses, so this is the rule's exercise story
+  - `worst_episode_span` / `worst_episode_frame` (episode rules) —
+    the worst sub-soak episode's driver span (the largest over every
+    episode this run) and the frame it started at: the "how close did
+    it get to soaking" witness. Compare against the entry's
+    `window_s`. The span is in the driver leaf's own unit — seconds
+    only for the frame-clock default (a declared game clock's unit,
+    never converted through tps). The soak judgment discards
+    strictly-sub-window spans only, so a held record's span is
+    always strictly below `window_s`; an at-window episode fails
+    the run and earns no entry
+  - `pair_judgments` (`pairwise_separation` only) — run-total
+    pair-judgments: `n·(n−1)/2` per frame where the selector
+    resolved and ≥2 checkable entities co-existed, summed over the
+    run. A workload figure, not a census (pairs re-enumerated each
+    frame are re-counted) — the component tier's
+    `entity_judgments` doctrine, which `derived_transform_consistency`
+    reuses directly: its `entity_judgments` sums the checkable
+    parented entities per judged frame
 - `harness_mode`: `"in_process"` for a real run, or `"lint"` for a
   lint-mode artifact (see below)
 - `scenario_source`: `"file"`, `"builtin_smoke"`, or `"builtin_battery"`
