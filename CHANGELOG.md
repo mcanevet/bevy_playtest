@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.17.1](https://github.com/mcanevet/bevy_playtest/compare/v0.17.0...v0.17.1) - 2026-11-24
+
+### Added
+
+- *(judgement)* add the demon-stack litmus fixture
+
 ## [0.17.0](https://github.com/mcanevet/bevy_playtest/compare/v0.16.0...v0.17.0) - 2026-11-23
 
 ### Added
