@@ -190,6 +190,15 @@ struct OpenEpisode<K> {
     /// Set at absorb time when a distinct key was dropped by the
     /// cap — truncation is disclosed, never silently subsampled.
     roster_truncated: bool,
+    /// Every distinct key this episode has observed, INCLUDING
+    /// the ones the roster cap dropped. The seen-set is the
+    /// dedup authority: a key dropped from the roster must not be
+    /// re-counted as distinct when it recurs on later frames —
+    /// without it, `distinct_keys` would inflate by one per
+    /// recurrence per dropped key (the honest-crowd-size
+    /// disclosure would lie precisely in the crowded case it
+    /// exists for).
+    seen: std::collections::HashSet<K>,
     /// Total distinct violating keys observed in the episode,
     /// including the ones the cap dropped — the disclosed crowd
     /// size behind a truncated roster.
@@ -199,7 +208,7 @@ struct OpenEpisode<K> {
     direction: WorstDirection,
 }
 
-impl<K: Copy + Ord> OpenEpisode<K> {
+impl<K: Copy + Ord + std::hash::Hash> OpenEpisode<K> {
     fn new(frame: u64, driver: Option<f64>, direction: WorstDirection) -> Self {
         Self {
             start_frame: frame,
@@ -209,6 +218,7 @@ impl<K: Copy + Ord> OpenEpisode<K> {
             worst: None,
             roster: Vec::new(),
             roster_truncated: false,
+            seen: std::collections::HashSet::new(),
             distinct_keys: 0,
             direction,
         }
@@ -287,21 +297,28 @@ impl<K: Copy + Ord> OpenEpisode<K> {
                     }
                 }
                 None => {
-                    // A distinct key: count it BEFORE the cap
-                    // decision so `distinct_keys` is the honest
-                    // crowd size even when the roster drops it.
-                    self.distinct_keys += 1;
-                    let exceeded = self.roster.len() >= roster_cap;
-                    if !exceeded {
-                        self.roster.push(RosterEntry {
-                            key: o.key,
-                            first_frame: frame,
-                            worst_value: o.value,
-                            worst_frame: frame,
-                            violating_frames: 1,
-                        });
-                    } else {
-                        self.roster_truncated = true;
+                    // Dedup against the episode-wide seen-set, not
+                    // the capped roster: a recurring key the roster
+                    // already dropped updates nothing — it was
+                    // counted once and stays once.
+                    if self.seen.insert(o.key) {
+                        // A truly distinct key: count it BEFORE the
+                        // cap decision so `distinct_keys` is the
+                        // honest crowd size even when the roster
+                        // drops it.
+                        self.distinct_keys += 1;
+                        let exceeded = self.roster.len() >= roster_cap;
+                        if !exceeded {
+                            self.roster.push(RosterEntry {
+                                key: o.key,
+                                first_frame: frame,
+                                worst_value: o.value,
+                                worst_frame: frame,
+                                violating_frames: 1,
+                            });
+                        } else {
+                            self.roster_truncated = true;
+                        }
                     }
                 }
             }
@@ -328,7 +345,7 @@ impl Default for EpisodeFolder<PairKey> {
     }
 }
 
-impl<K: Copy + Ord> EpisodeFolder<K> {
+impl<K: Copy + Ord + std::hash::Hash> EpisodeFolder<K> {
     pub fn new(roster_cap: usize, direction: WorstDirection) -> Self {
         Self {
             open: None,
@@ -643,6 +660,27 @@ mod tests {
         // still sees pair (3,4) at distance 0.05.
         assert_eq!(ep.worst.key, PairKey::new(3, 4));
         assert_eq!(ep.roster[2].key, PairKey::new(5, 6));
+        // RECURRENCE: a key the cap dropped, recurring on later
+        // frames of the SAME episode, must not inflate the crowd
+        // size — the dedup authority is the episode-wide
+        // seen-set, not the capped roster. Without it, every
+        // recurrence of a dropped key counted as distinct again.
+        let mut f2 = EpisodeFolder::new(2, WorstDirection::SmallerIsWorse);
+        f2.push(0, Some(0.0), &[obs(1, 2, 0.1)]);
+        f2.push(1, Some(1.0), &[obs(3, 4, 0.05), obs(5, 6, 0.2)]);
+        // Frame 2: (7, 8) exceeds the cap of 2 — dropped — and
+        // (3, 4) recurs (already in the roster).
+        f2.push(2, Some(2.0), &[obs(3, 4, 0.05), obs(7, 8, 0.3)]);
+        // Frame 3: the dropped (7, 8) recurs — still ONE distinct
+        // key, not two.
+        f2.push(3, Some(3.0), &[obs(7, 8, 0.3)]);
+        let ep2 = f2.close_run().expect("run end closes");
+        assert!(ep2.roster_truncated);
+        assert_eq!(ep2.roster.len(), 2);
+        assert_eq!(
+            ep2.distinct_keys, 4,
+            "four distinct pairs total, dropped recurrences not re-counted"
+        );
     }
 
     // ------------------------------------------------------------------

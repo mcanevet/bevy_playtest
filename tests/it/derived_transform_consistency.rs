@@ -334,6 +334,67 @@ fn multi_child_pile_soaks_every_child_into_the_roster() {
     }
 }
 
+/// The truncation disclosure, exercised: a pile BEYOND the roster
+/// cap (33 children against the cap of 32) still names every
+/// diverging entity in `sampled_entities` — the count is the
+/// honest population — while the per-entity roster carries only
+/// the cap's worth, flagged `roster_truncated`. The evidence must
+/// not silently lose entities nor silently shorten the count.
+/// Asserted warn-phase: the promotion flip lands separately, so
+/// here the finding rides the report without gating.
+#[test]
+fn pile_beyond_the_roster_cap_discloses_truncation() {
+    let _slot = common::run_slot();
+    let mut app = base_app();
+    app.add_systems(Update, advance_authored_transforms);
+    let parent = app
+        .world_mut()
+        .spawn(Transform::from_xyz(0.0, 0.0, 0.0))
+        .id();
+    for i in 0..33u32 {
+        app.world_mut().spawn((
+            Cabin,
+            Transform::from_xyz(i as f32 * 0.5, i as f32 * 0.25, 0.0),
+            ChildOf(parent),
+        ));
+    }
+    add_defect(&mut app);
+    let report = run_scenario(&mut app, &scenario_with_invariant(CONSISTENCY_INV)).unwrap();
+    // Warn-phase: the finding rides the report, the status stays
+    // Pass until the promotion flips the rule.
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    let v = report
+        .violations
+        .iter()
+        .find(|v| v.rule == "derived_transform_consistency")
+        .expect("expected a consistency finding");
+    assert!(v.detail.contains("33 diverging entities"), "{}", v.detail);
+    let meta = v.meta.as_ref().expect("episode finding carries _meta");
+    let dtc = meta
+        .consistency_episode
+        .as_ref()
+        .expect("_meta carries the consistency episode block");
+    // The count is honest...
+    assert_eq!(dtc.sampled_entities, 33, "every diverging entity counted");
+    // ...the roster is capped...
+    assert_eq!(
+        dtc.roster.len(),
+        bevy_playtest::episode::DEFAULT_ROSTER_CAP,
+        "roster stops at the cap"
+    );
+    assert!(dtc.roster_truncated, "truncation is disclosed");
+    // ...and every carried entry is real evidence.
+    let mut named = std::collections::HashSet::new();
+    for entry in &dtc.roster {
+        assert!(
+            named.insert(entry.entity),
+            "roster entry {:?} appears twice",
+            entry.entity
+        );
+        assert!(entry.worst_deviation > 0.0);
+    }
+}
+
 /// THE flip-test GREEN half: the identical pile, defect absent —
 /// the same six children, the same advancing authored Transforms,
 /// propagation reconciling every frame. A rule that fired here
