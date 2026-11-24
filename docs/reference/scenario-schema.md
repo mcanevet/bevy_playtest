@@ -708,9 +708,10 @@ Two distinct error classes, at different stages:
   `window_s` (in driver units — the same
   both-halves-or-neither driver grammar as
   `pairwise_separation`, frame-clock default in seconds) counts
-  as a finding. NOTE: findings ship WARN-phase (informational)
-  until flip-test evidence promotes the rule — the consistency
-  recorder's verdicts never fail a run on their own while the
-  rule earns trust. `check`/`value`/`eventually_s`/`path`/
+  as a finding. NOTE: the rule is PROMOTED to gating — flip-test
+  evidence demonstrated the pile-up discrimination (defect-present
+  RED, defect-absent GREEN, rotating/scaling hierarchies
+  coherent), so a soaked divergence finding FAILS the run.
+  `check`/`value`/`eventually_s`/`path`/
   `resource`/`min_distance` and the bounds fields are rejected
   at load.
