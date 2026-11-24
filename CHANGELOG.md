@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.19.0](https://github.com/mcanevet/bevy_playtest/compare/v0.18.0...v0.19.0) - 2026-11-24
+
+### Added
+
+- *(held)* extend the held-invariants trace to the episode rules
+- *(held)* extend the held-invariants trace to the component tier
+
 ## [0.18.0](https://github.com/mcanevet/bevy_playtest/compare/v0.17.1...v0.18.0) - 2026-11-24
 
 ### Added
