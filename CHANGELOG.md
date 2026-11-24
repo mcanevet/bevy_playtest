@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.18.0](https://github.com/mcanevet/bevy_playtest/compare/v0.17.1...v0.18.0) - 2026-11-24
+
+### Added
+
+- *(judgement)* evaluate derived_transform_consistency at run time
+- *(judgement)* add the derived_transform_consistency authoring grammar
+
+### Other
+
+- *(judgement)* generalize the episode-fold engine over keys and worst-direction
+
 ## [0.17.1](https://github.com/mcanevet/bevy_playtest/compare/v0.17.0...v0.17.1) - 2026-11-24
 
 ### Added
