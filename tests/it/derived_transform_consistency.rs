@@ -17,6 +17,12 @@
 //! a child whose GlobalTransform is foreign-written (stuck at
 //! identity) under a moving parent stays incoherent every settled
 //! frame; a healthy propagated hierarchy is exactly coherent.
+//!
+//! The flip-test ladder anchors the rule's earned trust (proposal
+//! §2): the multi-child pile RED / propagated-pile GREEN pair
+//! proves the rule discriminates the incident class, and the
+//! rotating/scaling hierarchy guards the identity math's
+//! false-positive flank.
 
 use crate::common;
 
@@ -249,6 +255,191 @@ fn multi_frame_subsoak_episode_is_discarded_too() {
             .iter()
             .any(|v| v.rule == "derived_transform_consistency"),
         "a 1/3-second streak must stay sub-soak against the 1.0s window: {:?}",
+        report.violations
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Flip-test evidence: the promotion ladder (proposal §2)
+//
+// The rule's findings stay non-gating until a demonstrated
+// flip-test proves the rule discriminates the pile-up incident
+// class: the same hierarchy must come out RED with the defect
+// present and GREEN with it absent. The two pile tests below are
+// that pair (one shared fixture builder, one branch), and the
+// rotation/scale test guards the identity math's false-positive
+// flank: `mul_transform` composition plus the affine-column
+// deviation must hold EXACTLY for non-translation parents, where
+// float error grows fastest.
+// ---------------------------------------------------------------------------
+
+/// Every AUTHORED Transform advances monotonically — root and
+/// children alike — the incident class's defining motion: the
+/// authored local poses keep moving while the stored globals are
+/// the thing under test.
+fn advance_authored_transforms(mut q: Query<&mut Transform>) {
+    for mut t in q.iter_mut() {
+        t.translation.x += 0.05;
+    }
+}
+
+/// THE flip-test RED half: a pile of foreign-written children.
+/// Six `Cabin` children under one moving parent, every one of
+/// them pinned at identity after propagation — the incident-class
+/// shape (authored Transforms advancing, every GlobalTransform
+/// stuck), not the single-child defect. Each child must fold
+/// into its own roster entry: the episode evidence has to name
+/// every diverging entity individually, not just the worst one.
+#[test]
+fn multi_child_pile_soaks_every_child_into_the_roster() {
+    let _slot = common::run_slot();
+    let mut app = pileup_fixture(true);
+    let report = run_scenario(&mut app, &scenario_with_invariant(CONSISTENCY_INV)).unwrap();
+    // Warn-phase (still informational at the time of authoring):
+    // the finding rides the report, the status stays Pass.
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    let findings: Vec<_> = report
+        .violations
+        .iter()
+        .filter(|v| v.rule == "derived_transform_consistency")
+        .collect();
+    assert_eq!(findings.len(), 1, "one soaked episode, one finding");
+    let v = findings[0];
+    assert!(v.detail.contains("diverged"), "{}", v.detail);
+    // ...and the finding names the crowd, not just its worst
+    // member.
+    assert!(v.detail.contains("6 diverging entities"), "{}", v.detail);
+    let meta = v.meta.as_ref().expect("episode finding carries _meta");
+    let dtc = meta
+        .consistency_episode
+        .as_ref()
+        .expect("_meta carries the consistency episode block");
+    assert_eq!(dtc.sampled_entities, 6, "six distinct diverging entities");
+    assert!(!dtc.roster_truncated, "six fits the roster cap");
+    assert_eq!(dtc.roster.len(), 6, "every piled child gets an entry");
+    let mut named = std::collections::HashSet::new();
+    for entry in &dtc.roster {
+        assert!(
+            named.insert(entry.entity),
+            "roster entry {:?} appears twice",
+            entry.entity
+        );
+        assert!(
+            entry.worst_deviation > 0.0,
+            "entry {:?} worst deviation: {}",
+            entry.entity,
+            entry.worst_deviation
+        );
+        assert!(entry.violating_frames >= 1);
+    }
+}
+
+/// THE flip-test GREEN half: the identical pile, defect absent —
+/// the same six children, the same advancing authored Transforms,
+/// propagation reconciling every frame. A rule that fired here
+/// would be false-positive noise, and the pair discriminates:
+/// defect-present RED, defect-absent GREEN.
+#[test]
+fn propagated_pile_of_children_finds_nothing() {
+    let _slot = common::run_slot();
+    let mut app = pileup_fixture(false);
+    let report = run_scenario(&mut app, &scenario_with_invariant(CONSISTENCY_INV)).unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    assert!(
+        !report
+            .violations
+            .iter()
+            .any(|v| v.rule == "derived_transform_consistency"),
+        "a propagated pile must stay coherent: {:?}",
+        report.violations
+    );
+}
+
+/// The flip-test fixture builder: one moving parent, six piled
+/// `Cabin` children with distinct authored offsets, and — on the
+/// defect branch — the late-frame foreign writer pinning every
+/// child's global at identity. One builder, two tests: the RED
+/// and GREEN halves differ ONLY in whether the defect runs.
+fn pileup_fixture(defect: bool) -> App {
+    let mut app = base_app();
+    app.add_systems(Update, advance_authored_transforms);
+    let parent = app
+        .world_mut()
+        .spawn(Transform::from_xyz(0.0, 0.0, 0.0))
+        .id();
+    for i in 0..6u32 {
+        app.world_mut().spawn((
+            Cabin,
+            Transform::from_xyz(i as f32 * 0.5, i as f32 * 0.25, 0.0),
+            ChildOf(parent),
+        ));
+    }
+    if defect {
+        add_defect(&mut app);
+    }
+    app
+}
+
+/// Marker for the spin/scale rig: a Transform its owners animate
+/// with rotation and scale every frame — the composed pose where
+/// naive parent-vs-child comparisons accumulate float error the
+/// fastest. Never named by any scenario; local to the rig.
+#[derive(Component, Default)]
+struct SpinsAndScales;
+
+/// Rotate and grow every tagged Transform per frame: the
+/// non-translation motion the identity math must survive. The
+/// accumulated pose compounds across the hierarchy, so any
+/// reconstruction that ISN'T propagation's own `mul_transform`
+/// arithmetic would drift visibly within a few dozen frames.
+fn spin_and_grow(mut q: Query<&mut Transform, With<SpinsAndScales>>) {
+    for mut t in q.iter_mut() {
+        t.rotate_z(0.02);
+        t.scale *= 1.005;
+    }
+}
+
+/// The identity math's false-positive flank: a healthy hierarchy
+/// whose parents ROTATE and SCALE every frame, at varied depths
+/// (a depth-2 leaf under the root, depth-3 leaves under a
+/// rotating middle hop). Propagation is exactly coherent frame
+/// over frame — the elementwise affine-column contract must not
+/// mistake compounded rotation/scale motion for divergence.
+#[test]
+fn rotating_scaling_hierarchy_stays_coherent() {
+    let _slot = common::run_slot();
+    let mut app = base_app();
+    app.add_systems(Update, move_roots);
+    app.add_systems(Update, spin_and_grow);
+    let root = app
+        .world_mut()
+        .spawn((SpinsAndScales, Transform::from_xyz(0.0, 0.0, 0.0)))
+        .id();
+    // A rotating, scaling middle hop under the root...
+    let mid = app
+        .world_mut()
+        .spawn((
+            SpinsAndScales,
+            Transform::from_xyz(2.0, 1.0, 0.0),
+            ChildOf(root),
+        ))
+        .id();
+    // ...carrying two depth-3 leaves...
+    for (x, y) in [(1.0, 0.0), (0.0, 2.0)] {
+        app.world_mut()
+            .spawn((Cabin, Transform::from_xyz(x, y, 0.5), ChildOf(mid)));
+    }
+    // ...and one depth-2 leaf straight under the root.
+    app.world_mut()
+        .spawn((Cabin, Transform::from_xyz(0.0, 0.0, -1.0), ChildOf(root)));
+    let report = run_scenario(&mut app, &scenario_with_invariant(CONSISTENCY_INV)).unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    assert!(
+        !report
+            .violations
+            .iter()
+            .any(|v| v.rule == "derived_transform_consistency"),
+        "compounded rotation and scale motion is coherent when propagated: {:?}",
         report.violations
     );
 }
