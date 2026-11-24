@@ -116,6 +116,32 @@ pub struct HeldInvariant {
     /// Stagnant-mode window parameter, when authored.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub window_s: Option<f32>,
+    /// Component-tier only (component_check / nodes_in_bounds):
+    /// total entity-judgments — the sum of per-frame matched-entity
+    /// counts over observed frames. A workload figure ("N
+    /// entity-judgments were made"), not a census: entities
+    /// surviving many frames are counted once per observed frame.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub entity_judgments: Option<u64>,
+    /// Component-tier only: peak per-frame entity count the judge
+    /// worked over — the largest scope any single frame presented.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub peak_entities: Option<u64>,
+    /// Component-tier only: frame of that peak scope, earliest
+    /// frame winning ties.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub peak_entities_frame: Option<u64>,
+    /// component_check only: the smallest margin by which any judged
+    /// entity's value cleared the threshold on a frame where EVERY
+    /// judged entity held — the run's "how close did it get" story.
+    /// Absent on runs that never had an all-held frame (those carry
+    /// a violation entry, not a held record).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub nearest_margin: Option<f64>,
+    /// component_check only: frame of that nearest-margin sample,
+    /// earliest frame winning ties. Absent with its margin.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub nearest_margin_frame: Option<u64>,
 }
 
 /// An observed leaf extremum: the value and the FIRST frame it was
@@ -128,6 +154,15 @@ type Extremum = (f64, u64);
 ///
 /// Kept deliberately flat — this resource owns only descriptive
 /// statistics, no verdict logic (that stays in the watched state).
+///
+/// The component-tier maps hold the "naming what was judged"
+/// evidence for `component_check` / `nodes_in_bounds`: entity and
+/// frame counts plus a nearest-margin witness, mirroring the
+/// resource tier's extrema doctrine (a passing run's "how close did
+/// it get" story). Values fold in only for FULLY observed frames —
+/// frames where the selector resolved and matched at least one
+/// entity — matching the `frames_matched` semantics of the
+/// resource tier (existence evidence).
 #[derive(Resource, Default)]
 pub struct HeldBookkeeping {
     /// Invariant name → count of frames the resource resolved and
@@ -138,6 +173,26 @@ pub struct HeldBookkeeping {
     pub extrema: std::collections::HashMap<String, (Extremum, Extremum)>,
     /// Invariant name → run-total positive driver advance.
     pub driver_advanced: std::collections::HashMap<String, f64>,
+    /// component_check/nodes_in_bounds: invariant name → total
+    /// entity-matches summed over observed frames. A per-frame
+    /// entity count double-counts spawned/despawned entities across
+    /// frames; the run-total is the judge's workload figure ("N
+    /// entity-judgments were made").
+    pub entity_judgments: std::collections::HashMap<String, u64>,
+    /// component_check/nodes_in_bounds: invariant name → peak
+    /// per-frame entity count and the frame it was FIRST seen at:
+    /// (count, frame).
+    pub peak_entities: std::collections::HashMap<String, (u64, u64)>,
+    /// component_check/nodes_in_bounds: invariant name → total
+    /// frames with ≥1 entity matched (selector resolved AND judged
+    /// something).
+    pub frames_judged: std::collections::HashMap<String, u64>,
+    /// component_check only: invariant name → nearest-margin sample
+    /// so far and the frame FIRST seen at: (margin, frame). Lower
+    /// margin = closer to violating; strictly better samples
+    /// replace, ties keep the earliest frame (the resource tier's
+    /// extrema doctrine).
+    pub nearest_margin: std::collections::HashMap<String, (f64, u64)>,
 }
 
 impl HeldBookkeeping {
@@ -182,6 +237,60 @@ impl HeldBookkeeping {
         }
     }
 
+    /// Fold one observed frame of a `component_check` /
+    /// `nodes_in_bounds` invariant: the selector resolved and matched
+    /// `matched_entities` entities this frame. Counts the judge's
+    /// workload (run-total entity-judgments, peak per-frame scope
+    /// with the frame it was FIRST seen at) and bumps the
+    /// frames-judged tally. Called only for frames where
+    /// `matched_entities > 0` — a zero-match frame is
+    /// existence-absence, not a judged frame.
+    ///
+    /// `margin` (component_check only): this frame's nearest-margin
+    /// sample — the smallest |value − threshold| among matched
+    /// entities that HELD, i.e. the closest any judged entity came
+    /// to violating. Strictly smaller samples replace, earliest
+    /// frame wins ties (the extrema doctrine). `None` on frames
+    /// where some entity violated (the held record only exists for
+    /// passing runs, so a violating frame contributes no
+    /// nearest-margin evidence) or where no per-entity numeric
+    /// margin is computable.
+    pub fn observe_component_frame(
+        &mut self,
+        name: &str,
+        matched_entities: usize,
+        frame: u64,
+        margin: Option<f64>,
+    ) {
+        let tallied = matched_entities as u64;
+        *self.frames_judged.entry(name.to_string()).or_insert(0) += 1;
+        *self.entity_judgments.entry(name.to_string()).or_insert(0) += tallied;
+        match self.peak_entities.entry(name.to_string()) {
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                let peak = e.get_mut();
+                if tallied > peak.0 {
+                    *peak = (tallied, frame);
+                }
+            }
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert((tallied, frame));
+            }
+        }
+        if let Some(margin) = margin {
+            match self.nearest_margin.entry(name.to_string()) {
+                std::collections::hash_map::Entry::Occupied(mut e) => {
+                    let best = e.get_mut();
+                    if margin < best.0 {
+                        *best = (margin, frame);
+                    }
+                }
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert((margin, frame));
+                }
+            }
+        }
+    }
+
     /// The frame of the extremum closest to violating, for predicates
     /// where that extremum is well-defined (`lt`/`le` → the max
     /// sample, `gt`/`ge` → the min sample; earliest frame wins ties).
@@ -205,15 +314,25 @@ impl HeldBookkeeping {
     /// so the caller judges by TARGET name, the invariant's unique
     /// key).
     ///
+    /// `watched` carries the resource-tier bookkeeping
+    /// (`WatchedResources`), `watched_inv` the component-tier one
+    /// (`WatchedInvariants`); the tiers' exclusion evidence lives in
+    /// their respective bookkeeping.
+    ///
     /// Exclusions, each deliberate:
     /// - `failed(name)` — a violated invariant belongs in the
     ///   violations section, not here;
     /// - config-errored invariants — the run already failed with an
     ///   `oracle_error`; a held entry would be evidence for a check
     ///   that never judged anything;
-    /// - vacuous invariants (`!watched.matched`) — they carry a
-    ///   `vacuous_invariant` finding (which fails the run) and
-    ///   proved nothing.
+    /// - vacuous invariants (resource tier: `!watched.matched`;
+    ///   component tier: `!watched_inv.matched` — except the
+    ///   all-selector `nodes_in_bounds`, which no recorder audits
+    ///   into `matched`, so zero judged frames is its sole vacuity
+    ///   test) — vacuity carries a `vacuous_invariant` finding for
+    ///   the audited shapes (which fails the run); an all-selector
+    ///   bounds scope that judged nothing simply proves nothing
+    ///   and gets no entry.
     ///
     /// Entries are built from the SCENARIO invariants (authoritative
     /// names, rule, authored fields) cross-referenced with the
@@ -222,6 +341,7 @@ impl HeldBookkeeping {
         &self,
         invariants: &[Invariant],
         watched: &crate::invariant_eval::WatchedResources,
+        watched_inv: &crate::invariant_eval::WatchedInvariants,
         tps: u64,
         failed: &dyn Fn(&str) -> bool,
     ) -> Vec<HeldInvariant> {
@@ -229,16 +349,65 @@ impl HeldBookkeeping {
         for inv in invariants.iter().filter(|i| {
             matches!(
                 i.rule,
-                InvariantRule::ResourceCheck | InvariantRule::StagnantResource
+                InvariantRule::ResourceCheck
+                    | InvariantRule::StagnantResource
+                    | InvariantRule::ComponentCheck
+                    | InvariantRule::NodesInBounds
             )
         }) {
-            if watched.config_errored.contains(&inv.name)
+            if failed(&inv.name) {
+                continue;
+            }
+            let is_component_tier = matches!(
+                inv.rule,
+                InvariantRule::ComponentCheck | InvariantRule::NodesInBounds
+            );
+            // Tier-appropriate exclusion evidence. The component tier
+            // additionally treats zero judged frames as vacuous: a
+            // held record for a scope that never judged anything
+            // would be evidence for nothing.
+            //
+            // The all-selector `nodes_in_bounds` path never touches
+            // `WatchedInvariants` (the scheduled system has no
+            // access to it; only the driver-loop recorders insert
+            // into `matched`), so for that shape — and ONLY that
+            // shape — `frames_judged > 0` is the sole vacuity test:
+            // no frames judged ⇒ no run-level audit fires (the
+            // run-level guard reports vacuity only when NOTHING
+            // was ever observable), so the collector must not emit
+            // an entry a passing-but-empty run never earned.
+            let all_selector_bounds = inv.rule == InvariantRule::NodesInBounds
+                && !matches!(
+                    inv.target_selector,
+                    Some(crate::enums::TargetSelector::WithComponent { .. })
+                );
+            if is_component_tier {
+                if watched_inv.config_errored.contains(&inv.name) {
+                    continue;
+                }
+                if all_selector_bounds {
+                    if self.frames_judged.get(&inv.name).is_none_or(|f| *f == 0) {
+                        continue;
+                    }
+                } else if !watched_inv.matched.contains(&inv.name)
+                    || self.frames_judged.get(&inv.name).is_none_or(|f| *f == 0)
+                {
+                    continue;
+                }
+            } else if watched.config_errored.contains(&inv.name)
                 || !watched.matched.contains(&inv.name)
-                || failed(&inv.name)
             {
                 continue;
             }
-            let frames_matched = self.frames_matched.get(&inv.name).copied().unwrap_or(0);
+            // `frames_matched`: frames the check resolved and judged
+            // something — for the resource tier the resource/leaf
+            // resolved; for the component tier the selector matched
+            // ≥1 entity (the fold only runs on such frames).
+            let frames_matched = if is_component_tier {
+                self.frames_judged.get(&inv.name).copied().unwrap_or(0)
+            } else {
+                self.frames_matched.get(&inv.name).copied().unwrap_or(0)
+            };
             // Extrema and the margin frame, tracked only for
             // resource_check (single leaf per frame). Stagnant
             // invariants judge RATE, not value margins — their
@@ -267,14 +436,19 @@ impl HeldBookkeeping {
                     .unwrap_or_else(|| "?".to_string());
                 format!("{wire} {threshold}")
             });
+            // Component tiers: `first_held_frame` lives in the
+            // component-tier bookkeeping; eventual-mode deadlines use
+            // the same formula either way.
+            let first_held = if is_component_tier {
+                watched_inv.first_held_frame.get(&inv.name).copied()
+            } else {
+                watched.first_held_frame.get(&inv.name).copied()
+            };
             let (met_at_frame, deadline_frame) = match inv.eventually_s {
                 Some(secs) => {
                     // Same formula as the post-run deadline audit.
                     let deadline = (secs * tps as f32).ceil() as u64;
-                    (
-                        watched.first_held_frame.get(&inv.name).copied(),
-                        Some(deadline),
-                    )
+                    (first_held, Some(deadline))
                 }
                 None => (None, None),
             };
@@ -295,6 +469,36 @@ impl HeldBookkeeping {
                 } else {
                     (None, None, None)
                 };
+            // Component-tier workload and margin evidence: the
+            // "naming what was judged" story. Margins ride
+            // component_check only — bounds judge containment, not a
+            // thresholded leaf.
+            let (entity_judgments, peak_entities, peak_entities_frame, nearest, nearest_frame) =
+                if is_component_tier {
+                    let judgments = self.entity_judgments.get(&inv.name).copied().unwrap_or(0);
+                    let (peak, peak_frame) = self
+                        .peak_entities
+                        .get(&inv.name)
+                        .map(|(p, f)| (*p, *f))
+                        .unwrap_or((0, 0));
+                    let (nearest, nearest_frame) = if inv.rule == InvariantRule::ComponentCheck {
+                        self.nearest_margin
+                            .get(&inv.name)
+                            .map(|(m, f)| (*m, *f))
+                            .unzip()
+                    } else {
+                        (None, None)
+                    };
+                    (
+                        Some(judgments),
+                        Some(peak),
+                        (peak > 0).then_some(peak_frame),
+                        nearest,
+                        nearest_frame,
+                    )
+                } else {
+                    (None, None, None, None, None)
+                };
             out.push(HeldInvariant {
                 name: inv.name.clone(),
                 rule: inv.rule.to_string(),
@@ -311,15 +515,39 @@ impl HeldBookkeeping {
                 driver,
                 eventually_s: inv.eventually_s,
                 window_s: inv.window_s,
+                entity_judgments,
+                peak_entities,
+                peak_entities_frame,
+                nearest_margin: nearest,
+                nearest_margin_frame: nearest_frame,
             });
         }
         out
     }
 }
 
-/// `Resource.path` reflect target, falling back to whichever piece
-/// exists (validation guarantees both for these rules).
+/// Human-readable "what was judged" for the entry. Resource tier:
+/// `Resource.path`. Component tier: `Component.path` for
+/// `component_check` (the selector names the entity, the path the
+/// judged leaf); for `nodes_in_bounds` the selector component or
+/// `all` (containment in the authored box, no leaf).
 fn leaf_target(inv: &Invariant) -> String {
+    if inv.rule == InvariantRule::NodesInBounds {
+        return match inv.target_selector.as_ref() {
+            Some(crate::enums::TargetSelector::WithComponent { name }) => name.clone(),
+            _ => "all".to_string(),
+        };
+    }
+    if inv.rule == InvariantRule::ComponentCheck {
+        let name = match inv.target_selector.as_ref() {
+            Some(crate::enums::TargetSelector::WithComponent { name }) => name.clone(),
+            _ => "?".to_string(),
+        };
+        return match &inv.path {
+            Some(path) => format!("{name}.{path}"),
+            None => name,
+        };
+    }
     match (&inv.resource, &inv.path) {
         (Some(res), Some(path)) => format!("{res}.{path}"),
         (Some(res), None) => res.clone(),

@@ -31,20 +31,24 @@
   surface, `churn` says the frame loop was alive, `channels` counts the
   channels in scope). Non-empty whenever
   `liveness.progress.mode` is not `"off"`.
-- `held_invariants` (absent when no resource-tier invariant passed):
+- `held_invariants` (absent when no invariant passed):
   the pass-side evidence trace — one compact object per PASSING
-  `resource_check` / `stagnant_resource` invariant, the mirror of the
+  `resource_check` / `stagnant_resource` / `component_check` /
+  `nodes_in_bounds` invariant, the mirror of the
   violations list for invariants that held. A passing run previously
   carried zero per-invariant evidence (a deadline met at frame 299 of
   300 was indistinguishable from one met at frame 3):
   - `name`, `rule`, `target` — the invariant's identity, the rule
-    kind, and the reflect target (`Resource.leaf`)
-  - `frames_matched` — frames on which the resource resolved and the
-    leaf was read (existence evidence; `frames_matched: 0` plus a
+    kind, and the reflect target (`Resource.leaf` for the resource
+    tier; `Component.leaf` for `component_check`, the selector
+    component for `nodes_in_bounds`, `all` for the all-selector)
+  - `frames_matched` — frames on which the check resolved and
+    judged something (existence evidence; `frames_matched: 0` plus a
     `vacuous_invariant` finding is the wrong-path signal, since
-    vacuous invariants get no entry)
-  - `predicate` (`resource_check` only) — the authored predicate in
-    wire syntax, e.g. `ge 0`
+    vacuous invariants get no entry; for the component tier, the
+    frames the selector matched ≥1 entity)
+  - `predicate` (`resource_check` and `component_check`) — the
+    authored predicate in wire syntax, e.g. `ge 0`
   - `observed_min` / `observed_max` (`resource_check` only) —
     extrema of the sampled leaf across matched frames
   - `worst_frame` (`resource_check`, ordered predicates only) — the
@@ -59,6 +63,21 @@
     a passing run) and the run-total driver-leaf advance (sum of
     positive deltas across fully-observed frames; gaps and rewinds
     are never credited), plus the driver reflect path
+  - `entity_judgments` (component tier: `component_check` /
+    `nodes_in_bounds`) — run-total entity-judgments: the sum of
+    per-frame matched-entity counts over observed frames. A
+    workload figure ("N entity-judgments were made"), not a census —
+    an entity surviving many frames is counted once per observed
+    frame
+  - `peak_entities` / `peak_entities_frame` (component tier) — the
+    largest scope any single frame presented and the frame it was
+    first seen at (earliest frame wins ties)
+  - `nearest_margin` / `nearest_margin_frame` (`component_check`
+    only) — the smallest margin by which any judged entity's value
+    cleared the threshold on a frame where every judged entity held,
+    and the frame of that sample: the component tier's "how close did
+    it get" evidence. Bounds judge containment, not a thresholded
+    leaf, so `nodes_in_bounds` carries workload fields only
 - `harness_mode`: `"in_process"` for a real run, or `"lint"` for a
   lint-mode artifact (see below)
 - `scenario_source`: `"file"`, `"builtin_smoke"`, or `"builtin_battery"`

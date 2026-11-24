@@ -121,6 +121,11 @@ pub fn evaluate_invariants_system(
     state: Res<RunState>,
     mut violations: ResMut<RunViolations>,
     invariants: Res<ScenarioInvariants>,
+    // Optional: the driver initializes the accumulator, but an App
+    // driven outside `run_scenario` (manual test setups) may lack it.
+    // A missing accumulator must not crash the judge — held
+    // evidence is additive, never load-bearing.
+    mut held: Option<ResMut<crate::held::HeldBookkeeping>>,
     q_all: Query<(Entity, &Transform)>,
 ) {
     for inv in &invariants.0 {
@@ -130,7 +135,8 @@ pub fn evaluate_invariants_system(
         let selector = inv.target_selector.clone().unwrap_or_default();
         match selector {
             TargetSelector::All => {
-                evaluate_bounds(inv, state.frame, &mut violations, &mut q_all.iter());
+                let held = held.as_deref_mut();
+                evaluate_bounds(inv, state.frame, &mut violations, held, &mut q_all.iter());
             }
             TargetSelector::WithComponent { .. } => {
                 // Handled by the driver-loop recorder
@@ -150,6 +156,7 @@ fn evaluate_bounds(
     inv: &Invariant,
     frame: u64,
     violations: &mut RunViolations,
+    held: Option<&mut crate::held::HeldBookkeeping>,
     transforms: &mut dyn Iterator<Item = (Entity, &Transform)>,
 ) {
     let min_x = inv.min_x.unwrap_or(-1000.0);
@@ -158,7 +165,9 @@ fn evaluate_bounds(
     let max_y = inv.max_y.unwrap_or(1000.0);
     let min_z = inv.min_z.unwrap_or(-1000.0);
     let max_z = inv.max_z.unwrap_or(1000.0);
+    let mut judged = 0usize;
     for (entity, transform) in transforms {
+        judged += 1;
         let t = transform.translation;
         let out =
             t.x < min_x || t.x > max_x || t.y < min_y || t.y > max_y || t.z < min_z || t.z > max_z;
@@ -172,6 +181,16 @@ fn evaluate_bounds(
                 ),
                 frame,
             );
+        }
+    }
+    // Held-invariant evidence (the component tier's passing trace):
+    // the judge's workload for this frame — counted only when the
+    // scope judged something, matching the with_component recorder's
+    // existence semantics. Absent accumulator ⇒ no evidence, no
+    // crash (additive, never load-bearing).
+    if judged > 0 {
+        if let Some(held) = held {
+            held.observe_component_frame(&inv.name, judged, frame, None);
         }
     }
 }
@@ -227,6 +246,14 @@ struct CcOutcome {
     all_held: bool,
     /// First violating (entity, value) witness this frame, if any.
     example_bad: Option<(Entity, f64)>,
+    /// Nearest-margin HOLDING sample this frame: the smallest
+    /// |value − threshold| among matched entities whose predicate
+    /// held — the "how close did any judged entity come to
+    /// violating" evidence a passing run's held record reports.
+    /// `None` when any entity violated (a held record only exists
+    /// for passing runs, so violating frames contribute no
+    /// nearest-margin evidence) or when no entity held.
+    nearest_margin: Option<f64>,
     /// Configuration/resolution failure (unknown component, bad
     /// path, non-numeric leaf...): reported instead of the check.
     config_error: Option<String>,
@@ -352,42 +379,49 @@ pub fn record_bounds_with_component(world: &mut World, frame: u64) {
 
     // Write phase: report out-of-bounds entities + track vacuity.
     world.resource_scope(|world, mut watched: Mut<WatchedInvariants>| {
-        let mut violations = world.resource_mut::<RunViolations>();
-        for (inv, config_error, checkable, witnesses) in findings {
-            if let Some(why) = config_error {
-                watched.config_errored.insert(inv.name.clone());
-                report_config_error_once(
-                    &mut violations.0,
-                    &mut watched.oracle_error_seen,
-                    &inv.name,
-                    &format!("invariant '{}': {why}", inv.name),
-                    frame,
-                );
-                continue;
-            }
-            // Selector observability: at least one CHECKABLE entity
-            // (named component + Transform) existed at some frame.
-            // Independent of witnesses — an invariant whose scope held
-            // the whole run is not vacuous, exactly like
-            // component_check's `matched`.
-            if checkable > 0 {
-                watched.matched.insert(inv.name.clone());
-            }
-            for (entity, [x, y, z]) in witnesses {
-                let [mn, mx] = bounds_of(inv);
-                violations.0.report(
-                    crate::rules::Rule::NodesInBounds.name(),
-                    &inv.name,
-                    format!(
+        world.resource_scope(|world, mut held: Mut<crate::held::HeldBookkeeping>| {
+            let mut violations = world.resource_mut::<RunViolations>();
+            for (inv, config_error, checkable, witnesses) in findings {
+                if let Some(why) = config_error {
+                    watched.config_errored.insert(inv.name.clone());
+                    report_config_error_once(
+                        &mut violations.0,
+                        &mut watched.oracle_error_seen,
+                        &inv.name,
+                        &format!("invariant '{}': {why}", inv.name),
+                        frame,
+                    );
+                    continue;
+                }
+                // Selector observability: at least one CHECKABLE entity
+                // (named component + Transform) existed at some frame.
+                // Independent of witnesses — an invariant whose scope held
+                // the whole run is not vacuous, exactly like
+                // component_check's `matched`.
+                if checkable > 0 {
+                    watched.matched.insert(inv.name.clone());
+                    // Held-invariant evidence (component-tier passing
+                    // trace): the judge's workload for this frame. No
+                    // margin sample — bounds checks judge containment,
+                    // not a thresholded leaf.
+                    held.observe_component_frame(&inv.name, checkable, frame, None);
+                }
+                for (entity, [x, y, z]) in witnesses {
+                    let [mn, mx] = bounds_of(inv);
+                    violations.0.report(
+                        crate::rules::Rule::NodesInBounds.name(),
+                        &inv.name,
+                        format!(
                         "entity {entity:?} out of bounds [{:.2},{:.2}]x[{:.2},{:.2}]x[{:.2},{:.2}] \
                          via with_component '{}': ({x:.2},{y:.2},{z:.2})",
                         mn[0], mx[0], mn[1], mx[1], mn[2], mx[2],
                         selector_component_name(inv).unwrap_or("?")
                     ),
-                    frame,
-                );
+                        frame,
+                    );
+                }
             }
-        }
+        });
     });
 }
 
@@ -802,10 +836,19 @@ pub fn record_component_checks(world: &mut World, frame: u64) {
     // Write phase: turn outcomes into bookkeeping and violations. All
     // world borrows ended above; only owned data is used here.
     world.resource_scope(|world, mut watched: Mut<WatchedInvariants>| {
-        let mut violations = world.resource_mut::<RunViolations>();
-        for (inv, outcome) in cc_invariants.iter().zip(outcomes.iter()) {
-            apply_outcome(inv, outcome, frame, &mut watched, &mut violations);
-        }
+        world.resource_scope(|world, mut held: Mut<crate::held::HeldBookkeeping>| {
+            let mut violations = world.resource_mut::<RunViolations>();
+            for (inv, outcome) in cc_invariants.iter().zip(outcomes.iter()) {
+                apply_outcome(
+                    inv,
+                    outcome,
+                    frame,
+                    &mut watched,
+                    &mut violations,
+                    &mut held,
+                );
+            }
+        });
     });
 }
 
@@ -817,6 +860,7 @@ fn apply_outcome(
     frame: u64,
     watched: &mut WatchedInvariants,
     violations: &mut RunViolations,
+    held: &mut crate::held::HeldBookkeeping,
 ) {
     if let Some(why) = &outcome.config_error {
         // Remember the failure so the post-run audit stays silent
@@ -843,6 +887,22 @@ fn apply_outcome(
         return;
     }
     watched.matched.insert(inv.name.clone());
+    // Held-invariant evidence (the component tier's passing-invariant
+    // trace): workload counts plus the nearest-margin sample, folded
+    // only for frames where the selector resolved and matched ≥1
+    // entity. The margin rides only all-held frames — a held record
+    // exists only for passing runs, and the predicate's operator is
+    // cached for the collector's direction interpretation.
+    // config_error already returned early above, so `all_held`
+    // alone gates the margin: a frame with any violation carries
+    // no nearest-margin evidence (the held record only exists for
+    // passing runs).
+    let margin = if outcome.all_held {
+        outcome.nearest_margin
+    } else {
+        None
+    };
+    held.observe_component_frame(&inv.name, outcome.matched, frame, margin);
     if outcome.all_held {
         // Earliest-holding frame wins: insert only on the first
         // sighting so late frames cannot "restart the clock".
@@ -898,6 +958,7 @@ fn eval_one(world: &World, registry: &TypeRegistry, inv: &Invariant) -> CcOutcom
             matched: 0,
             all_held: true,
             example_bad: None,
+            nearest_margin: None,
             config_error: Some("component_check requires a with_component target selector".into()),
         };
     };
@@ -906,6 +967,7 @@ fn eval_one(world: &World, registry: &TypeRegistry, inv: &Invariant) -> CcOutcom
             matched: 0,
             all_held: true,
             example_bad: None,
+            nearest_margin: None,
             config_error: Some(
                 "component_check requires 'path', 'check' and a numeric 'value'".into(),
             ),
@@ -918,6 +980,7 @@ fn eval_one(world: &World, registry: &TypeRegistry, inv: &Invariant) -> CcOutcom
                 matched: 0,
                 all_held: true,
                 example_bad: None,
+                nearest_margin: None,
                 config_error: Some(why),
             };
         }
@@ -927,6 +990,7 @@ fn eval_one(world: &World, registry: &TypeRegistry, inv: &Invariant) -> CcOutcom
             matched: 0,
             all_held: true,
             example_bad: None,
+            nearest_margin: None,
             config_error: Some(not_a_reflected_component_message(name)),
         };
     };
@@ -935,6 +999,7 @@ fn eval_one(world: &World, registry: &TypeRegistry, inv: &Invariant) -> CcOutcom
         matched: 0,
         all_held: true,
         example_bad: None,
+        nearest_margin: None,
         config_error: None,
     };
     for entity_ref in world.iter_entities() {
@@ -953,7 +1018,18 @@ fn eval_one(world: &World, registry: &TypeRegistry, inv: &Invariant) -> CcOutcom
         let value = resolve_entity_numeric_path(reflect, &entity_ref, path);
         match value {
             Ok(current) => {
-                if !check.holds(current, threshold) {
+                if check.holds(current, threshold) {
+                    // Nearest-margin tracking: among entities that
+                    // held, keep the sample closest to the threshold
+                    // — the held record's "how close did it get"
+                    // evidence. Violating frames contribute no
+                    // margin (the held record only exists for
+                    // passing runs).
+                    let margin = (current - threshold).abs();
+                    if outcome.nearest_margin.is_none_or(|m| margin < m) {
+                        outcome.nearest_margin = Some(margin);
+                    }
+                } else {
                     outcome.all_held = false;
                     if outcome.example_bad.is_none() {
                         outcome.example_bad = Some((entity_ref.id(), current));
