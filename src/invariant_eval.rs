@@ -2294,6 +2294,7 @@ fn judge_closed_episode(
             entry.meta = Some(crate::discovery::surface::ViolationMeta {
                 stepping: None,
                 pairwise_episode: Some(pairwise_meta_of(ep)),
+                consistency_episode: None,
             });
         }
     }
@@ -2388,6 +2389,613 @@ pub fn audit_pairwise_separation(
                     inv.name
                 ),
                 last_detail: format!("invariant '{}' never had a pair to check", inv.name),
+                meta: None,
+            });
+        }
+    }
+    entries
+}
+
+// ---------------------------------------------------------------------
+// derived_transform_consistency: the compositional-identity recorder
+// (judgement layer, slice 2, part 3).
+//
+// Doctrine: observe POST-UPDATE — the recorder runs from the driver
+// loop after `app.update()` returns, so both sides of the identity
+// are read at the same SETTLED frame (post-PostUpdate,
+// post-TransformPropagate). The check asks "is the stored
+// (Transform, GlobalTransform, parent's GlobalTransform) triple
+// internally consistent", NEVER "did the game call propagate": a
+// naive Update-scheduled direct write self-repairs by
+// PostUpdate/propagation in the same frame and is invisible here —
+// only divergence that SURVIVES propagation is observable, and that
+// is precisely the class the rule means to catch (stale globals:
+// writes the game performs after propagation, or propagation runs
+// that skipped a subtree).
+// ---------------------------------------------------------------------
+
+/// Bookkeeping for `derived_transform_consistency` invariants across
+/// frames (the pairwise bookkeeping doctrine, one shape per rule):
+/// observability for the vacuity audit, once-per-error-class dedup,
+/// and the per-invariant fold engine.
+#[derive(Resource, Default)]
+pub struct ConsistencyBookkeeping {
+    /// Invariant name → at least one parented, checkable entity was
+    /// observed in at least one judged frame. Otherwise the world is
+    /// flat and the audit reports `hierarchy_absent`
+    /// (informational — a flat world is a coherent scene the rule
+    /// cannot judge, not a misauthored invariant).
+    pub matched: std::collections::HashSet<String>,
+    /// Invariant name → a resolution/config failure was seen during
+    /// the run (already reported as `oracle_error`); the audit
+    /// suppresses its vacuity entry so the game is not blamed for
+    /// an author-side problem.
+    pub config_errored: std::collections::HashSet<String>,
+    /// (invariant name, error class) pairs already reported as
+    /// `oracle_error` this run — the once-per-distinct-error dedup.
+    pub oracle_error_seen: std::collections::HashSet<String>,
+    /// Invariant name → the fold engine (entity keys, worst = the
+    /// MAXIMUM deviation — compositional severity is incoherence).
+    pub folders: std::collections::HashMap<String, crate::episode::EpisodeFolder<u32>>,
+}
+
+impl ConsistencyBookkeeping {
+    /// The folder shape for a consistency invariant: entity keys,
+    /// larger-is-worse. Constructed explicitly (not via Default) so
+    /// the direction choice stays visible at the type-erased
+    /// HashMap boundary.
+    fn new_folder() -> crate::episode::EpisodeFolder<u32> {
+        crate::episode::EpisodeFolder::new(
+            crate::episode::DEFAULT_ROSTER_CAP,
+            crate::episode::WorstDirection::LargerIsWorse,
+        )
+    }
+}
+
+/// One frame's consistency outcome for one invariant (the
+/// owned-data phase-split doctrine: computed under `&World`, applied
+/// after the borrow ends).
+struct DtcOutcome {
+    /// The frame's violating observations: (entity index, deviation
+    /// magnitude — the largest per-element affine delta between the
+    /// observed and parent-composed GlobalTransform). Empty = a
+    /// clean frame, which ends any open episode.
+    obs: Vec<crate::episode::Observation<u32>>,
+    /// The driver-leaf sample in the driver's own unit; `None` on a
+    /// gap (driver resource absent / leaf non-finite).
+    driver: Option<f64>,
+    /// First config error this frame, if any.
+    config_error: Option<String>,
+    /// At least one parented, checkable entity was observed this
+    /// frame (observability for the vacuity audit).
+    parented_seen: bool,
+}
+
+/// The default ε when the author omits `tolerance`: 1e-4 absolute
+/// per element. Healthy f32 composition of sane-magnitude chains
+/// reproduces propagation's own arithmetic (same `mul_transform`
+/// path) and sits at ~0..1e-5; real misses (frozen globals under a
+/// moving parent) diverge by whole units. The default separates
+/// noise from signal on both sides; deep hierarchies or
+/// large-coordinate scenes loosen it explicitly (a deliberate
+/// author decision, not a hidden growth formula).
+pub const DEFAULT_CONSISTENCY_TOLERANCE: f32 = 1e-4;
+
+/// The default startup-settle skip when the author omits
+/// `grace_frames`: the first 3 frames. Relationship application and
+/// the first propagation settle asynchronously during the startup
+/// sequence, so the earliest frames can legitimately disagree; three
+/// frames covers a warm-up + first-propagation cycle at any sane tps
+/// without opening a blind spot an author must remember to close.
+pub const DEFAULT_GRACE_FRAMES: u32 = 3;
+
+/// Per-entity opt-out honored by `derived_transform_consistency` in
+/// ANY selection mode: attach it once to an entity that legitimately
+/// writes its `GlobalTransform` after transform propagation (camera
+/// smoothing ghosts, interpolation layers) and the rule ignores that
+/// entity, scoped to that rule alone — no other enumeration or
+/// oracle consults it. Reflect-registered under takeover so the
+/// selector/exclude grammar can coherently co-name it, but never a
+/// requirement: the component is plain ECS, usable whether or not
+/// this game reflects its own types.
+///
+/// Lives here — not in the takeover-gated `plugin` module — because
+/// this recorder (always compiled, every feature combination,
+/// including in-process builds with no `plugin` module) resolves
+/// the marker's component ID to honor it. `plugin` re-exports the
+/// type under its original crate path, so consumer code is
+/// unchanged.
+#[derive(
+    bevy_ecs::component::Component,
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    bevy_reflect::Reflect,
+)]
+#[reflect(bevy_ecs::reflect::ReflectComponent)]
+pub struct SkipDerivedConsistency;
+
+/// Record one frame of `derived_transform_consistency` evidence.
+/// Driver-loop recorder doctrine (see the pairwise recorder): the
+/// driver calls this AFTER `app.update()` returns, with the frame
+/// index and tps, so both sides of the identity are read at the
+/// same settled, post-propagation frame.
+pub fn record_derived_transform_consistency(world: &mut World, frame: u64, tps: u64) {
+    // Clone the relevant invariants out so no world borrow survives
+    // the phase split below. Grace frames are per-invariant (each
+    // authoring decides its own startup-settle window): an invariant
+    // whose grace has not elapsed is simply not judged this frame.
+    // Skipping without observing cannot close an open episode —
+    // grace frames always precede an invariant's first judged frame
+    // (frames increase monotonically), so none can be open.
+    let invariants: Vec<Invariant> = world
+        .get_resource::<ScenarioInvariants>()
+        .map(|invariants| {
+            invariants
+                .0
+                .iter()
+                .filter(|i| i.rule == InvariantRule::DerivedTransformConsistency)
+                .filter(|i| frame >= i.grace_frames.unwrap_or(DEFAULT_GRACE_FRAMES) as u64)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if invariants.is_empty() {
+        return;
+    }
+    let Some(atr) = world.get_resource::<AppTypeRegistry>().cloned() else {
+        // No registry at all: the same definite infra error the
+        // other reflected oracles front-load — one `oracle_error`
+        // per invariant, once per distinct error class.
+        world.resource_scope(|world, mut book: Mut<ConsistencyBookkeeping>| {
+            let mut violations = world.resource_mut::<RunViolations>();
+            for inv in &invariants {
+                book.config_errored.insert(inv.name.clone());
+                let why = &no_atr_message("derived-transform consistency checks");
+                report_config_error_once(
+                    &mut violations.0,
+                    &mut book.oracle_error_seen,
+                    &inv.name,
+                    why,
+                    frame,
+                );
+            }
+        });
+        return;
+    };
+    let registry = atr.read();
+
+    // Read phase: enumerate under &World, no mutable borrows.
+    let mut outcomes: Vec<(Invariant, DtcOutcome)> = Vec::with_capacity(invariants.len());
+    for inv in &invariants {
+        outcomes.push((
+            inv.clone(),
+            eval_consistency(world, &registry, inv, frame, tps),
+        ));
+    }
+    drop(registry);
+
+    // Write phase: fold, judge soak, report one finding per
+    // soaked episode.
+    world.resource_scope(|world, mut book: Mut<ConsistencyBookkeeping>| {
+        let mut violations = world.resource_mut::<RunViolations>();
+        for (inv, outcome) in outcomes {
+            apply_dtc_outcome(&inv, &outcome, frame, &mut book, &mut violations.0);
+        }
+    });
+}
+
+/// Enumerate the frame's incoherent parent-child triples for one
+/// invariant (the read phase). Selection: an optional
+/// `with_component` selector (absent or `all` = every parented
+/// entity — the whole hierarchy is exactly what this rule is for),
+/// minus `exclude_components` prefix matches, minus the per-instance
+/// `SkipDerivedConsistency` marker.
+fn eval_consistency(
+    world: &World,
+    registry: &TypeRegistry,
+    inv: &Invariant,
+    frame: u64,
+    tps: u64,
+) -> DtcOutcome {
+    let err = |why: String| DtcOutcome {
+        obs: vec![],
+        driver: None,
+        config_error: Some(why),
+        parented_seen: false,
+    };
+    // Driver sample: declared leaf, or the frame clock (seconds) —
+    // pairwise's grammar verbatim.
+    let driver = match (inv.driver_resource.as_deref(), inv.driver_path.as_deref()) {
+        (Some(res_name), Some(path)) => {
+            match sample_declared_driver(world, registry, res_name, path) {
+                Ok(Some(v)) => Some(v),
+                // Absent resource: a gap, not an error (late
+                // arrivals, mid-run removal, teardown).
+                Ok(None) => None,
+                Err(why) => return err(why),
+            }
+        }
+        (None, None) => frame_clock(frame, tps),
+        // Lint guarantees both halves or neither; defensive only.
+        _ => {
+            return err(
+                "derived_transform_consistency's driver needs both halves (validated)".into(),
+            )
+        }
+    };
+    // The selector, when present, names a component TYPE the entity
+    // must carry (validation + lint guarantee resolution when the
+    // type exists at all). Absent or `all` = the whole hierarchy.
+    let mut selector_id: Option<bevy_ecs::component::ComponentId> = None;
+    if let Some(crate::enums::TargetSelector::WithComponent { name }) = inv.target_selector.as_ref()
+    {
+        let type_reg = match resolve_registration(registry, name, "component") {
+            Ok(t) => t,
+            Err(why) => return err(why),
+        };
+        match world.components().get_valid_id(type_reg.type_id()) {
+            Some(id) => selector_id = Some(id),
+            // Registered but carrying no component role in this
+            // app: NO entity can bear it, so no frame is ever
+            // checkable — the flat-world vacuity audit's call.
+            None => {
+                return DtcOutcome {
+                    obs: vec![],
+                    driver,
+                    config_error: None,
+                    parented_seen: false,
+                };
+            }
+        }
+    }
+    // exclude_components: component IDs resolved from the prefixes'
+    // matched TYPE PATHS. A prefix can name a whole module, so
+    // exclusion is decided per TYPE PATH (any registered type whose
+    // path starts with a prefix — the progress-surface exclude
+    // semantics), then reduced to the component IDs entities
+    // actually carry. Prefixes are deliberately NOT lint-probed:
+    // exact resolution is the wrong question for a prefix.
+    let exclude_ids: Vec<bevy_ecs::component::ComponentId> = if inv.exclude_components.is_empty() {
+        Vec::new()
+    } else {
+        registry
+            .iter()
+            .filter(|r| {
+                inv.exclude_components.iter().any(|prefix| {
+                    !prefix.trim().is_empty()
+                        && r.type_info()
+                            .type_path()
+                            .starts_with(prefix.trim_start_matches("::"))
+                })
+            })
+            .filter_map(|r| world.components().get_valid_id(r.type_id()))
+            .collect()
+    };
+    // The relationship triple's component IDs. Absent IDs mean this
+    // app has no hierarchy at all (or no transforms) — a flat scene,
+    // the vacuity audit's call; frames are clean.
+    let (Some(childof_id), Some(transform_id), Some(global_id)) = (
+        world
+            .components()
+            .component_id::<bevy_ecs::hierarchy::ChildOf>(),
+        world
+            .components()
+            .component_id::<bevy_transform::prelude::Transform>(),
+        world
+            .components()
+            .component_id::<bevy_transform::prelude::GlobalTransform>(),
+    ) else {
+        return DtcOutcome {
+            obs: vec![],
+            driver,
+            config_error: None,
+            parented_seen: false,
+        };
+    };
+    // The per-instance opt-out marker (registered under takeover;
+    // None = no entity has ever carried it — nothing to skip).
+    let skip_id = world.components().component_id::<SkipDerivedConsistency>();
+    let tolerance = inv.tolerance.unwrap_or(DEFAULT_CONSISTENCY_TOLERANCE);
+    let mut obs: Vec<crate::episode::Observation<u32>> = Vec::new();
+    let mut parented_seen = false;
+    // Walk every archetype bearing the parent link (the pairwise
+    // enumerator's doctrine: component-ID set tests at the
+    // archetype, typed reads per entity).
+    for archetype in world.archetypes().iter() {
+        if !archetype.components().contains(&childof_id) {
+            continue;
+        }
+        // The triple must be checkable; the marker opts the whole
+        // entity out; the selector (when declared) must match; the
+        // exclude prefixes subtract. All archetype-level, decided
+        // before any per-entity work.
+        if !archetype.components().contains(&transform_id)
+            || !archetype.components().contains(&global_id)
+        {
+            continue;
+        }
+        if let Some(skip_id) = skip_id {
+            if archetype.components().contains(&skip_id) {
+                continue;
+            }
+        }
+        if let Some(selector_id) = selector_id {
+            if !archetype.components().contains(&selector_id) {
+                continue;
+            }
+        }
+        if !exclude_ids.is_empty()
+            && archetype
+                .iter_components()
+                .any(|id| exclude_ids.contains(&id))
+        {
+            continue;
+        }
+        for entry in archetype.entities() {
+            let Ok(entity_ref) = world.get_entity(entry.id()) else {
+                continue;
+            };
+            let Some(child_of) = entity_ref.get::<bevy_ecs::hierarchy::ChildOf>() else {
+                continue;
+            };
+            let Some(transform) = entity_ref.get::<bevy_transform::prelude::Transform>() else {
+                continue;
+            };
+            let Some(global) = entity_ref.get::<bevy_transform::prelude::GlobalTransform>() else {
+                continue;
+            };
+            // The parent must be observable with a GlobalTransform;
+            // an orphaned/dead parent link is bevy's own
+            // maintenance bug family (relationship validators,
+            // staged child disposal) — not a compositional miss.
+            // Unobservable THIS frame means no evidence in EITHER
+            // direction for that entity.
+            let Some(parent_global) =
+                world.get::<bevy_transform::prelude::GlobalTransform>(child_of.parent())
+            else {
+                continue;
+            };
+            parented_seen = true;
+            // The identity: observed vs parent-composed — the same
+            // `mul_transform` arithmetic propagation itself uses, so
+            // a propagated-then-untouched triple agrees exactly and
+            // only divergence that survived propagation shows up.
+            // The ε contract is ELEMENTWISE on the affine delta:
+            // translation and each basis column count separately,
+            // and the observation value is the largest of the four
+            // (the severity a report should name).
+            let expected = parent_global.mul_transform(*transform);
+            let obs_aff = global.affine();
+            let exp_aff = expected.affine();
+            let dev_x = (obs_aff.matrix3.x_axis - exp_aff.matrix3.x_axis).length();
+            let dev_y = (obs_aff.matrix3.y_axis - exp_aff.matrix3.y_axis).length();
+            let dev_z = (obs_aff.matrix3.z_axis - exp_aff.matrix3.z_axis).length();
+            let dev_t = (obs_aff.translation - exp_aff.translation).length();
+            let deviation = dev_x.max(dev_y).max(dev_z).max(dev_t);
+            // NaN deltas (NaN Transform family) prove nothing — the
+            // finite_transforms oracle owns NaN findings; filter
+            // rather than double-report.
+            if !deviation.is_finite() {
+                continue;
+            }
+            if deviation > tolerance {
+                obs.push(crate::episode::Observation {
+                    key: entity_ref.id().index().index(),
+                    value: deviation,
+                });
+            }
+        }
+    }
+    DtcOutcome {
+        obs,
+        driver,
+        config_error: None,
+        parented_seen,
+    }
+}
+
+/// Write-phase fold of one frame's consistency outcome: feed the
+/// engine, judge any closed episode against the soak, report ONE
+/// finding with the episode's evidence.
+fn apply_dtc_outcome(
+    inv: &Invariant,
+    outcome: &DtcOutcome,
+    frame: u64,
+    book: &mut ConsistencyBookkeeping,
+    violations: &mut crate::state::Violations,
+) {
+    if let Some(why) = &outcome.config_error {
+        book.config_errored.insert(inv.name.clone());
+        report_config_error_once(
+            violations,
+            &mut book.oracle_error_seen,
+            &inv.name,
+            &format!("invariant '{}': {why}", inv.name),
+            frame,
+        );
+        return;
+    }
+    if outcome.parented_seen {
+        book.matched.insert(inv.name.clone());
+    }
+    let folder = book
+        .folders
+        .entry(inv.name.clone())
+        .or_insert_with(ConsistencyBookkeeping::new_folder);
+    // Frame order is guaranteed by the driver loop; push can close
+    // an episode only via this frame (violation ends, gap, or the
+    // non-consecutive close-and-reopen).
+    if let Some(closed) = folder.push(frame, outcome.driver, &outcome.obs) {
+        judge_dtc_episode(inv, &closed, violations);
+    }
+}
+
+/// Soak judgment and finding emission for one closed consistency
+/// episode: discard sub-soak episodes as transients (a frame hitch
+/// during relationship churn, a teleport settling); report one
+/// finding with the worst deviation and the roster evidence.
+fn judge_dtc_episode(
+    inv: &Invariant,
+    ep: &crate::episode::ClosedEpisode<u32>,
+    violations: &mut crate::state::Violations,
+) {
+    let Some(window_s) = inv.window_s else {
+        return; // Validated required; defensive only.
+    };
+    if ep.driver_span < window_s as f64 {
+        // Sub-soak: a transient divergence the persistence doctrine
+        // discards.
+        return;
+    }
+    let worst = &ep.worst;
+    let tolerance = inv.tolerance.unwrap_or(DEFAULT_CONSISTENCY_TOLERANCE);
+    // The soak span unit doctrine: the driver leaf's OWN unit —
+    // seconds only for the frame-clock default.
+    let (span, span_unit) = match inv.driver_path.as_deref() {
+        Some(_) => (ep.driver_span, " driver units"),
+        None => (ep.driver_span, "s of frame clock"),
+    };
+    violations.report(
+        crate::rules::Rule::DerivedTransformConsistency.name(),
+        &inv.name,
+        format!(
+            "entity #{}'s GlobalTransform diverged from its parent-composed \
+             expectation by up to {:.6} (> {}) for {:.3}{} across frames {}–{} \
+             ({} diverging entit{}, worst deviation {:.6}); a divergence this \
+             persistent is a stale or foreign-written global, not a settling \
+             transient",
+            worst.key,
+            worst.value,
+            tolerance,
+            span,
+            span_unit,
+            ep.start_frame,
+            ep.end_frame,
+            ep.distinct_keys,
+            if ep.distinct_keys == 1 { "y" } else { "ies" },
+            worst.value,
+        ),
+        ep.start_frame,
+    );
+    // Attach the roster evidence (`_meta`) to the just-reported
+    // entry — one finding, full story. First-write-wins, mirroring
+    // the pairwise detail doctrine: a second soaked episode extends
+    // last_frame but never swaps the evidence out from under the
+    // first finding.
+    if let Some(entry) = violations.entries.get_mut(&(
+        crate::rules::Rule::DerivedTransformConsistency
+            .name()
+            .to_string(),
+        inv.name.clone(),
+    )) {
+        entry.last_frame = entry.last_frame.max(ep.end_frame);
+        if entry.meta.is_none() {
+            entry.meta = Some(crate::discovery::surface::ViolationMeta {
+                stepping: None,
+                pairwise_episode: None,
+                consistency_episode: Some(consistency_meta_of(ep)),
+            });
+        }
+    }
+}
+
+/// The `_meta` evidence block for one closed consistency episode:
+/// the roster maps the generic engine fields into the wire-stable
+/// names (entity, worst_deviation).
+fn consistency_meta_of(
+    ep: &crate::episode::ClosedEpisode<u32>,
+) -> crate::discovery::surface::ConsistencyEpisodeMeta {
+    crate::discovery::surface::ConsistencyEpisodeMeta {
+        sampled_entities: ep.distinct_keys,
+        roster: ep
+            .roster
+            .iter()
+            .map(|r| crate::discovery::surface::ConsistencyRosterEntry {
+                entity: r.key,
+                first_frame: r.first_frame,
+                worst_deviation: r.worst_value,
+                worst_frame: r.worst_frame,
+                violating_frames: r.violating_frames,
+            })
+            .collect(),
+        roster_truncated: ep.roster_truncated,
+    }
+}
+
+/// Run-end drain: any consistency episode still open at the last
+/// frame is a complete stretch on its own; fold it out and judge it
+/// like any other closed episode. Called once, after the driver
+/// loop ends and before the bookkeeping is audited.
+pub fn close_consistency_episodes(world: &mut World) {
+    let invariants: Vec<Invariant> = world
+        .get_resource::<ScenarioInvariants>()
+        .map(|invariants| {
+            invariants
+                .0
+                .iter()
+                .filter(|i| i.rule == InvariantRule::DerivedTransformConsistency)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if invariants.is_empty() {
+        return;
+    }
+    world.resource_scope(|world, mut book: Mut<ConsistencyBookkeeping>| {
+        let mut violations = world.resource_mut::<RunViolations>();
+        for inv in &invariants {
+            if let Some(folder) = book.folders.get_mut(&inv.name) {
+                if let Some(closed) = folder.close_run() {
+                    judge_dtc_episode(inv, &closed, &mut violations.0);
+                }
+            }
+        }
+    });
+}
+
+/// Post-run audit for `derived_transform_consistency` invariants:
+/// a world where no parented, checkable entity was EVER observed is
+/// a flat scene the rule cannot judge — reported as the INFORMATIONAL
+/// `hierarchy_absent` (never gating `vacuous_invariant`: a flat
+/// world is a coherent scene, not a misauthored invariant, and a
+/// gating vacuity would punish every legitimately hierarchy-free
+/// game that scopes the rule). Config-errored invariants are
+/// suppressed (their `oracle_error` already told the story).
+pub fn audit_derived_transform_consistency(
+    invariants: &[Invariant],
+    book: &ConsistencyBookkeeping,
+    last_frame: u64,
+) -> Vec<crate::state::ViolationEntry> {
+    let mut entries = Vec::new();
+    for inv in invariants
+        .iter()
+        .filter(|i| i.rule == InvariantRule::DerivedTransformConsistency)
+    {
+        if book.config_errored.contains(&inv.name) {
+            continue;
+        }
+        if !book.matched.contains(&inv.name) {
+            entries.push(crate::state::ViolationEntry {
+                rule: crate::rules::Rule::HierarchyAbsent.name().to_string(),
+                target: inv.name.clone(),
+                first_frame: 0,
+                last_frame,
+                count: 1,
+                detail: format!(
+                    "invariant '{}' never found a parented entity to check over \
+                     the whole run; a flat world is a coherent scene this rule \
+                     cannot judge — scope the rule to a hierarchy-bearing \
+                     selector, or drop it from this scenario",
+                    inv.name
+                ),
+                last_detail: format!(
+                    "invariant '{}' never found a parented entity to check",
+                    inv.name
+                ),
                 meta: None,
             });
         }

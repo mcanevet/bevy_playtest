@@ -1826,29 +1826,44 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                             )));
                         }
                         // Declared-rate fit check: same doctrine and
-                        // arithmetic as stagnant_resource — a soak the
-                        // run can never elapse is unjudgeable, rejected
-                        // at load rather than discovered post-run.
-                        if let Some(rate) = rule.driver_units_per_second {
-                            if !rate.is_finite() || rate <= 0.0 {
-                                errors.push(ScenarioError::Rejected(format!(
-                                    "invariant '{}': driver_units_per_second must be a \
-                                     finite number > 0 (got {rate})",
-                                    rule.name
-                                )));
-                            } else {
-                                let effective_wall_s = (window_s / rate) as f64;
-                                if effective_wall_s > scenario.duration_s as f64 {
+                        // arithmetic as stagnant_resource — a soak
+                        // the run can never elapse is unjudgeable,
+                        // rejected at load rather than discovered
+                        // post-run. With no driver declared the soak
+                        // is consumed in frame-clock seconds, so the
+                        // fit check applies at 1 unit/s: the window
+                        // compares straight against duration_s
+                        // (mirrors liveness.progress's unelapsed-
+                        // window rejection). Without it, an over-long
+                        // window silently discards every episode as
+                        // a sub-soak fly-by — a run that proves
+                        // nothing.
+                        let effective_wall_s = match rule.driver_units_per_second {
+                            Some(rate) => {
+                                if !rate.is_finite() || rate <= 0.0 {
                                     errors.push(ScenarioError::Rejected(format!(
-                                        "invariant '{}': soak window ({window_s} driver units \
-                                         at declared {rate} units/s = {effective_wall_s:.1}s) \
-                                         exceeds the run duration ({duration}s) — either the \
-                                         soak or the declared rate makes it unjudgeable; check \
-                                         driver_units_per_second",
-                                        rule.name,
-                                        duration = scenario.duration_s
+                                        "invariant '{}': driver_units_per_second must be a \
+                                         finite number > 0 (got {rate})",
+                                        rule.name
                                     )));
+                                    None
+                                } else {
+                                    Some((window_s / rate) as f64)
                                 }
+                            }
+                            None => Some(window_s as f64),
+                        };
+                        if let Some(effective_wall_s) = effective_wall_s {
+                            if effective_wall_s > scenario.duration_s as f64 {
+                                errors.push(ScenarioError::Rejected(format!(
+                                    "invariant '{}': soak window ({window_s} driver units, \
+                                     {effective_wall_s:.1}s effective) exceeds the run \
+                                     duration ({duration}s) — a soak the run can never \
+                                     elapse is unjudgeable; shorten window_s, or adjust \
+                                     driver_units_per_second",
+                                    rule.name,
+                                    duration = scenario.duration_s
+                                )));
                             }
                         }
                     }
@@ -1949,20 +1964,10 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                 // legitimate late-frame GlobalTransform writers
                 // (camera smoothing, interpolation ghosts) opt out
                 // via `exclude_components` prefixes or the in-game
-                // `SkipDerivedConsistency` marker. Until the
-                // recorder ships, the rule is gated with
-                // NotImplemented so a parseable, lintable, inert
-                // rule can never silently prove nothing — the
-                // shape checks below still run so lint mode
-                // collects the full authoring surface.
-                errors.push(ScenarioError::NotImplemented(
-                    "derived_transform_consistency evaluation ships with \
-                     the consistency recorder — the authoring grammar \
-                     (target_selector, tolerance, grace_frames, \
-                     exclude_components, window_s) is validated below, \
-                     but the rule is not yet evaluated at run time"
-                        .to_string(),
-                ));
+                // `SkipDerivedConsistency` marker. The shape checks
+                // below validate the full authoring surface; the
+                // consistency recorder evaluates it per frame.
+
                 // window_s here is the PERSISTENCE soak, not a
                 // fly-by discard: consistency defects are state
                 // bugs (frozen/stale globals), so a single
@@ -1993,27 +1998,41 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                         // Declared-rate fit check: same doctrine and
                         // arithmetic as the other driver-leaf rules
                         // — a soak the run can never elapse is
-                        // unjudgeable, rejected at load.
-                        if let Some(rate) = rule.driver_units_per_second {
-                            if !rate.is_finite() || rate <= 0.0 {
-                                errors.push(ScenarioError::Rejected(format!(
-                                    "invariant '{}': driver_units_per_second must be a \
-                                     finite number > 0 (got {rate})",
-                                    rule.name
-                                )));
-                            } else {
-                                let effective_wall_s = (window_s / rate) as f64;
-                                if effective_wall_s > scenario.duration_s as f64 {
+                        // unjudgeable, rejected at load. With no
+                        // driver declared the soak is consumed in
+                        // frame-clock seconds, so the same fit check
+                        // applies at 1 unit/s: the window compares
+                        // straight against duration_s (mirrors
+                        // liveness.progress's unelapsed-window
+                        // rejection). Without it, an over-long window
+                        // silently discards every episode as
+                        // sub-soak — a run that proves nothing.
+                        let effective_wall_s = match rule.driver_units_per_second {
+                            Some(rate) => {
+                                if !rate.is_finite() || rate <= 0.0 {
                                     errors.push(ScenarioError::Rejected(format!(
-                                        "invariant '{}': soak window ({window_s} driver units \
-                                         at declared {rate} units/s = {effective_wall_s:.1}s) \
-                                         exceeds the run duration ({duration}s) — either the \
-                                         soak or the declared rate makes it unjudgeable; check \
-                                         driver_units_per_second",
-                                        rule.name,
-                                        duration = scenario.duration_s
+                                        "invariant '{}': driver_units_per_second must be a \
+                                         finite number > 0 (got {rate})",
+                                        rule.name
                                     )));
+                                    None
+                                } else {
+                                    Some((window_s / rate) as f64)
                                 }
+                            }
+                            None => Some(window_s as f64),
+                        };
+                        if let Some(effective_wall_s) = effective_wall_s {
+                            if effective_wall_s > scenario.duration_s as f64 {
+                                errors.push(ScenarioError::Rejected(format!(
+                                    "invariant '{}': soak window ({window_s} driver units, \
+                                     {effective_wall_s:.1}s effective) exceeds the run \
+                                     duration ({duration}s) — a soak the run can never \
+                                     elapse is unjudgeable; shorten window_s, or adjust \
+                                     driver_units_per_second",
+                                    rule.name,
+                                    duration = scenario.duration_s
+                                )));
                             }
                         }
                     }
@@ -2085,6 +2104,55 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                              component",
                             rule.name
                         )));
+                    }
+                }
+                // A grace window that swallows the whole run leaves
+                // no judged frame — the rule would silently prove
+                // nothing. Same doctrine as liveness.timeout_s
+                // shorter than one frame: reject loudly at load.
+                // The frame count matches the driver's tick
+                // arithmetic (duration_s * tps, ceiled) so the
+                // message's number is the truth.
+                if let Some(grace) = rule.grace_frames {
+                    let total_frames = (scenario.duration_s * scenario.tps as f32).ceil() as u64;
+                    if grace as u64 >= total_frames {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': grace_frames ({grace}) skips every \
+                             frame of the run ({total_frames} frames from \
+                             duration_s {duration}s at tps {tps}) — the rule \
+                             would never be judged; shorten the grace or \
+                             lengthen the run",
+                            rule.name,
+                            duration = scenario.duration_s,
+                            tps = scenario.tps
+                        )));
+                    }
+                    // The compound fit: grace and soak consume the
+                    // same frame budget from opposite ends. An
+                    // episode can only accrue span on JUDGED frames
+                    // (post-grace), so a window longer than the
+                    // post-grace remainder is unjudgeable even when
+                    // it fits the whole run — the grace ate the only
+                    // frames that could have accrued the span.
+                    else if let Some(window_s) = rule.window_s {
+                        if rule.driver_units_per_second.is_none() {
+                            let judged_s =
+                                scenario.duration_s - (grace as f32 / scenario.tps as f32);
+                            if window_s > judged_s {
+                                errors.push(ScenarioError::Rejected(format!(
+                                    "invariant '{}': soak window ({window_s}s) does not \
+                                     fit the judged frames the grace leaves behind \
+                                     ({juded}s after grace_frames {grace} of \
+                                     {duration}s at tps {tps}) — the episode \
+                                     could never accrue span past the soak; \
+                                     shorten window_s or grace_frames",
+                                    rule.name,
+                                    juded = judged_s,
+                                    duration = scenario.duration_s,
+                                    tps = scenario.tps
+                                )));
+                            }
+                        }
                     }
                 }
                 // Foreign fields: the reserved-field doctrine.

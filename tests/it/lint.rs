@@ -418,21 +418,28 @@ fn lint_e2e_stage2_typo_resource_name() {
     );
 }
 
-/// A GATED rule's author still gets stage-2 feedback: while the
-/// rule's run-time evaluation rejects at stage 1 with NotImplemented,
-/// its selector probe still runs — the gate tells the author WHAT
-/// is gated, the probe catches the typo'd selector NOW instead of
-/// after the recorder ships. Both findings ride the same lint run.
+/// A GATED rule's author still gets stage-2 feedback: when stage 1
+/// finds only NotImplemented gates (a shape-valid rule whose
+/// EVALUATION is gated off), its selector probe still runs —
+/// the gate tells the author WHAT is gated, the probe catches the
+/// typo'd selector NOW instead of after the gate ever lifts. Both
+/// findings ride the same lint run. Uses the permanent `oracles`
+/// gate so the pin outlives any single rule's gated era (the
+/// derived_transform_consistency gate has since been lifted with
+/// the consistency recorder's arrival).
 #[test]
-fn lint_e2e_gated_dtc_rule_still_probes_its_selector() {
+fn lint_e2e_gated_rule_still_probes_its_selector() {
     let _slot = common::run_slot();
     let dir = unique_dir("e2e_gated_probe");
+    // `oracles: []` is a rule-independent NotImplemented gate; the
+    // resource name is a deliberate typo so the probe has a
+    // finding to earn.
     let (out, report_path) = spawn_lint_child(
         r#"{"bot":{"type":"chaos","seed":42},"duration_s":1.0,"tps":60,
-            "invariants":[{"name":"globals_follow_parents",
-                           "rule":"derived_transform_consistency",
-                           "target_selector":{"with_component":{"name":"Cabinn"}},
-                           "window_s":1.0}]}"#,
+            "oracles":[],
+            "invariants":[{"name":"clock_watch","rule":"resource_check",
+                           "resource":"GameClok","path":"0",
+                           "check":"gt","value":-1.0}]}"#,
         &dir,
         "gated_probe",
         &[],
@@ -445,12 +452,12 @@ fn lint_e2e_gated_dtc_rule_still_probes_its_selector() {
     );
     // The gate itself...
     assert!(
-        stderr.contains("ships with the consistency recorder"),
+        stderr.contains("oracles selection is not implemented"),
         "the NotImplemented gate must still surface: {stderr}"
     );
     // ...AND the probe finding the gated rule could never earn
     // under the old stage-1-empty-only gate.
-    assert!(stderr.contains("Cabinn"), "{stderr}");
+    assert!(stderr.contains("GameClok"), "{stderr}");
     assert!(
         stderr.contains("not registered in this game's TypeRegistry"),
         "{stderr}"
@@ -461,14 +468,14 @@ fn lint_e2e_gated_dtc_rule_still_probes_its_selector() {
     let violations = report["violations"].as_array().unwrap();
     assert!(
         violations.iter().any(|v| v["rule"] == "lint_finding"
-            && v["detail"].as_str().is_some_and(|d| d.contains("Cabinn"))),
+            && v["detail"].as_str().is_some_and(|d| d.contains("GameClok"))),
         "the probe finding must ride the report: {report}"
     );
     assert!(
         violations.iter().any(|v| v["rule"] == "lint_finding"
             && v["detail"]
                 .as_str()
-                .is_some_and(|d| d.contains("ships with the consistency recorder"))),
+                .is_some_and(|d| d.contains("oracles selection is not implemented"))),
         "the gate must ride the report too: {report}"
     );
 }

@@ -47,7 +47,6 @@
 //! be mistaken for a configured option.
 
 use bevy_app::prelude::*;
-use bevy_ecs::prelude::Component;
 
 /// Env var holding the scenario path. Absent => plugin inert.
 /// Special literals: `"smoke"` (built-in smoke scenario) and
@@ -203,9 +202,13 @@ pub struct TakeoverConfig {
 /// selector/exclude grammar can coherently co-name it, but never a
 /// requirement: the component is plain ECS, usable whether or not
 /// this game reflects its own types.
-#[derive(Component, Debug, Default, Clone, Copy, PartialEq, Eq, bevy_reflect::Reflect)]
-#[reflect(bevy_ecs::reflect::ReflectComponent)]
-pub struct SkipDerivedConsistency;
+///
+/// Defined in `invariant_eval` (always compiled) because the
+/// consistency recorder — built under every feature combination,
+/// including in-process builds with no `plugin` module — resolves
+/// its component ID to honor the marker. Re-exported here under the
+/// original path so consumer code and docs are unchanged.
+pub use crate::invariant_eval::SkipDerivedConsistency;
 
 fn read_env_config() -> Result<Takeover, String> {
     for (key, _) in std::env::vars_os() {
