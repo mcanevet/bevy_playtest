@@ -47,6 +47,9 @@
 //!   which is exactly why this lives in its own module.
 //! - `met_at_frame`/`deadline_frame`: eventually-mode only, mirroring
 //!   the audited deadline formula `(eventually_s * tps).ceil()`.
+//! - `episodes_observed`/`worst_episode_span`: episode-fold rules
+//!   only (see [`EpisodeHeldStats`]) — a passing run's episodes are
+//!   precisely the sub-soak near-misses the soak judgment discarded.
 //!
 //! Cost: O(1) per invariant per frame (a few map lookups and float
 //! compares), constant report size — one object per invariant, ~10
@@ -113,14 +116,17 @@ pub struct HeldInvariant {
     /// Eventually-mode parameter, when authored.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub eventually_s: Option<f32>,
-    /// Stagnant-mode window parameter, when authored.
+    /// Window parameter (`stagnant_resource` and the episode rules'
+    /// soak), when authored.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub window_s: Option<f32>,
-    /// Component-tier only (component_check / nodes_in_bounds):
-    /// total entity-judgments — the sum of per-frame matched-entity
-    /// counts over observed frames. A workload figure ("N
-    /// entity-judgments were made"), not a census: entities
-    /// surviving many frames are counted once per observed frame.
+    /// Component tier (component_check / nodes_in_bounds) and
+    /// `derived_transform_consistency`: total entity-judgments — the
+    /// sum of per-frame matched-entity counts over observed frames.
+    /// A workload figure ("N entity-judgments were made"), not a
+    /// census: entities surviving many frames are counted once per
+    /// observed frame. Pairwise counts PAIRS in its own
+    /// `pair_judgments` field, so it never carries this one.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub entity_judgments: Option<u64>,
     /// Component-tier only: peak per-frame entity count the judge
@@ -142,11 +148,125 @@ pub struct HeldInvariant {
     /// earliest frame winning ties. Absent with its margin.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub nearest_margin_frame: Option<u64>,
+    /// Episode-fold rules only (pairwise_separation /
+    /// derived_transform_consistency): total episodes observed this
+    /// run, INCLUDING sub-soak episodes the soak judgment discarded
+    /// as transients — a passing run's episodes are precisely those
+    /// near-misses, and counting them is the coverage story ("the
+    /// rule was exercised; its worst transient got this close to
+    /// soaking").
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub episodes_observed: Option<u64>,
+    /// Episode-fold rules only: the WORST sub-soak episode's span
+    /// (the maximum `driver_span` over every episode observed this
+    /// run) and the frame it STARTED at — the "how close did it get
+    /// to soaking" witness. The span is in the driver leaf's OWN
+    /// unit (unsuffixed on the wire: seconds only for the
+    /// frame-clock default, matching the violation detail's unit
+    /// doctrine for declared drivers). A run with zero episodes
+    /// carries no span. The soak judgment discards strictly-sub-
+    /// window spans only (`span < window_s` fails to discard), so
+    /// a held record's span is always STRICTLY below the rule's
+    /// `window_s` — an at-window episode soaks, fails the run, and
+    /// earns no entry.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub worst_episode_span: Option<f64>,
+    /// Episode-fold rules only: the first frame of the worst-span
+    /// episode (earliest episode wins ties). Absent with its span.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub worst_episode_frame: Option<u64>,
+    /// pairwise_separation only: run-total pair-judgments — the sum
+    /// of `n·(n−1)/2` over frames where the selector resolved and
+    /// ≥2 checkable entities co-existed. The component tier's
+    /// `entity_judgments` doctrine verbatim (a workload figure, not a
+    /// census: pairs re-enumerated every frame are re-counted; an
+    /// exact distinct-pair census would cost O(n²) memory on
+    /// pathological crowds, the blowup the episode engine's roster
+    /// cap exists to prevent).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub pair_judgments: Option<u64>,
 }
 
 /// An observed leaf extremum: the value and the FIRST frame it was
 /// seen at.
 type Extremum = (f64, u64);
+
+/// Per-invariant episode-tier held statistics for the
+/// episode-fold rules (`pairwise_separation`,
+/// `derived_transform_consistency`). Lives in the RULE'S OWN
+/// bookkeeping (`PairwiseBookkeeping` / `ConsistencyBookkeeping`),
+/// not here: the fold sites (per-frame `apply_*_outcome` and the
+/// run-end drains) already own those books, so routing through
+/// [`HeldBookkeeping`] would nest resource scopes without buying
+/// anything — and those books survive to the collector as driver
+/// locals anyway.
+///
+/// The pass-side story for an episode rule is the near-miss trace:
+/// every episode a passing run saw was sub-soak (a soaked episode
+/// fails the run), so the record names how many transient episodes
+/// occurred and how close the worst one got to outlasting the
+/// window. Plus the workload figures (frames judged, pairs or
+/// entities checked). All folds are O(1) per invariant per frame;
+/// the record stays constant-size (no rosters, no key sets).
+#[derive(Clone, Debug, Default)]
+pub struct EpisodeHeldStats {
+    /// Frames the recorder actually judged this invariant — frames
+    /// where the rule had something to judge (pairwise: the
+    /// selector resolved and ≥2 checkable entities co-existed; DTC:
+    /// a post-grace frame where ≥1 checkable parented entity was
+    /// observed). Mirrors the flat tiers' `frames_matched`/"judged
+    /// something" semantics.
+    pub frames_judged: u64,
+    /// Total episodes observed this run, sub-soak and soaked
+    /// alike (a held record only exists when every one proved
+    /// sub-soak).
+    pub episodes_observed: u64,
+    /// The worst (largest) `driver_span` over observed episodes
+    /// and the frame that episode STARTED at; the earlier episode
+    /// wins ties (the extrema doctrine). No episodes ⇒ `None`.
+    pub worst_span: Option<(f64, u64)>,
+    /// Run-total pair-judgments (pairwise only):
+    /// Σ n·(n−1)/2 over judged frames — the `entity_judgments`
+    /// workload doctrine (a workload figure, not a census: pairs
+    /// re-enumerated each frame are re-counted).
+    pub pair_judgments: u64,
+    /// Run-total entity-judgments (DTC only): Σ checkable parented
+    /// entities over judged frames — the component tier's
+    /// `entity_judgments` doctrine verbatim.
+    pub entity_judgments: u64,
+}
+
+impl EpisodeHeldStats {
+    /// Fold one judged frame. Pairwise passes `pair_count =
+    /// Some(n·(n−1)/2)` for n checkable entities; DTC passes
+    /// `entity_count = Some(k)` for k checkable parented entities.
+    /// The other rule's slot stays `None` so a misuse cannot fake
+    /// evidence for a field that never ships for that rule.
+    pub fn observe_frame(&mut self, pair_count: Option<u64>, entity_count: Option<u64>) {
+        self.frames_judged += 1;
+        if let Some(pairs) = pair_count {
+            self.pair_judgments += pairs;
+        }
+        if let Some(entities) = entity_count {
+            self.entity_judgments += entities;
+        }
+    }
+
+    /// Fold one closed episode, BEFORE the soak judgment discards
+    /// it as transient — counting the discards is the held trace's
+    /// whole point (they are the run's near-misses). Fields only,
+    /// not the `ClosedEpisode` itself: the key types differ per
+    /// rule and this accumulator is deliberately key-agnostic.
+    /// Strictly larger spans replace; ties keep the earlier
+    /// episode's frame (the extrema doctrine).
+    pub fn observe_episode_span(&mut self, driver_span: f64, start_frame: u64) {
+        self.episodes_observed += 1;
+        match self.worst_span {
+            Some((best, _)) if driver_span <= best => {}
+            _ => self.worst_span = Some((driver_span, start_frame)),
+        }
+    }
+}
 
 /// Per-invariant accumulators feeding the `held_invariants` report
 /// section. One entry per invariant NAME (scenario validation
@@ -193,6 +313,19 @@ pub struct HeldBookkeeping {
     /// replace, ties keep the earliest frame (the resource tier's
     /// extrema doctrine).
     pub nearest_margin: std::collections::HashMap<String, (f64, u64)>,
+}
+
+/// The tier bookkeepings `collect` cross-references, bundled so the
+/// collector's signature stays inside clippy's argument budget.
+pub struct HeldSources<'a> {
+    /// Resource-tier bookkeeping (`WatchedResources`).
+    pub watched: &'a crate::invariant_eval::WatchedResources,
+    /// Component-tier bookkeeping (`WatchedInvariants`).
+    pub watched_inv: &'a crate::invariant_eval::WatchedInvariants,
+    /// Pairwise episode-fold bookkeeping.
+    pub pw_book: &'a crate::invariant_eval::PairwiseBookkeeping,
+    /// Consistency episode-fold bookkeeping.
+    pub dtc_book: &'a crate::invariant_eval::ConsistencyBookkeeping,
 }
 
 impl HeldBookkeeping {
@@ -314,10 +447,12 @@ impl HeldBookkeeping {
     /// so the caller judges by TARGET name, the invariant's unique
     /// key).
     ///
-    /// `watched` carries the resource-tier bookkeeping
-    /// (`WatchedResources`), `watched_inv` the component-tier one
-    /// (`WatchedInvariants`); the tiers' exclusion evidence lives in
-    /// their respective bookkeeping.
+    /// `sources` bundles the three tiers' bookkeeping
+    /// (`WatchedResources`, `WatchedInvariants`, and the episode
+    /// rules' `PairwiseBookkeeping` / `ConsistencyBookkeeping`,
+    /// whose held statistics live in their `episode_stats` maps);
+    /// each tier's exclusion evidence lives in its respective
+    /// bookkeeping.
     ///
     /// Exclusions, each deliberate:
     /// - `failed(name)` — a violated invariant belongs in the
@@ -332,7 +467,13 @@ impl HeldBookkeeping {
     ///   test) — vacuity carries a `vacuous_invariant` finding for
     ///   the audited shapes (which fails the run); an all-selector
     ///   bounds scope that judged nothing simply proves nothing
-    ///   and gets no entry.
+    ///   and gets no entry;
+    /// - episode tier — `!pw_book.matched` (pairwise: never had a
+    ///   pair) fails the run as vacuous anyway; DTC's
+    ///   `hierarchy_absent` audit is informational (a flat world can
+    ///   still PASS), so the collector adds its own zero-judged-
+    ///   frames guard: a flat world's rule was never exercised,
+    ///   and a held entry would claim evidence it does not have.
     ///
     /// Entries are built from the SCENARIO invariants (authoritative
     /// names, rule, authored fields) cross-referenced with the
@@ -340,11 +481,16 @@ impl HeldBookkeeping {
     pub fn collect(
         &self,
         invariants: &[Invariant],
-        watched: &crate::invariant_eval::WatchedResources,
-        watched_inv: &crate::invariant_eval::WatchedInvariants,
+        sources: &HeldSources<'_>,
         tps: u64,
         failed: &dyn Fn(&str) -> bool,
     ) -> Vec<HeldInvariant> {
+        let HeldSources {
+            watched,
+            watched_inv,
+            pw_book,
+            dtc_book,
+        } = sources;
         let mut out = Vec::new();
         for inv in invariants.iter().filter(|i| {
             matches!(
@@ -353,6 +499,8 @@ impl HeldBookkeeping {
                     | InvariantRule::StagnantResource
                     | InvariantRule::ComponentCheck
                     | InvariantRule::NodesInBounds
+                    | InvariantRule::PairwiseSeparation
+                    | InvariantRule::DerivedTransformConsistency
             )
         }) {
             if failed(&inv.name) {
@@ -361,6 +509,10 @@ impl HeldBookkeeping {
             let is_component_tier = matches!(
                 inv.rule,
                 InvariantRule::ComponentCheck | InvariantRule::NodesInBounds
+            );
+            let is_episode_tier = matches!(
+                inv.rule,
+                InvariantRule::PairwiseSeparation | InvariantRule::DerivedTransformConsistency
             );
             // Tier-appropriate exclusion evidence. The component tier
             // additionally treats zero judged frames as vacuous: a
@@ -394,17 +546,60 @@ impl HeldBookkeeping {
                 {
                     continue;
                 }
-            } else if watched.config_errored.contains(&inv.name)
-                || !watched.matched.contains(&inv.name)
+            } else if !is_episode_tier
+                && (watched.config_errored.contains(&inv.name)
+                    || !watched.matched.contains(&inv.name))
             {
                 continue;
+            }
+            // Episode-tier exclusions. Both books' `config_errored`
+            // suppress (the oracle_error already failed the run).
+            // Pairwise vacuity (`!matched` — never a pair to check)
+            // already failed the run as `vacuous_invariant`, but
+            // the guard stays for the manually-driven-App path
+            // where the audit never ran. DTC is the mirror of the
+            // all-selector bounds doctrine: `hierarchy_absent` is
+            // informational (a flat world can still PASS), so the
+            // collector adds its own guard — zero judged frames
+            // means the rule was never exercised, and no held
+            // entry may claim otherwise.
+            if is_episode_tier {
+                let (config_errored, matched, stats) =
+                    if inv.rule == InvariantRule::PairwiseSeparation {
+                        (
+                            pw_book.config_errored.contains(&inv.name),
+                            pw_book.matched.contains(&inv.name),
+                            pw_book.episode_stats.get(&inv.name),
+                        )
+                    } else {
+                        (
+                            dtc_book.config_errored.contains(&inv.name),
+                            dtc_book.matched.contains(&inv.name),
+                            dtc_book.episode_stats.get(&inv.name),
+                        )
+                    };
+                if config_errored {
+                    continue;
+                }
+                if !matched
+                    || stats.is_none_or(|s| s.frames_judged == 0 && s.episodes_observed == 0)
+                {
+                    continue;
+                }
             }
             // `frames_matched`: frames the check resolved and judged
             // something — for the resource tier the resource/leaf
             // resolved; for the component tier the selector matched
-            // ≥1 entity (the fold only runs on such frames).
+            // ≥1 entity (the fold only runs on such frames); for the
+            // episode tier the rule had something to judge
+            // (pairwise: ≥2 checkable entities co-existed; DTC: ≥1
+            // checkable parented entity, post-grace).
             let frames_matched = if is_component_tier {
                 self.frames_judged.get(&inv.name).copied().unwrap_or(0)
+            } else if is_episode_tier {
+                pw_dtc_stats(pw_book, dtc_book, inv)
+                    .map(|s| s.frames_judged)
+                    .unwrap_or(0)
             } else {
                 self.frames_matched.get(&inv.name).copied().unwrap_or(0)
             };
@@ -420,22 +615,41 @@ impl HeldBookkeeping {
                 } else {
                     (None, None, None)
                 };
-            let predicate = inv.check.map(|op| {
-                // Wire-name syntax ("ge 0"), matching scenario
-                // authoring, not the symbol form (">=").
-                let wire = match op {
-                    CheckOp::Lt => "lt",
-                    CheckOp::Le => "le",
-                    CheckOp::Gt => "gt",
-                    CheckOp::Ge => "ge",
-                    CheckOp::Equals => "equals",
-                    CheckOp::Ne => "ne",
-                };
-                let threshold = crate::invariant_eval::cc_threshold(inv)
-                    .map(|t| t.to_string())
-                    .unwrap_or_else(|| "?".to_string());
-                format!("{wire} {threshold}")
-            });
+            let predicate = if is_episode_tier {
+                // Episode rules' predicates live in their rule-specific
+                // threshold fields, not `check`/`value`: pairwise
+                // holds distance ≥ min_distance (a lower bound);
+                // DTC holds deviation ≤ tolerance (an upper bound,
+                // defaulted when the author omitted it). Wire syntax
+                // mirrors the resource tier so the field means one
+                // thing everywhere: operator + threshold.
+                match inv.rule {
+                    InvariantRule::PairwiseSeparation => {
+                        inv.min_distance.map(|d| format!("ge {d}"))
+                    }
+                    _ => inv
+                        .tolerance
+                        .or(Some(crate::invariant_eval::DEFAULT_CONSISTENCY_TOLERANCE))
+                        .map(|t| format!("le {t}")),
+                }
+            } else {
+                inv.check.map(|op| {
+                    // Wire-name syntax ("ge 0"), matching scenario
+                    // authoring, not the symbol form (">=").
+                    let wire = match op {
+                        CheckOp::Lt => "lt",
+                        CheckOp::Le => "le",
+                        CheckOp::Gt => "gt",
+                        CheckOp::Ge => "ge",
+                        CheckOp::Equals => "equals",
+                        CheckOp::Ne => "ne",
+                    };
+                    let threshold = crate::invariant_eval::cc_threshold(inv)
+                        .map(|t| t.to_string())
+                        .unwrap_or_else(|| "?".to_string());
+                    format!("{wire} {threshold}")
+                })
+            };
             // Component tiers: `first_held_frame` lives in the
             // component-tier bookkeeping; eventual-mode deadlines use
             // the same formula either way.
@@ -496,8 +710,33 @@ impl HeldBookkeeping {
                         nearest,
                         nearest_frame,
                     )
+                } else if is_episode_tier {
+                    // Episode-tier workload: DTC reuses the
+                    // entity-judgment field (the same workload
+                    // doctrine; its field doc names both rules).
+                    // Pairwise counts PAIRS, its own field below.
+                    let stats = pw_dtc_stats(pw_book, dtc_book, inv);
+                    let entities = (inv.rule == InvariantRule::DerivedTransformConsistency)
+                        .then(|| stats.map(|s| s.entity_judgments).unwrap_or(0));
+                    (entities, None, None, None, None)
                 } else {
                     (None, None, None, None, None)
+                };
+            // Episode-tier near-miss evidence: the sub-soak trace.
+            // `worst_episode_span`'s unit is the driver leaf's own
+            // (seconds only for the frame-clock default) — compare
+            // against the shipped `window_s`, whose doc shares the
+            // same caveat.
+            let (episodes_observed, worst_episode_span, worst_episode_frame, pair_judgments) =
+                if is_episode_tier {
+                    let stats = pw_dtc_stats(pw_book, dtc_book, inv);
+                    let episodes = stats.map(|s| s.episodes_observed);
+                    let (span, span_frame) = stats.and_then(|s| s.worst_span).unzip();
+                    let pairs = (inv.rule == InvariantRule::PairwiseSeparation)
+                        .then(|| stats.map(|s| s.pair_judgments).unwrap_or(0));
+                    (episodes, span, span_frame, pairs)
+                } else {
+                    (None, None, None, None)
                 };
             out.push(HeldInvariant {
                 name: inv.name.clone(),
@@ -520,9 +759,28 @@ impl HeldBookkeeping {
                 peak_entities_frame,
                 nearest_margin: nearest,
                 nearest_margin_frame: nearest_frame,
+                episodes_observed,
+                worst_episode_span,
+                worst_episode_frame,
+                pair_judgments,
             });
         }
         out
+    }
+}
+
+/// The episode-tier held statistics for `inv`, from whichever book
+/// owns its rule. `None` when the rule never folded anything (the
+/// record's absence is itself the exclusion evidence).
+fn pw_dtc_stats<'a>(
+    pw_book: &'a crate::invariant_eval::PairwiseBookkeeping,
+    dtc_book: &'a crate::invariant_eval::ConsistencyBookkeeping,
+    inv: &Invariant,
+) -> Option<&'a EpisodeHeldStats> {
+    if inv.rule == InvariantRule::PairwiseSeparation {
+        pw_book.episode_stats.get(&inv.name)
+    } else {
+        dtc_book.episode_stats.get(&inv.name)
     }
 }
 
@@ -530,7 +788,10 @@ impl HeldBookkeeping {
 /// `Resource.path`. Component tier: `Component.path` for
 /// `component_check` (the selector names the entity, the path the
 /// judged leaf); for `nodes_in_bounds` the selector component or
-/// `all` (containment in the authored box, no leaf).
+/// `all` (containment in the authored box, no leaf). Episode tier:
+/// the selector component for pairwise (the `all` selector is
+/// rejected at load for it); the selector component, or `all` for
+/// the whole hierarchy, for DTC.
 fn leaf_target(inv: &Invariant) -> String {
     if inv.rule == InvariantRule::NodesInBounds {
         return match inv.target_selector.as_ref() {
@@ -546,6 +807,14 @@ fn leaf_target(inv: &Invariant) -> String {
         return match &inv.path {
             Some(path) => format!("{name}.{path}"),
             None => name,
+        };
+    }
+    if inv.rule == InvariantRule::PairwiseSeparation
+        || inv.rule == InvariantRule::DerivedTransformConsistency
+    {
+        return match inv.target_selector.as_ref() {
+            Some(crate::enums::TargetSelector::WithComponent { name }) => name.clone(),
+            _ => "all".to_string(),
         };
     }
     match (&inv.resource, &inv.path) {

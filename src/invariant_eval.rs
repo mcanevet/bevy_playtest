@@ -2032,6 +2032,13 @@ pub struct PairwiseBookkeeping {
     pub oracle_error_seen: std::collections::HashSet<String>,
     /// Invariant name → the fold engine.
     pub folders: std::collections::HashMap<String, crate::episode::EpisodeFolder>,
+    /// Invariant name → the pass-side held statistics (the
+    /// passing-invariant trace — see
+    /// [`crate::held::EpisodeHeldStats`]). Folds alongside the
+    /// engine so sub-soak episodes — the near-misses a passing
+    /// run's story is made of — survive the soak judgment that
+    /// discards them from the violation list.
+    pub episode_stats: std::collections::HashMap<String, crate::held::EpisodeHeldStats>,
 }
 
 /// One frame's pairwise outcome for one invariant (owned-data
@@ -2049,6 +2056,10 @@ struct PwOutcome {
     /// The selector resolved AND ≥2 checkable entities co-existed
     /// this frame.
     pairable: bool,
+    /// How many checkable (marker + Transform) entities the
+    /// enumeration walked this frame — the workload figure behind
+    /// `pair_judgments` (n·(n−1)/2 pairs). Zero when not pairable.
+    checkable_count: usize,
 }
 
 /// Driver-loop recorder for `pairwise_separation` invariants: the
@@ -2150,6 +2161,7 @@ fn eval_pairwise(
         driver: None,
         config_error: Some(why),
         pairable: false,
+        checkable_count: 0,
     };
     // Validation guarantees these; the Options are defensive only.
     let Some(crate::enums::TargetSelector::WithComponent { name }) = inv.target_selector.as_ref()
@@ -2199,6 +2211,7 @@ fn eval_pairwise(
             driver: frame_clock(frame, tps),
             config_error: None,
             pairable: false,
+            checkable_count: nodes.len(),
         };
     }
     let mut pairs: Vec<crate::episode::Observation<crate::episode::PairKey>> = Vec::new();
@@ -2243,6 +2256,7 @@ fn eval_pairwise(
         driver,
         config_error: None,
         pairable: true,
+        checkable_count: nodes.len(),
     }
 }
 
@@ -2298,11 +2312,27 @@ fn apply_pw_outcome(
     if outcome.pairable {
         book.matched.insert(inv.name.clone());
     }
+    // Held-trace workload fold: judged frames and pair-judgments.
+    // Only pairable frames count (a frame without two checkable
+    // entities judged nothing — mirroring the flat tiers'
+    // "judged something" semantics).
+    if outcome.pairable {
+        let n = outcome.checkable_count as u64;
+        book.episode_stats
+            .entry(inv.name.clone())
+            .or_default()
+            .observe_frame(Some(n * (n - 1) / 2), None);
+    }
     let folder = book.folders.entry(inv.name.clone()).or_default();
     // Frame order is guaranteed by the driver loop; push can close
     // an episode only via this frame (violation ends, gap, or the
     // non-consecutive close-and-reopen).
-    if let Some(closed) = folder.push(frame, outcome.driver, &outcome.pairs) {
+    let closed = folder.push(frame, outcome.driver, &outcome.pairs);
+    if let Some(closed) = closed {
+        book.episode_stats
+            .entry(inv.name.clone())
+            .or_default()
+            .observe_episode_span(closed.driver_span, closed.start_frame);
         judge_closed_episode(inv, &closed, violations);
     }
 }
@@ -2425,10 +2455,16 @@ pub fn close_pairwise_episodes(world: &mut World) {
         // the episode's own end_frame is the authoritative end.
         let mut violations = world.resource_mut::<RunViolations>();
         for inv in &invariants {
-            if let Some(folder) = book.folders.get_mut(&inv.name) {
-                if let Some(closed) = folder.close_run() {
-                    judge_closed_episode(inv, &closed, &mut violations.0);
-                }
+            let closed = book
+                .folders
+                .get_mut(&inv.name)
+                .and_then(|folder| folder.close_run());
+            if let Some(closed) = closed {
+                book.episode_stats
+                    .entry(inv.name.clone())
+                    .or_default()
+                    .observe_episode_span(closed.driver_span, closed.start_frame);
+                judge_closed_episode(inv, &closed, &mut violations.0);
             }
         }
     });
@@ -2513,6 +2549,11 @@ pub struct ConsistencyBookkeeping {
     /// Invariant name → the fold engine (entity keys, worst = the
     /// MAXIMUM deviation — compositional severity is incoherence).
     pub folders: std::collections::HashMap<String, crate::episode::EpisodeFolder<u32>>,
+    /// Invariant name → the pass-side held statistics (the
+    /// passing-invariant trace — see
+    /// [`crate::held::EpisodeHeldStats`]), the same doctrine as
+    /// pairwise's.
+    pub episode_stats: std::collections::HashMap<String, crate::held::EpisodeHeldStats>,
 }
 
 impl ConsistencyBookkeeping {
@@ -2545,6 +2586,10 @@ struct DtcOutcome {
     /// At least one parented, checkable entity was observed this
     /// frame (observability for the vacuity audit).
     parented_seen: bool,
+    /// How many parented, checkable entities the walk judged this
+    /// frame — the workload figure behind `entity_judgments`. Zero
+    /// when nothing was checkable.
+    checkable_count: usize,
 }
 
 /// The default ε when the author omits `tolerance`: 1e-4 absolute
@@ -2682,6 +2727,7 @@ fn eval_consistency(
         driver: None,
         config_error: Some(why),
         parented_seen: false,
+        checkable_count: 0,
     };
     // Driver sample: declared leaf, or the frame clock (seconds) —
     // pairwise's grammar verbatim.
@@ -2724,6 +2770,7 @@ fn eval_consistency(
                     driver,
                     config_error: None,
                     parented_seen: false,
+                    checkable_count: 0,
                 };
             }
         }
@@ -2770,6 +2817,7 @@ fn eval_consistency(
             driver,
             config_error: None,
             parented_seen: false,
+            checkable_count: 0,
         };
     };
     // The per-instance opt-out marker (registered under takeover;
@@ -2778,6 +2826,10 @@ fn eval_consistency(
     let tolerance = inv.tolerance.unwrap_or(DEFAULT_CONSISTENCY_TOLERANCE);
     let mut obs: Vec<crate::episode::Observation<u32>> = Vec::new();
     let mut parented_seen = false;
+    // The per-frame judged-entity count — the workload figure for
+    // the held record (entities re-walked each frame are
+    // re-counted, the component tier's entity_judgments doctrine).
+    let mut checkable_count: usize = 0;
     // Walk every archetype bearing the parent link (the pairwise
     // enumerator's doctrine: component-ID set tests at the
     // archetype, typed reads per entity).
@@ -2836,6 +2888,7 @@ fn eval_consistency(
                 continue;
             };
             parented_seen = true;
+            checkable_count += 1;
             // The identity: observed vs parent-composed — the same
             // `mul_transform` arithmetic propagation itself uses, so
             // a propagated-then-untouched triple agrees exactly and
@@ -2871,6 +2924,7 @@ fn eval_consistency(
         driver,
         config_error: None,
         parented_seen,
+        checkable_count,
     }
 }
 
@@ -2898,14 +2952,30 @@ fn apply_dtc_outcome(
     if outcome.parented_seen {
         book.matched.insert(inv.name.clone());
     }
-    let folder = book
-        .folders
-        .entry(inv.name.clone())
-        .or_insert_with(ConsistencyBookkeeping::new_folder);
-    // Frame order is guaranteed by the driver loop; push can close
-    // an episode only via this frame (violation ends, gap, or the
-    // non-consecutive close-and-reopen).
-    if let Some(closed) = folder.push(frame, outcome.driver, &outcome.obs) {
+    // Held-trace workload fold: judged frames and entity-judgments.
+    // Only frames that judged ≥1 checkable parented entity count
+    // (the flat tiers' "judged something" semantics).
+    if outcome.checkable_count > 0 {
+        book.episode_stats
+            .entry(inv.name.clone())
+            .or_default()
+            .observe_frame(None, Some(outcome.checkable_count as u64));
+    }
+    let closed = {
+        let folder = book
+            .folders
+            .entry(inv.name.clone())
+            .or_insert_with(ConsistencyBookkeeping::new_folder);
+        // Frame order is guaranteed by the driver loop; push can close
+        // an episode only via this frame (violation ends, gap, or the
+        // non-consecutive close-and-reopen).
+        folder.push(frame, outcome.driver, &outcome.obs)
+    };
+    if let Some(closed) = closed {
+        book.episode_stats
+            .entry(inv.name.clone())
+            .or_default()
+            .observe_episode_span(closed.driver_span, closed.start_frame);
         judge_dtc_episode(inv, &closed, violations);
     }
 }
@@ -3024,10 +3094,16 @@ pub fn close_consistency_episodes(world: &mut World) {
     world.resource_scope(|world, mut book: Mut<ConsistencyBookkeeping>| {
         let mut violations = world.resource_mut::<RunViolations>();
         for inv in &invariants {
-            if let Some(folder) = book.folders.get_mut(&inv.name) {
-                if let Some(closed) = folder.close_run() {
-                    judge_dtc_episode(inv, &closed, &mut violations.0);
-                }
+            let closed = book
+                .folders
+                .get_mut(&inv.name)
+                .and_then(|folder| folder.close_run());
+            if let Some(closed) = closed {
+                book.episode_stats
+                    .entry(inv.name.clone())
+                    .or_default()
+                    .observe_episode_span(closed.driver_span, closed.start_frame);
+                judge_dtc_episode(inv, &closed, &mut violations.0);
             }
         }
     });

@@ -16,7 +16,7 @@ use bevy_ecs::prelude::*;
 use bevy_playtest::driver::run_scenario;
 use bevy_playtest::held::HeldInvariant;
 use bevy_reflect::Reflect;
-use bevy_transform::prelude::Transform;
+use bevy_transform::prelude::{GlobalTransform, Transform, TransformPlugin, TransformSystems};
 
 use crate::common;
 
@@ -250,6 +250,10 @@ fn held_section_round_trips_through_serde() {
         peak_entities_frame: None,
         nearest_margin: None,
         nearest_margin_frame: None,
+        episodes_observed: None,
+        worst_episode_span: None,
+        worst_episode_frame: None,
+        pair_judgments: None,
     };
     let json = serde_json::to_string(&entry).unwrap();
     let back: HeldInvariant = serde_json::from_str(&json).unwrap();
@@ -289,6 +293,10 @@ fn held_section_round_trips_through_serde() {
         peak_entities_frame: Some(57),
         nearest_margin: Some(0.0107),
         nearest_margin_frame: Some(12),
+        episodes_observed: None,
+        worst_episode_span: None,
+        worst_episode_frame: None,
+        pair_judgments: None,
     };
     let json = serde_json::to_string(&component_entry).unwrap();
     let back: HeldInvariant = serde_json::from_str(&json).unwrap();
@@ -299,6 +307,43 @@ fn held_section_round_trips_through_serde() {
     assert_eq!(back.nearest_margin_frame, Some(12));
     assert_eq!(back.met_at_frame, Some(100));
     assert_eq!(back.deadline_frame, Some(180));
+    // Episode-tier wire contract: the near-miss fields' wire names
+    // and types round-trip exactly (a declared-driver scenario's
+    // span is a bare number — no unit suffix to lose).
+    let episode_entry = HeldInvariant {
+        name: "no_stacking".to_string(),
+        rule: "pairwise_separation".to_string(),
+        target: "Enemy".to_string(),
+        predicate: Some("ge 0.5".to_string()),
+        frames_matched: 237,
+        observed_min: None,
+        observed_max: None,
+        worst_frame: None,
+        met_at_frame: None,
+        deadline_frame: None,
+        episodes_fired: None,
+        driver_advanced: None,
+        driver: None,
+        eventually_s: None,
+        window_s: Some(1.0),
+        entity_judgments: None,
+        peak_entities: None,
+        peak_entities_frame: None,
+        nearest_margin: None,
+        nearest_margin_frame: None,
+        episodes_observed: Some(2),
+        worst_episode_span: Some(0.317),
+        worst_episode_frame: Some(10),
+        pair_judgments: Some(282_015),
+    };
+    let json = serde_json::to_string(&episode_entry).unwrap();
+    let back: HeldInvariant = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.episodes_observed, Some(2));
+    assert_eq!(back.worst_episode_span, Some(0.317));
+    assert_eq!(back.worst_episode_frame, Some(10));
+    assert_eq!(back.pair_judgments, Some(282_015));
+    assert_eq!(back.window_s, Some(1.0));
+    assert_eq!(back.predicate.as_deref(), Some("ge 0.5"));
 }
 
 // ---------------------------------------------------------------------------
@@ -665,6 +710,10 @@ fn twenty_held_invariants_serialize_under_4kb() {
             peak_entities_frame: None,
             nearest_margin: None,
             nearest_margin_frame: None,
+            episodes_observed: None,
+            worst_episode_span: None,
+            worst_episode_frame: None,
+            pair_judgments: None,
         });
     }
     let json = serde_json::to_string(&entries).unwrap();
@@ -678,10 +727,352 @@ fn twenty_held_invariants_serialize_under_4kb() {
 }
 
 // ---------------------------------------------------------------------------
+// Episode-fold rules: held evidence (pairwise_separation +
+// derived_transform_consistency)
+// ---------------------------------------------------------------------------
+
+/// The pairwise selector marker. Unique short name: other suites
+/// register their own markers and short-name resolution is
+/// ambiguous across same-named types (the MatchClock doctrine).
+#[derive(Component, Reflect, Default)]
+#[reflect(Component)]
+struct HeldRival;
+
+/// Second marker distinguishing the crossing fixture's MOVER from
+/// its static anchor (query iteration is unordered, so per-entity
+/// behavior must ride on components, not iteration order).
+#[derive(Component, Default)]
+struct HeldMover;
+
+/// Bodies drifting monotonically apart: every frame is pairable and
+/// clean — the pure-coverage passing shape (the rule was exercised,
+/// nothing ever came close; zero episodes observed). Sign-anchored:
+/// positive-side bodies accelerate +x, negative-side −x, so the
+/// pair only ever separates.
+fn drift_apart(mut q: Query<&mut Transform, With<HeldRival>>) {
+    for mut t in q.iter_mut() {
+        t.translation.x += if t.translation.x > 0.0 { 0.05 } else { -0.05 };
+    }
+}
+
+/// Marker for the DTC selector (unique-name doctrine).
+#[derive(Component, Reflect, Default)]
+#[reflect(Component)]
+struct HeldChild;
+
+/// Move every root monotonically: the world keeps changing and a
+/// healthy propagated hierarchy stays exactly coherent (the DTC
+/// suite's move_roots doctrine).
+fn held_move_roots(mut q: Query<&mut Transform, Without<ChildOf>>) {
+    for mut t in q.iter_mut() {
+        t.translation.x += 0.05;
+    }
+}
+
+fn rival_app(movement: fn(Query<&mut Transform, With<HeldRival>>)) -> App {
+    let mut app = App::new();
+    app.register_type::<HeldRival>();
+    app.register_type::<Transform>();
+    app.add_systems(Update, movement);
+    // Mirrored spawns: ±2.0 → the pair starts 4.0 apart and drifts
+    // apart (only one pair is ever checked).
+    app.world_mut()
+        .spawn((HeldRival, Transform::from_xyz(2.0, 0.0, 0.0)));
+    app.world_mut()
+        .spawn((HeldRival, Transform::from_xyz(-2.0, 0.0, 0.0)));
+    app
+}
+
+/// The crossing near-miss fixture's mover system: a static ANCHOR
+/// at the origin plus a MOVER sweeping through it —
+/// `x = 2 − 0.02·f`, entering `min_distance` (0.5) around frame 75
+/// and exiting by frame ~125. Coincidence lasts ≈50 frames ≈ 0.83s
+/// of frame clock — sub-soak against the 2.0s window, and the
+/// episode the soak judgment discards is exactly the near-miss the
+/// held record must name. The mover's Transform changes every frame
+/// (frozen_world stays quiet).
+#[derive(Resource, Default)]
+struct HeldFrameClock {
+    frame: u32,
+}
+
+fn sweep_through_anchor(
+    mut q: Query<&mut Transform, (With<HeldRival>, With<HeldMover>)>,
+    mut clock: ResMut<HeldFrameClock>,
+) {
+    clock.frame += 1;
+    let x = 2.0 - 0.02 * clock.frame as f32;
+    for mut t in q.iter_mut() {
+        t.translation.x = x;
+    }
+}
+
+fn crossing_app() -> App {
+    let mut app = App::new();
+    app.register_type::<HeldRival>();
+    app.register_type::<Transform>();
+    app.insert_resource(HeldFrameClock::default());
+    app.add_systems(Update, sweep_through_anchor);
+    // The anchor at the origin; the mover sweeping from +2 toward
+    // −2 across the run.
+    app.world_mut()
+        .spawn((HeldRival, Transform::from_xyz(0.0, 0.0, 0.0)));
+    app.world_mut()
+        .spawn((HeldRival, HeldMover, Transform::from_xyz(2.0, 0.0, 0.0)));
+    app
+}
+
+const SEPARATION_NEARMISS_INV: &str = r#"
+    "name": "rivals_apart",
+    "rule": "pairwise_separation",
+    "target_selector": {"with_component": {"name": "HeldRival"}},
+    "min_distance": 0.5,
+    "window_s": 2.0"#;
+
+/// A passing pairwise run with zero episodes: the held record
+/// carries the workload figures and NO span witness (nothing ever
+/// came close). `pair_judgments == frames_matched` (one pair, one
+/// per frame); `frames_matched == frame_count` (recorders observe
+/// every frame; the selector resolves from frame 0).
+#[test]
+fn pairwise_clean_pass_reports_workload_without_span() {
+    let _slot = common::run_slot();
+    let mut app = rival_app(drift_apart);
+    let report =
+        run_scenario(&mut app, &scenario_with_invariants(SEPARATION_NEARMISS_INV)).unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    let held = report
+        .held_invariants
+        .iter()
+        .find(|h| h.name == "rivals_apart")
+        .expect("held entry for passing pairwise invariant");
+    assert_eq!(held.rule, "pairwise_separation");
+    // The selector component is the judged scope.
+    assert_eq!(held.target, "HeldRival");
+    // min_distance renders in predicate syntax.
+    assert_eq!(held.predicate.as_deref(), Some("ge 0.5"));
+    // One pair checked every frame: workload == frames == all of
+    // them (the selector resolves from frame 0).
+    assert_eq!(held.frames_matched, report.frame_count);
+    assert_eq!(held.pair_judgments, Some(report.frame_count));
+    // Clean run: no episode ever formed.
+    assert_eq!(held.episodes_observed, Some(0));
+    assert!(held.worst_episode_span.is_none());
+    assert!(held.worst_episode_frame.is_none());
+    // Pairwise never carries the entity fields.
+    assert!(held.entity_judgments.is_none());
+    assert!(held.nearest_margin.is_none());
+    // The window rides along for the span-vs-window story.
+    assert_eq!(held.window_s, Some(2.0));
+}
+
+/// A crossing body pair leaves a sub-soak episode: the held record
+/// names it — `episodes_observed: 1`, a `worst_episode_span` honest
+/// about being sub-window, and the frame the episode started. This
+/// is the slice's core promise: the near-miss the soak judgment
+/// silently discarded now has a trace.
+#[test]
+fn pairwise_subsoak_nearmiss_gets_span_witness() {
+    let _slot = common::run_slot();
+    let mut app = crossing_app();
+    let report =
+        run_scenario(&mut app, &scenario_with_invariants(SEPARATION_NEARMISS_INV)).unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    let held = report
+        .held_invariants
+        .iter()
+        .find(|h| h.name == "rivals_apart")
+        .expect("held entry for passing pairwise invariant");
+    assert_eq!(held.episodes_observed, Some(1));
+    let span = held
+        .worst_episode_span
+        .expect("the crossing's episode carries a span witness");
+    // The span must be sub-window on a passing run (the soak
+    // judgment discarded exactly this episode as transient).
+    assert!(
+        span < 2.0,
+        "passing run's worst span {span} must be sub-window (2.0)"
+    );
+    // Frame-clock driver: span counts seconds, so a real episode
+    // of a crossing lasts > 0.
+    assert!(span > 0.0);
+    assert!(held.worst_episode_frame.is_some());
+}
+
+/// A pairwise invariant with nothing to pair (a single marker) is
+/// VACUOUS — the run fails and there is no held entry (the
+/// violation owns the story).
+#[test]
+fn vacuous_pairwise_gets_no_held_entry() {
+    let _slot = common::run_slot();
+    let mut app = App::new();
+    app.register_type::<HeldRival>();
+    app.register_type::<Transform>();
+    app.add_systems(Update, drift_apart);
+    // A lone survivor: never a pair to check.
+    app.world_mut()
+        .spawn((HeldRival, Transform::from_xyz(0.0, 0.0, 0.0)));
+    let report =
+        run_scenario(&mut app, &scenario_with_invariants(SEPARATION_NEARMISS_INV)).unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
+    assert!(report
+        .violations
+        .iter()
+        .any(|v| v.rule == "vacuous_invariant" && v.target == "rivals_apart"));
+    assert!(report
+        .held_invariants
+        .iter()
+        .all(|h| h.name != "rivals_apart"));
+}
+
+// ---------------------------------------------------------------------------
+// derived_transform_consistency held evidence
+// ---------------------------------------------------------------------------
+
+fn held_hierarchy_app() -> App {
+    let mut app = App::new();
+    app.add_plugins((TaskPoolPlugin::default(), TransformPlugin));
+    app.register_type::<HeldChild>();
+    app.add_systems(Update, held_move_roots);
+    let parent = app
+        .world_mut()
+        .spawn(Transform::from_xyz(0.0, 0.0, 0.0))
+        .id();
+    app.world_mut().spawn((
+        HeldChild,
+        Transform::from_xyz(0.0, 0.0, 0.0),
+        ChildOf(parent),
+    ));
+    app
+}
+
+/// Backing clock for the blip writer (frames 10–29: a one-third
+/// second divergence streak, well inside the 2.0s soak — the DTC
+/// suite's blip doctrine).
+#[derive(Resource, Default)]
+struct HeldBlipClock {
+    frame: u32,
+}
+
+fn blip_child_global(
+    mut q: Query<&mut GlobalTransform, With<HeldChild>>,
+    mut clock: ResMut<HeldBlipClock>,
+) {
+    clock.frame += 1;
+    if (10..30).contains(&clock.frame) {
+        for mut g in q.iter_mut() {
+            *g = GlobalTransform::from_xyz(9.0, 9.0, 9.0);
+        }
+    }
+}
+
+const HELD_DTC_INV: &str = r#"
+    "name": "globals_track_parents",
+    "rule": "derived_transform_consistency",
+    "target_selector": {"with_component": {"name": "HeldChild"}},
+    "window_s": 2.0"#;
+
+/// A healthy propagated hierarchy: coherent every judged frame, zero
+/// episodes — the pure-coverage DTC held record. Grace frames (3 by
+/// default) are skipped by the recorder, so `frames_matched` is
+/// `frame_count − grace` frames, and `entity_judgments` counts ONE
+/// child per judged frame.
+#[test]
+fn dtc_healthy_pass_reports_workload_without_span() {
+    let _slot = common::run_slot();
+    let mut app = held_hierarchy_app();
+    let report = run_scenario(&mut app, &scenario_with_invariants(HELD_DTC_INV)).unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    let held = report
+        .held_invariants
+        .iter()
+        .find(|h| h.name == "globals_track_parents")
+        .expect("held entry for passing DTC invariant");
+    assert_eq!(held.rule, "derived_transform_consistency");
+    assert_eq!(held.target, "HeldChild");
+    // tolerance defaults when the author omits it (le 1e-4).
+    assert_eq!(held.predicate.as_deref(), Some("le 0.0001"));
+    // Grace frames are never judged.
+    let grace = bevy_playtest::invariant_eval::DEFAULT_GRACE_FRAMES as u64;
+    let judged = report.frame_count - grace;
+    assert_eq!(held.frames_matched, judged);
+    assert_eq!(held.entity_judgments, Some(judged));
+    // Healthy run: zero episodes.
+    assert_eq!(held.episodes_observed, Some(0));
+    assert!(held.worst_episode_span.is_none());
+    // DTC never carries the pairwise field.
+    assert!(held.pair_judgments.is_none());
+}
+
+/// A one-third-second divergence streak is sub-soak against the 2.0s
+/// window: the run passes and the held record names the discarded
+/// episode — `episodes_observed: 1` plus the span witness. The
+/// blip lands post-grace (frames 10–29), so the streak is observed.
+#[test]
+fn dtc_subsoak_nearmiss_gets_span_witness() {
+    let _slot = common::run_slot();
+    let mut app = held_hierarchy_app();
+    app.insert_resource(HeldBlipClock::default());
+    app.add_systems(
+        PostUpdate,
+        blip_child_global.after(TransformSystems::Propagate),
+    );
+    let report = run_scenario(&mut app, &scenario_with_invariants(HELD_DTC_INV)).unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    assert!(
+        !report
+            .violations
+            .iter()
+            .any(|v| v.rule == "derived_transform_consistency"),
+        "a 1/3-second streak is sub-soak: {:?}",
+        report.violations
+    );
+    let held = report
+        .held_invariants
+        .iter()
+        .find(|h| h.name == "globals_track_parents")
+        .expect("held entry for passing DTC invariant");
+    assert_eq!(held.episodes_observed, Some(1));
+    let span = held
+        .worst_episode_span
+        .expect("the blip episode carries a span witness");
+    // 20 frames ≈ 0.317s of frame clock (sub-window, > 0).
+    assert!(span > 0.0 && span < 2.0, "span {span}");
+    assert!(held.worst_episode_frame.is_some());
+}
+
+/// A flat world is `hierarchy_absent` — INFORMATIONAL, the run
+/// still PASSES — so the collector's own zero-judged-frames guard
+/// must step in: no held entry may claim evidence for a rule that
+/// was never exercised. THE mirror of the all-selector bounds
+/// doctrine (an informational audit cannot gate, so the collector
+/// gates instead).
+#[test]
+fn dtc_flat_world_gets_no_held_entry() {
+    let _slot = common::run_slot();
+    let mut app = App::new();
+    app.add_plugins((TaskPoolPlugin::default(), TransformPlugin));
+    app.register_type::<HeldChild>();
+    // Flat but observable: one moving un-parented entity.
+    app.add_systems(Update, held_move_roots);
+    app.world_mut()
+        .spawn((HeldChild, Transform::from_xyz(0.0, 1.0, 0.0)));
+    let report = run_scenario(&mut app, &scenario_with_invariants(HELD_DTC_INV)).unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    assert!(report
+        .violations
+        .iter()
+        .any(|v| v.rule == "hierarchy_absent" && v.target == "globals_track_parents"));
+    assert!(report
+        .held_invariants
+        .iter()
+        .all(|h| h.name != "globals_track_parents"));
+}
+
+// ---------------------------------------------------------------------------
 // BatteryConfig::new (the constructor fix)
 // ---------------------------------------------------------------------------
 
-/// `BatteryConfig::new` provides the common-path construction the
 /// deferral note wanted — WITHOUT a trait Default (the `binary`
 /// field has no sensible default; the rationale stands, only the
 /// convenience was missing). Mirrors `ProbePoolConfig::new`.
