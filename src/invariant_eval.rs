@@ -1964,7 +1964,7 @@ pub struct PairwiseBookkeeping {
 struct PwOutcome {
     /// The frame's violating pairs (empty = a clean frame, which
     /// ends any open episode).
-    pairs: Vec<crate::episode::PairObservation>,
+    pairs: Vec<crate::episode::Observation<crate::episode::PairKey>>,
     /// The driver-leaf sample in the driver's own unit; `None` on
     /// a gap (driver resource absent / leaf non-finite).
     driver: Option<f64>,
@@ -2125,7 +2125,7 @@ fn eval_pairwise(
             pairable: false,
         };
     }
-    let mut pairs: Vec<crate::episode::PairObservation> = Vec::new();
+    let mut pairs: Vec<crate::episode::Observation<crate::episode::PairKey>> = Vec::new();
     for i in 0..nodes.len() {
         for j in (i + 1)..nodes.len() {
             let (a_index, a_pos) = nodes[i];
@@ -2140,9 +2140,9 @@ fn eval_pairwise(
             // episode. Filter rather than report (the NaN family is
             // already gating elsewhere, never double-reported).
             if distance.is_finite() && distance < min_distance {
-                pairs.push(crate::episode::PairObservation {
-                    pair: crate::episode::PairKey::new(a_index, b_index),
-                    distance,
+                pairs.push(crate::episode::Observation {
+                    key: crate::episode::PairKey::new(a_index, b_index),
+                    value: distance,
                 });
             }
         }
@@ -2236,7 +2236,7 @@ fn apply_pw_outcome(
 /// finding with the worst observation and the roster evidence.
 fn judge_closed_episode(
     inv: &Invariant,
-    ep: &crate::episode::ClosedEpisode,
+    ep: &crate::episode::ClosedEpisode<crate::episode::PairKey>,
     violations: &mut crate::state::Violations,
 ) {
     let Some(window_s) = inv.window_s else {
@@ -2263,17 +2263,17 @@ fn judge_closed_episode(
              for {:.3}{} across frames {}–{} ({} violating pair{}, \
              worst distance {:.3}); a coincidence this long is bodies occupying the \
              same space, not a fly-by",
-            worst.pair.low,
-            worst.pair.high,
-            worst.distance,
+            worst.key.low,
+            worst.key.high,
+            worst.value,
             min_distance,
             span,
             span_unit,
             ep.start_frame,
             ep.end_frame,
-            ep.distinct_pairs,
-            if ep.distinct_pairs == 1 { "" } else { "s" },
-            worst.distance,
+            ep.distinct_keys,
+            if ep.distinct_keys == 1 { "" } else { "s" },
+            worst.value,
         ),
         ep.start_frame,
     );
@@ -2301,18 +2301,18 @@ fn judge_closed_episode(
 
 /// Convert a closed episode into its `_meta` evidence block.
 fn pairwise_meta_of(
-    ep: &crate::episode::ClosedEpisode,
+    ep: &crate::episode::ClosedEpisode<crate::episode::PairKey>,
 ) -> crate::discovery::surface::PairwiseEpisodeMeta {
     crate::discovery::surface::PairwiseEpisodeMeta {
-        sampled_pairs: ep.distinct_pairs,
+        sampled_pairs: ep.distinct_keys,
         roster: ep
             .roster
             .iter()
             .map(|r| crate::discovery::surface::PairwiseRosterEntry {
-                low: r.pair.low,
-                high: r.pair.high,
+                low: r.key.low,
+                high: r.key.high,
                 first_frame: r.first_frame,
-                worst_distance: r.worst_distance,
+                worst_distance: r.worst_value,
                 worst_frame: r.worst_frame,
                 violating_frames: r.violating_frames,
             })
