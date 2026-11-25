@@ -45,7 +45,8 @@
     tier; `Component.leaf` for `component_check`, the selector
     component for `nodes_in_bounds`, `all` for the all-selector;
     for the episode rules the selector component, or `all` for
-    DTC's whole-hierarchy scope; for `spawn_safety` the selector
+    DTC's whole-hierarchy scope; `forbidden_region` names its
+    selector component; for `spawn_safety` the selector
     component)
   - `frames_matched` — frames on which the check resolved and
     judged something (existence evidence; `frames_matched: 0` plus a
@@ -54,14 +55,16 @@
     frames the selector matched ≥1 entity; for the episode rules,
     the frames the rule had something to judge — pairwise: ≥2
     checkable entities co-existed, DTC: ≥1 checkable parented
-    entity past the grace window; for `spawn_safety`, the frames
+    entity past the grace window, forbidden_region: ≥1 checkable
+    selected entity; for `spawn_safety`, the frames
     with ≥1 resolvable anchor — the frames an incoming entry
     would have been judged on had one arrived)
   - `predicate` (`resource_check` and `component_check`: the
     authored predicate in wire syntax, e.g. `ge 0`; episode rules:
     the rule's threshold rendered the same way — `ge <min_distance>`
     for pairwise, `le <tolerance>` for DTC with the documented
-    default when the author omitted it; `spawn_safety` renders
+    default when the author omitted it, `inside at most <window_s>
+    driver units` for forbidden_region; `spawn_safety` renders
     `ge <min_distance>`, pairwise-shaped)
   - `observed_min` / `observed_max` (`resource_check` only) —
     extrema of the sampled leaf across matched frames
@@ -99,7 +102,8 @@
     it get" evidence. Bounds judge containment, not a thresholded
     leaf, so `nodes_in_bounds` carries workload fields only
   - `episodes_observed` (episode rules: `pairwise_separation`,
-    `derived_transform_consistency`) — total episodes observed this
+    `derived_transform_consistency`, `forbidden_region`) — total
+    episodes observed this
     run INCLUDING the sub-soak ones the soak judgment discarded as
     transients: a passing run's episodes are precisely its
     near-misses, so this is the rule's exercise story
@@ -120,7 +124,9 @@
     frame are re-counted) — the component tier's
     `entity_judgments` doctrine, which `derived_transform_consistency`
     reuses directly: its `entity_judgments` sums the checkable
-    parented entities per judged frame
+    parented entities per judged frame; `forbidden_region` the
+    same way — its `entity_judgments` sums the selected entities
+    per judged frame (a workload figure, not a census)
   - `entries_clean` (`spawn_safety` only) — run-total entries judged
     CLEAN (entered at least `min_distance` from every same-frame
     anchor): together with its `entity_judgments` (ALL entries
@@ -129,6 +135,19 @@
     the never-exercised twin; a zero-entries run earns no held
     entry at all (an archetype that never gained a member proved
     nothing about entry safety)
+- the violation-entry `_meta` block (wire key `_meta`): rule-owned
+  structured evidence appended to findings. `pairwise_episode`
+  (`sampled_pairs`, capped `roster` of per-pair worst-first
+  frames + distances, `roster_truncated`),
+  `consistency_episode` (same shape for divergent entities), and
+  `forbidden_episode` for `forbidden_region` findings:
+  `sampled_entities` (distinct incursive entities this episode),
+  `roster` — per-entity `entity` (index), `first_frame`,
+  `worst_depth` (penetration depth to the nearest face; deeper is
+  worse), `worst_frame`, `violating_frames` — capped at 32 with
+  `roster_truncated` disclosing the drop, so a crowd cannot hide
+  behind the cap. `stepping` (step-capture runs) predates the
+  episode blocks. All fields are wire-stable names
 - `harness_mode`: `"in_process"` for a real run, or `"lint"` for a
   lint-mode artifact (see below)
 - `scenario_source`: `"file"`, `"builtin_smoke"`, or `"builtin_battery"`

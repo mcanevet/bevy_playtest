@@ -32,6 +32,7 @@ mod driver_smoke;
 mod engine_clock_drivers;
 mod explorer;
 mod fault_injection;
+mod forbidden_region;
 mod frozen_world_detail;
 mod held_invariants;
 mod input_delivery;

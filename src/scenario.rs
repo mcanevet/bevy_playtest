@@ -536,6 +536,24 @@ pub struct Invariant {
     /// (`SkipDerivedConsistency`) for per-instance opt-outs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude_components: Vec<String>,
+    /// Author-declared no-go zone (`forbidden_region` only): an
+    /// axis-aligned BOX in world space. A selected entity whose
+    /// Transform translation lies inside it (boundaries INCLUDED)
+    /// is incursive; incursion frames fold into per-invariant
+    /// episodes judged against the `window_s` soak in driver
+    /// units.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<crate::scenario::RegionBox>,
+    /// Legitimate-presence exemption (`forbidden_region` only):
+    /// an entity carrying this registered component does not
+    /// count as incursive (per entity, per frame). THE FLIP-TEST
+    /// DISCIPLINE IS MANDATORY (proposal §1): the exemption must
+    /// name the component that marks LEGITIMATE presence (e.g. a
+    /// "mounted on the outer lane" tag), never the state the buggy
+    /// run is in — an exemption that turns the pre-fix litmus
+    /// green has exempted the bug, not the feature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_if: Option<String>,
     /// Anchor selector (`spawn_safety` only): the same
     /// `target_selector` grammar (with_component / all), naming
     /// the anchor set every entering entity must keep
@@ -555,10 +573,40 @@ pub struct Invariant {
     pub spawn_only: Option<bool>,
 }
 
+/// An author-declared axis-aligned box region
+/// (`forbidden_region` only): world-space center plus per-axis
+/// half-extents. Containment is INCLUSIVE on every face — a
+/// translation exactly on the boundary counts as inside (pinned by
+/// the on-edge battery test; changing this is a doctrine change,
+/// not a fix). NaN anywhere in center or half_extents rejects at
+/// load (an unjudgeable region must never reach the recorder).
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RegionBox {
+    /// World-space center `[x, y, z]`. Every element must be
+    /// finite.
+    pub center: [f32; 3],
+    /// Per-axis half-extents `[hx, hy, hz]`. Every element must be
+    /// finite and > 0 (a zero-thickness wall is a plane, not a
+    /// volume; use positive extents).
+    pub half_extents: [f32; 3],
+}
+
+impl RegionBox {
+    /// INCLUSIVE box containment for a world-space translation:
+    /// inside when `|t - center| <= half_extent` on EVERY axis.
+    /// NaN translations are never inside (NaN comparisons are
+    /// false) — the finite_transforms oracle owns NaN findings.
+    pub fn contains(&self, t: [f32; 3]) -> bool {
+        (t[0] - self.center[0]).abs() <= self.half_extents[0]
+            && (t[1] - self.center[1]).abs() <= self.half_extents[1]
+            && (t[2] - self.center[2]).abs() <= self.half_extents[2]
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Key-name parsing (bevy-free: maps to canonical KeyCode names, not types)
 // ---------------------------------------------------------------------------
-
 /// Canonical key names accepted by scenarios. The in-process driver maps
 /// these to `bevy_input::keyboard::KeyCode`; the schema layer only knows
 /// strings, keeping `bevy_playtest` bevy-free.
@@ -1338,6 +1386,22 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                 rule.name
             )));
         }
+        // region/allow_if are forbidden_region's authoring surface;
+        // on any other rule they are foreign fields and would
+        // silently pass (accepted-and-ignored) unless rejected
+        // here, once, generically — the same one-defect-one-error
+        // doctrine as the eventually check above.
+        if (rule.region.is_some() || rule.allow_if.is_some())
+            && rule.rule != InvariantRule::ForbiddenRegion
+        {
+            errors.push(ScenarioError::Rejected(format!(
+                "invariant '{}': 'region'/'allow_if' belong to \
+                 forbidden_region only — a no-go zone and its \
+                 legitimate-presence exemption are that rule's \
+                 authoring surface",
+                rule.name
+            )));
+        }
         // Per-rule field requirements: keep the reserved `value`/
         // `path`/`check` surface honest — accepted for component_check
         // (required there), rejected for nodes_in_bounds (they belong
@@ -1990,6 +2054,208 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                          check/value/eventually_s/path/resource/bounds — it judges \
                          pair DISTANCE against min_distance and folds \
                          consecutive violating frames into episodes within \
+                         window_s",
+                        rule.name
+                    )));
+                }
+            }
+            InvariantRule::ForbiddenRegion => {
+                // Declarative no-go zone: selector-required ('all'
+                // would forbid every Transform in the world —
+                // walls, camera, UI — from a region, never what an
+                // author means; same O(cost) rationale as
+                // pairwise's rejection), region required and
+                // validated finite, window_s REQUIRED as the
+                // fly-by soak (an incursion must LINGER to count —
+                // the episode/window doctrine is this rule's
+                // reason to exist), driver fields allowed with the
+                // same both-halves-or-neither grammar as pairwise
+                // (no `resource` to default the host to), allow_if
+                // optional (a single registered component name —
+                // the legitimate-presence exemption, flip-test
+                // discipline mandatory per the proposal).
+                let Some(crate::enums::TargetSelector::WithComponent { name }) =
+                    rule.target_selector.as_ref()
+                else {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': forbidden_region requires \
+                         'target_selector: {{\"with_component\": {{\"name\": ...}}}}' \
+                         — the rule judges a named component's entities against \
+                         the declared region, and 'all' would forbid every \
+                         Transform in the world (walls, camera, UI) from it",
+                        rule.name
+                    )));
+                    continue;
+                };
+                if name.trim().is_empty() {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': with_component name must be non-empty",
+                        rule.name
+                    )));
+                }
+                let Some(region) = rule.region.as_ref() else {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': forbidden_region requires 'region' — \
+                         an author-declared no-go zone, e.g. \
+                         {{\"center\": [0.0, 0.5, 0.0], \"half_extents\": [0.4, 1.0, 12.0]}}",
+                        rule.name
+                    )));
+                    continue;
+                };
+                if region.center.iter().any(|c| !c.is_finite()) {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': region center must be finite in \
+                         every axis (got {:?})",
+                        rule.name, region.center
+                    )));
+                }
+                if region
+                    .half_extents
+                    .iter()
+                    .any(|h| !h.is_finite() || *h <= 0.0)
+                {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': region half_extents must be finite \
+                         and > 0 in every axis (got {:?}) — a zero-thickness \
+                         wall is a plane, not a volume; use positive extents",
+                        rule.name, region.half_extents
+                    )));
+                }
+                if let Some(allow_if) = rule.allow_if.as_deref() {
+                    if allow_if.trim().is_empty() {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': 'allow_if' must be a non-empty \
+                             registered component name — an exemption naming \
+                             nothing exempts nothing",
+                            rule.name
+                        )));
+                    }
+                }
+                // The soak: required, finite, positive, with the
+                // same declared-rate fit arithmetic as pairwise
+                // (the window is consumed in driver units; default
+                // driver: the frame clock in seconds).
+                match rule.window_s {
+                    None => {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': forbidden_region requires \
+                             'window_s' — the soak in driver-leaf units \
+                             (default driver: the frame clock, so seconds); \
+                             incursion episodes shorter than the soak are \
+                             discarded as transient fly-bys",
+                            rule.name
+                        )));
+                    }
+                    Some(window_s) => {
+                        if !window_s.is_finite() || window_s <= 0.0 {
+                            errors.push(ScenarioError::Rejected(format!(
+                                "invariant '{}': window_s must be a finite \
+                                 number > 0 (got {window_s})",
+                                rule.name
+                            )));
+                        }
+                        let effective_wall_s = match rule.driver_units_per_second {
+                            Some(rate) => {
+                                if !rate.is_finite() || rate <= 0.0 {
+                                    errors.push(ScenarioError::Rejected(format!(
+                                        "invariant '{}': driver_units_per_second must be a \
+                                         finite number > 0 (got {rate})",
+                                        rule.name
+                                    )));
+                                    None
+                                } else {
+                                    Some((window_s / rate) as f64)
+                                }
+                            }
+                            None => Some(window_s as f64),
+                        };
+                        if let Some(effective_wall_s) = effective_wall_s {
+                            if effective_wall_s > scenario.duration_s as f64 {
+                                errors.push(ScenarioError::Rejected(format!(
+                                    "invariant '{}': soak window ({window_s} driver units, \
+                                     {effective_wall_s:.1}s effective) exceeds the run \
+                                     duration ({duration}s) — a soak the run can never \
+                                     elapse is unjudgeable; shorten window_s, or adjust \
+                                     driver_units_per_second",
+                                    rule.name,
+                                    duration = scenario.duration_s
+                                )));
+                            }
+                        }
+                    }
+                }
+                // Driver fields: pairwise's both-halves-or-neither
+                // doctrine verbatim — no `resource` to default the
+                // host to; omit both to soak against the frame
+                // clock in seconds.
+                let has_dr = rule.driver_resource.is_some();
+                let has_dp = rule.driver_path.is_some();
+                if has_dr != has_dp {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': forbidden_region's driver needs \
+                         both 'driver_resource' and 'driver_path' — unlike \
+                         stagnant_resource there is no 'resource' to default \
+                         the host to; omit both to soak against the frame \
+                         clock in seconds",
+                        rule.name
+                    )));
+                }
+                if rule.driver_units_per_second.is_some() && !(has_dr && has_dp) {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': driver_units_per_second needs the \
+                         driver declared ('driver_resource' + 'driver_path') — \
+                         the default frame-clock driver is seconds by \
+                         definition and has no declarable rate",
+                        rule.name
+                    )));
+                }
+                if let Some(dp) = rule.driver_path.as_deref() {
+                    if dp.trim().is_empty() {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': 'driver_path' must be non-empty — \
+                             a blank reflect path resolves the resource root, \
+                             never a numeric leaf",
+                            rule.name
+                        )));
+                    }
+                }
+                if let Some(dr) = rule.driver_resource.as_deref() {
+                    if dr.trim().is_empty() {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': 'driver_resource' must be non-empty",
+                            rule.name
+                        )));
+                    }
+                }
+                // Foreign fields (eventually_s excluded: the
+                // generic eventually-mode check above already
+                // rejects it — one defect, one error). allow_if and
+                // region belong HERE only; other rules reject them
+                // via deny_unknown_fields... no — they are fields
+                // on Invariant, so each foreign arm must reject
+                // them explicitly (the accepted-and-ignored
+                // reserved-field hole).
+                if rule.check.is_some()
+                    || rule.value.is_some()
+                    || rule.path.is_some()
+                    || rule.resource.is_some()
+                    || rule.min_x.is_some()
+                    || rule.max_x.is_some()
+                    || rule.min_y.is_some()
+                    || rule.max_y.is_some()
+                    || rule.min_z.is_some()
+                    || rule.max_z.is_some()
+                    || rule.min_distance.is_some()
+                    || rule.tolerance.is_some()
+                    || rule.grace_frames.is_some()
+                    || !rule.exclude_components.is_empty()
+                {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': forbidden_region does not use \
+                         check/value/eventually_s/path/resource/bounds/min_distance/\
+                         tolerance/grace_frames/exclude_components — it judges \
+                         entity POSITIONS against the declared region and folds \
+                         consecutive incursion frames into episodes within \
                          window_s",
                         rule.name
                     )));

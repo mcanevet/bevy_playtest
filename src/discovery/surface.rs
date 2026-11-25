@@ -308,6 +308,14 @@ pub struct ViolationMeta {
     /// the roster holds the full story.
     #[serde(default)]
     pub consistency_episode: Option<ConsistencyEpisodeMeta>,
+    /// `forbidden_region` only: the incursion episode's evidence —
+    /// the distinct incursive entities (first/worst frames and a
+    /// frame count per entity, capped, truncation disclosed via
+    /// `roster_truncated`). Same doctrine as the pairwise block:
+    /// the detail text names the deepest incursion, the roster
+    /// holds the full story.
+    #[serde(default)]
+    pub forbidden_episode: Option<ForbiddenEpisodeMeta>,
 }
 
 /// The `pairwise_separation` episode evidence block (`_meta`).
@@ -393,6 +401,47 @@ pub struct ConsistencyRosterEntry {
     pub violating_frames: u64,
 }
 
+/// The `forbidden_region` episode evidence block (`_meta`). Roster
+/// entries are single entities, ordered worst first (maximum
+/// penetration depth, then earliest frame). `PartialEq` only — the
+/// block carries `f32` depths, which have no total `Eq`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ForbiddenEpisodeMeta {
+    /// How many DISTINCT incursive entities the episode saw in
+    /// total — `roster.len()` plus the entities the cap dropped.
+    /// Disclosed so `_meta` never lies by omission when a crowd
+    /// exceeds the cap (`roster_truncated`).
+    pub sampled_entities: u64,
+    /// Distinct incursive entities with first/worst/count
+    /// evidence, worst-first. Capped at the roster cap;
+    /// `roster_truncated` discloses when the episode had more.
+    pub roster: Vec<ForbiddenRosterEntry>,
+    /// True when the episode saw more distinct entities than the
+    /// roster cap admits — disclosed truncation, never silent
+    /// subsampling.
+    pub roster_truncated: bool,
+}
+
+/// One roster entry: the evidence for one distinct incursive
+/// entity inside an episode. Serialized field names are
+/// wire-stable (`entity`, `first_frame`, `worst_frame`,
+/// `worst_depth`, `violating_frames`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ForbiddenRosterEntry {
+    /// The incursive entity's index.
+    pub entity: u32,
+    /// First violating frame this entity was seen in the episode.
+    pub first_frame: u64,
+    /// The maximum penetration depth observed for this entity
+    /// (distance to the nearest region face; deeper is worse).
+    pub worst_depth: f32,
+    /// The frame the worst (maximum) depth was seen at.
+    pub worst_frame: u64,
+    /// How many frames this entity stayed incursive within the
+    /// episode.
+    pub violating_frames: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,6 +462,7 @@ mod tests {
                 stepping: Some(true),
                 pairwise_episode: None,
                 consistency_episode: None,
+                forbidden_episode: None,
             }),
         };
         let json = serde_json::to_string(&entry).unwrap();

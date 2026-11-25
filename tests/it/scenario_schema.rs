@@ -347,6 +347,198 @@ fn rejects_custom_invariants_at_parse_time() {
     );
 }
 
+// -----------------------------------------------------------------------
+// forbidden_region grammar (the episode-tier no-go-zone oracle)
+// -----------------------------------------------------------------------
+
+fn forbidden_json(
+    selector: Option<&str>,
+    region: serde_json::Value,
+    window_s: serde_json::Value,
+) -> serde_json::Value {
+    let selector = match selector {
+        Some(name) => serde_json::json!({ "with_component": { "name": name } }),
+        None => serde_json::json!(null),
+    };
+    serde_json::json!({
+        "bot": { "type": "chaos" },
+        "duration_s": 10.0,
+        "invariants": [{
+            "name": "no_rail_tunneling",
+            "rule": "forbidden_region",
+            "target_selector": selector,
+            "region": region,
+            "window_s": window_s,
+        }],
+    })
+}
+
+fn good_region() -> serde_json::Value {
+    serde_json::json!({
+        "center": [0.0, 0.5, 0.0],
+        "half_extents": [0.5, 1.0, 0.5],
+    })
+}
+
+#[test]
+fn forbidden_region_parses_and_validates_clean() {
+    // The full authoring surface is real: parse succeeds, shape
+    // lint is clean, validation accepts — the episode recorder
+    // evaluates the rule at run time.
+    let s = parse(forbidden_json(
+        Some("Wanderer"),
+        good_region(),
+        serde_json::json!(1.0),
+    ));
+    assert!(s.invariants[0].region.is_some());
+    let errs = lint_errors(forbidden_json(
+        Some("Wanderer"),
+        good_region(),
+        serde_json::json!(1.0),
+    ));
+    assert!(
+        errs.is_empty(),
+        "well-formed grammar must lint clean: {errs:?}"
+    );
+    validate_scenario(&s).expect("well-formed forbidden_region validates");
+}
+
+#[test]
+fn forbidden_region_requires_a_component_selector() {
+    // "all" is the deserialized absence of a selector: forbidding a
+    // region to every Transform in the world — walls, camera, UI —
+    // is never what an author means.
+    let errs = lint_errors(forbidden_json(None, good_region(), serde_json::json!(1.0)));
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("forbidden_region requires") && e.contains("target_selector")),
+        "{errs:?}"
+    );
+}
+
+#[test]
+fn forbidden_region_requires_a_region() {
+    // No box, no rule: a regionless forbidden_region would vac-pass.
+    let mut json = forbidden_json(
+        Some("Wanderer"),
+        serde_json::json!(null),
+        serde_json::json!(1.0),
+    );
+    json["invariants"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("region");
+    let errs = lint_errors(json);
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("requires a region") || e.contains("region")),
+        "{errs:?}"
+    );
+}
+
+#[test]
+fn forbidden_region_requires_finite_positive_extents() {
+    // A non-positive half-extent is not a box: a zero-thickness
+    // region is a plane (nothing can enter it — vacuous), a
+    // negative one is an empty slab. Neither is ever an author's
+    // meaning. (JSON cannot carry NaN/Infinity as numbers, so the
+    // finiteness half of the check is unreachable from the wire —
+    // zero/negative are the wire-representable degenerate shapes.)
+    for bad in [
+        serde_json::json!({ "center": [0.0, 0.5, 0.0], "half_extents": [0.0, 1.0, 0.5] }),
+        serde_json::json!({ "center": [0.0, 0.5, 0.0], "half_extents": [-0.5, 1.0, 0.5] }),
+    ] {
+        let errs = lint_errors(forbidden_json(
+            Some("Wanderer"),
+            bad,
+            serde_json::json!(1.0),
+        ));
+        assert!(!errs.is_empty(), "degenerate region must reject: {errs:?}");
+    }
+}
+
+#[test]
+fn forbidden_region_requires_window_s() {
+    // window_s is the episode soak: without it there is no
+    // judgment — a region could never fire regardless of how long
+    // entities tunnel through it.
+    let mut json = forbidden_json(Some("Wanderer"), good_region(), serde_json::json!(null));
+    json["invariants"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("window_s");
+    let errs = lint_errors(json);
+    assert!(errs.iter().any(|e| e.contains("window_s")), "{errs:?}");
+}
+
+#[test]
+fn forbidden_region_declared_rate_must_fit_the_run() {
+    // Same declared-rate fit arithmetic as pairwise_separation: a
+    // soak the run can never elapse is unjudgeable, rejected at
+    // load.
+    let mut json = forbidden_json(Some("Wanderer"), good_region(), serde_json::json!(600.0));
+    json["invariants"][0]["driver_resource"] = serde_json::json!("FrMatchClock");
+    json["invariants"][0]["driver_path"] = serde_json::json!("minutes");
+    json["invariants"][0]["driver_units_per_second"] = serde_json::json!(10.0);
+    let errs = lint_errors(json);
+    assert!(
+        errs.iter().any(|e| e.contains("exceeds the run duration")),
+        "600 units at 10/s = 60s > 10s run: {errs:?}"
+    );
+
+    // A fitting rate passes the fit check — the declaration lints
+    // clean end to end.
+    let mut json = forbidden_json(Some("Wanderer"), good_region(), serde_json::json!(50.0));
+    json["invariants"][0]["driver_resource"] = serde_json::json!("FrMatchClock");
+    json["invariants"][0]["driver_path"] = serde_json::json!("minutes");
+    json["invariants"][0]["driver_units_per_second"] = serde_json::json!(10.0);
+    let errs = lint_errors(json);
+    assert!(
+        errs.is_empty(),
+        "fitting rate, complete declaration: {errs:?}"
+    );
+}
+
+#[test]
+fn forbidden_region_rejects_foreign_fields() {
+    // The one generic foreign-field check: `region`/`allow_if`
+    // belong to forbidden_region alone, and every other rule's
+    // fields are foreign here (min_distance is pairwise's
+    // threshold, tolerance is DTC's). Both directions must reject
+    // — the cross-products must never silently no-op.
+    for (field, value) in [
+        ("min_distance", serde_json::json!(0.5)),
+        ("tolerance", serde_json::json!(0.01)),
+        ("check", serde_json::json!("le")),
+        ("value", serde_json::json!(1.0)),
+    ] {
+        let mut json = forbidden_json(Some("Wanderer"), good_region(), serde_json::json!(1.0));
+        json["invariants"][0][field] = value;
+        let errs = lint_errors(json);
+        assert!(
+            errs.iter().any(|e| e.contains(field)),
+            "'{field}' must be rejected on forbidden_region: {errs:?}"
+        );
+    }
+
+    // And the reverse: `region` on another rule rejects too.
+    let mut json = minimal_scenario("chaos");
+    json["invariants"] = serde_json::json!([{
+        "name": "hp_floor",
+        "rule": "component_check",
+        "target_selector": {"with_component": {"name": "Hp"}},
+        "path": "current",
+        "check": "le",
+        "value": 100,
+        "region": good_region(),
+    }]);
+    let errs = lint_errors(json);
+    assert!(
+        errs.iter().any(|e| e.contains("region")),
+        "'region' must be rejected on component_check: {errs:?}"
+    );
+}
+
 fn pairwise_json(
     selector: Option<&str>,
     min_distance: serde_json::Value,

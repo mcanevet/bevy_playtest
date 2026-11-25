@@ -610,6 +610,11 @@ fn lint_probe_wanted(scenario: &crate::scenario::Scenario) -> bool {
             // slice; until then the rule rejects at stage 1 with
             // NotImplemented).
             InvariantRule::DerivedTransformConsistency => true,
+            // forbidden_region resolves its selector (and the
+            // optional allow_if exemption component) via the same
+            // registry machinery at probe time — the driver-loop
+            // episode recorder uses the same resolution.
+            InvariantRule::ForbiddenRegion => true,
             // spawn_safety resolves BOTH selectors via the same
             // registry machinery at probe time.
             InvariantRule::SpawnSafety => true,
@@ -712,6 +717,7 @@ fn lint_registry_probe(
                 InvariantRule::DerivedTransformConsistency => {
                     "derived-transform consistency selector probes"
                 }
+                InvariantRule::ForbiddenRegion => "forbidden region selector probes",
                 InvariantRule::SpawnSafety => "spawn safety selector probes",
             };
             findings.push(ScenarioError::Rejected(format!(
@@ -767,6 +773,32 @@ fn lint_registry_probe(
                     if let Err(why) =
                         crate::invariant_eval::resolve_registration(&registry, name, "component")
                     {
+                        findings.push(ScenarioError::Rejected(inv_name(&why)));
+                    }
+                }
+            }
+            InvariantRule::ForbiddenRegion => {
+                // Same probe doctrine as pairwise: the selector
+                // names a component TYPE that must resolve at run
+                // time. allow_if is probed too — the exemption is a
+                // definite component resolution (exact name, not a
+                // prefix), so a typo in it is a DEFINITE run error
+                // the lint front-loads.
+                if let Some(crate::enums::TargetSelector::WithComponent { name }) =
+                    inv.target_selector.as_ref()
+                {
+                    if let Err(why) =
+                        crate::invariant_eval::resolve_registration(&registry, name, "component")
+                    {
+                        findings.push(ScenarioError::Rejected(inv_name(&why)));
+                    }
+                }
+                if let Some(allow_if) = inv.allow_if.as_deref() {
+                    if let Err(why) = crate::invariant_eval::resolve_registration(
+                        &registry,
+                        allow_if,
+                        "component",
+                    ) {
                         findings.push(ScenarioError::Rejected(inv_name(&why)));
                     }
                 }
