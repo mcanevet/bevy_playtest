@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [0.20.0](https://github.com/mcanevet/bevy_playtest/compare/v0.19.0...v0.20.0) - 2026-11-25
+
+### Added
+
+- *(held)* extend the passing-invariant trace to spawn_safety
+- *(spawn_safety)* archetype-entry spatial oracle — grammar, diff/judge recorder, wiring
+- *(dtc)* [**breaking**] promote derived_transform_consistency to gating on flip-test evidence
+- *(dtc)* pile-up flip-test evidence — RED/GREEN pair and rotation/scale negative
+
+### Fixed
+
+- *(review)* state the true id-reuse mechanism — eager allocation + bumped frees
+- *(review)* fold reviewer NITs 1-3 — doc claim, error dedup, corner truth
+- *(episode)* dedup recurring keys against the episode-wide seen-set
+
+### Other
+
+- spawn_safety — schema grammar, report fields, proposal cross-check
+- *(spawn_safety)* respawn-ring litmus battery
+
 ## [0.19.0](https://github.com/mcanevet/bevy_playtest/compare/v0.18.0...v0.19.0) - 2026-11-24
 
 ### Added
