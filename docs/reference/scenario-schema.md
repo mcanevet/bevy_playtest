@@ -470,8 +470,10 @@ Two distinct error classes, at different stages:
   would masquerade as a temporal bound that never existed. The
   spawn vocabulary extends the same doctrine:
   `min_distance_from`/`spawn_only` are meaningful only on
-  `spawn_safety`, `min_distance`/`window_s`/`driver_*` never on
-  it — an `all` target_selector there rejects too (the judged
+  `spawn_safety`, `min_distance` it shares with
+  `pairwise_separation` (required there, required here), and
+  `window_s`/`driver_*` never on it — an `all` target_selector
+  there rejects too (the judged
   archetype must be named; `min_distance_from` is the side that
   may go `all`). Blank
   string fields (`path`, `driver_path`, `driver_resource`,

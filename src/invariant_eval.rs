@@ -3189,7 +3189,13 @@ pub fn audit_derived_transform_consistency(
 // half of the diff: a despawned pair VANISHES from the previous
 // snapshot, so its recycled re-entry arrives as an unknown
 // pair and is judged anew (a stale membership record cannot
-// hide an entry).
+// hide an entry — and the tempting same-frame corner, a despawn
+// and same-slot recycle landing in one update, cannot occur:
+// bevy's command queue FREES SLOTS AT APPLY, so a slot despawned
+// via commands is never re-handed-out within the same tick, and
+// the world-mut direct API is outside the driver-loop
+// recorder's observation window — pinned by
+// same_frame_death_and_recycle_corner_is_pinned_as_not_judged).
 // ---------------------------------------------------------------------
 
 /// Bookkeeping for `spawn_safety` invariants across frames (the
