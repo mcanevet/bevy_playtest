@@ -608,7 +608,16 @@ impl HeldBookkeeping {
                     } else if inv.rule == InvariantRule::EntityStagnation {
                         (
                             stag_book.config_errored.contains(&inv.name),
-                            stag_book.matched.contains(&inv.name),
+                            // Watchability OR selector resolution: a
+                            // resolved selector whose entities never
+                            // satisfied leaf_where is a PASS WITH
+                            // EVIDENCE (the bookkeeping keeps both
+                            // markers for exactly this story), while a
+                            // selector that never resolved at all is
+                            // vacuity — no held entry may claim a
+                            // workload that never happened.
+                            stag_book.matched.contains(&inv.name)
+                                || stag_book.selector_resolved.contains(&inv.name),
                             stag_book.episode_stats.get(&inv.name),
                         )
                     } else {

@@ -4215,14 +4215,20 @@ fn apply_stag_outcome(
     }
     // Selector-resolution evidence: the enumeration walked ≥1
     // selector-component entity. `matched` (watchability: the
-    // rule actually judged entities) requires ≥1 digest — a
+    // rule actually judged digests) requires ≥1 digest — a
     // resolved selector whose entities never satisfy
-    // leaf_where is a held-trace workload fact, not vacuity.
+    // leaf_where is a PASS with evidence: the held entry must
+    // still exist (frames_judged counts the sampled frames the
+    // selector enumerated, entity_judgments stays 0), so the
+    // collector admits on EITHER marker. Distinct from the DTC
+    // mirror where zero judged frames means never exercised:
+    // here the watch WAS live — the world simply never offered a
+    // qualifying leaf.
     if outcome.enumerated > 0 {
         book.selector_resolved.insert(inv.name.clone());
-    }
-    if !outcome.digests.is_empty() {
-        book.matched.insert(inv.name.clone());
+        if !outcome.digests.is_empty() {
+            book.matched.insert(inv.name.clone());
+        }
         book.episode_stats
             .entry(inv.name.clone())
             .or_default()
