@@ -35,7 +35,8 @@
   the pass-side evidence trace — one compact object per PASSING
   `resource_check` / `stagnant_resource` / `component_check` /
   `nodes_in_bounds` / `pairwise_separation` /
-  `derived_transform_consistency` / `spawn_safety` invariant,
+  `derived_transform_consistency` / `spawn_safety` / `forbidden_region` /
+  `entity_stagnation` invariant,
   the mirror of the
   violations list for invariants that held. A passing run previously
   carried zero per-invariant evidence (a deadline met at frame 299 of
@@ -47,7 +48,7 @@
     for the episode rules the selector component, or `all` for
     DTC's whole-hierarchy scope; `forbidden_region` names its
     selector component; for `spawn_safety` the selector
-    component)
+    component; for `entity_stagnation` the selector component)
   - `frames_matched` — frames on which the check resolved and
     judged something (existence evidence; `frames_matched: 0` plus a
     `vacuous_invariant` finding is the wrong-path signal, since
@@ -56,7 +57,8 @@
     the frames the rule had something to judge — pairwise: ≥2
     checkable entities co-existed, DTC: ≥1 checkable parented
     entity past the grace window, forbidden_region: ≥1 checkable
-    selected entity; for `spawn_safety`, the frames
+    selected entity, entity_stagnation: ≥1 sampled frame the
+    selector enumerated entities, digests or not; for `spawn_safety`, the frames
     with ≥1 resolvable anchor — the frames an incoming entry
     would have been judged on had one arrived)
   - `predicate` (`resource_check` and `component_check`: the
@@ -64,7 +66,9 @@
     the rule's threshold rendered the same way — `ge <min_distance>`
     for pairwise, `le <tolerance>` for DTC with the documented
     default when the author omitted it, `inside at most <window_s>
-    driver units` for forbidden_region; `spawn_safety` renders
+    driver units` for forbidden_region, `window <window_s>` for
+    entity_stagnation (the soak threshold the episode judge
+    compares against); `spawn_safety` renders
     `ge <min_distance>`, pairwise-shaped)
   - `observed_min` / `observed_max` (`resource_check` only) —
     extrema of the sampled leaf across matched frames
@@ -76,7 +80,10 @@
     first frame the predicate held and the audited deadline
     (`eventually_s × tps`, ceiled)
   - `episodes_fired` / `driver_advanced` / `driver`
-    (`stagnant_resource` only) — stagnation episodes that fired (0 on
+    (`stagnant_resource` only — `entity_stagnation` keeps
+    `episodes_fired` at zero on passing runs too, its findings
+    arriving as soaked episodes instead; the per-run episode
+    story lives in `episodes_observed`) — stagnation episodes that fired (0 on
     a passing run) and the run-total driver-leaf advance (sum of
     positive deltas across fully-observed frames; gaps and rewinds
     are never credited), plus the driver reflect path
@@ -86,7 +93,9 @@
   - `entity_judgments` (component tier: `component_check` /
     `nodes_in_bounds`; also `derived_transform_consistency`;
     `spawn_safety` reuses the field for run-total ENTRIES judged —
-    once per entry, not per frame, the transition-frame doctrine) —
+    once per entry, not per frame, the transition-frame doctrine;
+    `forbidden_region` sums the selected entities per judged frame)
+    —
     run-total entity-judgments: the sum of
     per-frame matched-entity counts over observed frames. A
     workload figure ("N entity-judgments were made"), not a census —
@@ -102,7 +111,8 @@
     it get" evidence. Bounds judge containment, not a thresholded
     leaf, so `nodes_in_bounds` carries workload fields only
   - `episodes_observed` (episode rules: `pairwise_separation`,
-    `derived_transform_consistency`, `forbidden_region`) — total
+    `derived_transform_consistency`, `forbidden_region`,
+    `entity_stagnation`) — total
     episodes observed this
     run INCLUDING the sub-soak ones the soak judgment discarded as
     transients: a passing run's episodes are precisely its
@@ -126,7 +136,12 @@
     reuses directly: its `entity_judgments` sums the checkable
     parented entities per judged frame; `forbidden_region` the
     same way — its `entity_judgments` sums the selected entities
-    per judged frame (a workload figure, not a census)
+    per judged frame (a workload figure, not a census);
+    `entity_stagnation` per SAMPLED frame — one digest read per
+    selected entity at every cadence tick the selector enumerated,
+    so a watch that judged at every sample reports its per-sample
+    workload even on a clean run (a lull, judged, is still
+    evidence the watch was live)
   - `entries_clean` (`spawn_safety` only) — run-total entries judged
     CLEAN (entered at least `min_distance` from every same-frame
     anchor): together with its `entity_judgments` (ALL entries
@@ -135,6 +150,16 @@
     the never-exercised twin; a zero-entries run earns no held
     entry at all (an archetype that never gained a member proved
     nothing about entry safety)
+- the held-trace ADMISSION split for `entity_stagnation`: an entry
+  appears when the selector RESOLVED checkable entities OR the
+  watch was watchable (its component registered with a resolvable
+  watch path — both markers exist in the bookkeeping for exactly
+  this story). A live watch the world never offered a qualifying
+  `leaf_where` state keeps its entry with ZERO judgments — a PASS
+  WITH EVIDENCE, never vacuity; only a selector that never
+  resolved at all is `vacuous_invariant` (the run already failed
+  on it), and a zero-instance watch earns no held entry via the
+  resolution marker alone
 - the violation-entry `_meta` block (wire key `_meta`): rule-owned
   structured evidence appended to findings. `pairwise_episode`
   (`sampled_pairs`, capped `roster` of per-pair worst-first
@@ -146,7 +171,17 @@
   `worst_depth` (penetration depth to the nearest face; deeper is
   worse), `worst_frame`, `violating_frames` — capped at 32 with
   `roster_truncated` disclosing the drop, so a crowd cannot hide
-  behind the cap. `stepping` (step-capture runs) predates the
+  behind the cap. `stagnation_episode` for `entity_stagnation`
+  findings: `sampled_entities` (distinct stuck entities this
+  episode), `roster` — per-entity `entity` (index) AND
+  `generation` (slot recycling must never weld a successor to
+  its predecessor's stint), `first_frame`, `last_frame` (the
+  stint's end: change, despawn, or run end), `stuck_span` (the
+  entity's accrued stuck-span in driver-leaf units, frozen at
+  stint end), `stuck_frames` (sampled frames stuck) — worst-first
+  (longest span, then earliest frame), capped at 32 with
+  `roster_truncated` disclosing the drop. `stepping` (step-capture
+  runs) predates the
   episode blocks. All fields are wire-stable names
 - `harness_mode`: `"in_process"` for a real run, or `"lint"` for a
   lint-mode artifact (see below)

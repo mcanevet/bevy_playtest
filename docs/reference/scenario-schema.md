@@ -281,7 +281,8 @@ to the full run stays accepted — fly-by controls pin this shape:
 a judged episode approaches but, by the grace and frame budget,
 never exactly reaches a full-run span) rejects at load for the
 soak-family rules (`pairwise_separation`,
-`derived_transform_consistency`, `forbidden_region`). Otherwise the recorder would
+`derived_transform_consistency`, `forbidden_region`,
+`entity_stagnation`). Otherwise the recorder would
 silently discard every episode as sub-soak — a run that proves
 nothing, reported as Pass. For `derived_transform_consistency`
 the check compounds with `grace_frames`: episodes accrue span
@@ -464,7 +465,9 @@ Two distinct error classes, at different stages:
   (`resource`, `window_s`, `driver_resource`, `driver_path`) is
   meaningful only on `resource_check` / `stagnant_resource`
   (`window_s`/`driver_*` also on `pairwise_separation`,
-  `derived_transform_consistency`, and `forbidden_region`), and
+  `derived_transform_consistency`, and `forbidden_region`, and —
+  as the `driver`/`resource` discriminator — `entity_stagnation`),
+  and
   binding any of it to `component_check` or `nodes_in_bounds` fails
   at load — a silently-ignored `window_s` on a component check
   would masquerade as a temporal bound that never existed. The
@@ -819,3 +822,75 @@ Two distinct error classes, at different stages:
   `path`/`resource`/`eventually_s` and the bounds fields are
   rejected at load; `min_distance_from`/`spawn_only` on other
   rules are rejected too (foreign fields).
+- `entity_stagnation`: the per-entity rate-form liveness oracle
+  — the rule for the immortal-guest incident class (guests
+  arrive at a demolished ride, enter `Queued`, and wait
+  forever: no panic, no error log, the world looks perfectly
+  alive; only the per-entity soak can name the stuck one).
+  `target_selector` is REQUIRED (`with_component` only; an
+  explicit `all` rejects at load — stagnation-watching every
+  `Transform` in the world, walls and cameras included, would
+  judge legitimately inert scenery) and selects the watched
+  entities. `watch_path` is required and names the REFLECT
+  PATH of the leaf whose value is digest-compared across
+  samples — e.g. `hunger` (a plain field) or
+  `state.Queued.waited` (a variant-qualified path reaching
+  into an enum's struct variant). The watch is SCOPED: a
+  mutation anywhere OUTSIDE the path does not clear stagnation
+  (watching `state` does not care that `hunger` mutated), and
+  the digest comparison is BITWISE on the leaf's value — f32
+  bit patterns via `to_bits()` — so -0.0 → +0.0 counts as a
+  change and distinct NaN payloads are distinct values; the
+  leaf must actually change bits. `leaf_where` (optional) is a
+  precondition with a deliberately narrow grammar,
+  `path == VariantName` — only entities whose reflected `path`
+  currently holds `VariantName` are watched (e.g.
+  `state == Queued`), so a guest who walks past a demolition
+  site healthy is never judged for standing still. The path
+  and the variant are checked at PROBE time: a typo there
+  surfaces as an `oracle_error`, never a silent never-true. A
+  variant-qualified `watch_path` implies the corresponding
+  `leaf_where`; both present is legal and idempotent. The
+  leaf is read on a SAMPLED CADENCE: every `sampling_s` of
+  driver-leaf advance (default 1.0 driver-leaf unit; the
+  cadence converts
+  through a declared `driver_units_per_second` the same way
+  `window_s` does), with fit checks at load — a sub-frame
+  cadence rejects (repeated identical samples) and
+  `window_s >= 2 * sampling_s` is enforced so a soak always
+  spans at least two samples. `driver` picks the clock the
+  budget is consumed against: `"global_time"` (the default —
+  the frame clock) or `"resource"` (soak against a game leaf
+  via `driver_resource` + `driver_path` + optional
+  `driver_units_per_second`), the same both-halves-or-neither
+  grammar as `pairwise_separation` (the driver must strictly
+  advance; a retreating driver is a seek, not progress).
+  `window_s` is REQUIRED and is the SOAK: a stretch where an
+  entity's leaf is digest-constant across consecutive samples
+  accrues span in driver-leaf units (sample-to-sample driver
+  advance, summed — RELAY SAFE: a stint ending by change or
+  despawn banks its span, a sampled gap where no qualifying
+  entity was readable contributes nothing, and a successor
+  entity at a recycled slot is a NEW (index, generation) pair
+  whose stint starts fresh — slot recycling can never weld a
+  successor to its predecessor's stint, and despawn is
+  ACQUITTAL: turnover never refunds the span already served).
+  An episode — a maximal connected stretch of stuck entities —
+  only becomes a finding when its worst entity's span soaks
+  past `window_s`; sub-soak stints are discarded as lulls. The
+  finding's `_meta` carries a capped roster of distinct stuck
+  entities (index AND generation, first/worst frames, accrued
+  stuck-span in driver units per entity, truncation
+  disclosed) — the immortal guest cannot hide behind a crowd.
+  Vacuity is SPLIT by what the world offered: a selector that
+  never RESOLVED a checkable entity over the whole run →
+  `vacuous_invariant`; a resolved watch whose `leaf_where` was
+  never satisfied is a PASS WITH EVIDENCE (the held trace
+  keeps its entry with zero judgments — the world simply never
+  offered the qualifying state); likewise a watch that ran and
+  judged every sample but saw no stuck leaf is a pass whose
+  per-sample digest workload still lands in the held trace.
+  `check`/`value`/`eventually_s`/`path`/`resource`/
+  `min_distance`/`region`/`tolerance` and the bounds fields
+  are rejected at load; `watch_path`/`leaf_where`/`sampling_s`
+  on other rules are rejected too (foreign fields).
