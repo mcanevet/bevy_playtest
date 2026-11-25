@@ -806,3 +806,174 @@ fn leaf_where_never_true_is_a_clean_pass_not_vacuity() {
         report.violations
     );
 }
+
+// ---------------------------------------------------------------------------
+// Held trace: the near-miss story a passing run tells
+// ---------------------------------------------------------------------------
+
+/// A PASSING stagnation watch still leaves a held entry when it
+/// judged entities: the sub-soak episodes it observed (and the
+// soak judgment discarded) are exactly the run's near-misses, and
+/// the trace must carry them. `waited` ticks — no stint ever
+/// accrues — but `entity_judgments` counts the digests read at
+/// every sampled frame (1 entity × every sample), and the entry
+/// survives as evidence the watch was live.
+#[test]
+fn passing_watch_reports_entity_judgments_in_the_held_trace() {
+    let _slot = common::run_slot();
+    let mut app = base_app();
+    app.add_systems(Update, |mut q: Query<&mut StagGuest>| {
+        for mut g in q.iter_mut() {
+            if let StagGuestState::Queued { waited } = &mut g.state {
+                *waited += 1.0 / 60.0;
+            }
+        }
+    });
+    app.world_mut().spawn((
+        StagGuest {
+            state: StagGuestState::Queued { waited: 0.0 },
+        },
+        Transform::default(),
+    ));
+    let report = run_scenario(&mut app, &scenario_with_invariant(QUEUE_INV)).unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    let held = report
+        .held_invariants
+        .iter()
+        .find(|h| h.name == "queued_guests_must_not_wait_forever")
+        .expect("a passing stagnation watch still earns a held entry");
+    assert_eq!(held.rule, "entity_stagnation");
+    // 6.0 s at 60 tps = 360 ticks, stride 60: samples at frames
+    // 0, 60, ..., 300 — six samples, one digest each.
+    assert_eq!(held.entity_judgments, Some(6));
+    assert_eq!(held.episodes_observed, Some(0), "nothing was ever stuck");
+    // NB: `episodes_fired` is the stagnant-resource tier's field;
+    // the episode tier's near-miss story is `episodes_observed`.
+    assert!(held.worst_episode_span.is_none());
+}
+
+/// The near-miss story: a guest stuck only BELOW the soak (frozen
+/// 1.5 s against a 2.0 s window, then hops) is the discard the
+/// held trace exists to keep. The stint must show up as exactly
+/// one observed episode with its banked span, and the worst-span
+/// witness must carry it — while the run still passes.
+#[test]
+fn sub_soak_stint_lands_in_the_held_trace_as_a_near_miss() {
+    let _slot = common::run_slot();
+    let mut app = base_app();
+    // Frozen until frame 155 (between samples 120 and 180), then
+    // ticking continuously: the stint seeds at sample 60 (first
+    // 0.0), accrues one inter-sample interval (1.0 s of frame
+    // clock) at sample 120, and the hop+tick closes it at sample
+    // 180 — exactly one sub-soak near-miss, never a second stint.
+    app.add_systems(
+        Update,
+        |mut q: Query<&mut StagGuest>, mut clock: Local<u32>| {
+            *clock += 1;
+            if *clock > 155 {
+                for mut g in q.iter_mut() {
+                    if let StagGuestState::Queued { waited } = &mut g.state {
+                        *waited += 1.0 / 60.0;
+                    }
+                }
+            }
+        },
+    );
+    app.world_mut().spawn((
+        StagGuest {
+            state: StagGuestState::Queued { waited: 0.0 },
+        },
+        Transform::default(),
+    ));
+    let report = run_scenario(&mut app, &scenario_with_invariant(QUEUE_INV)).unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    let held = report
+        .held_invariants
+        .iter()
+        .find(|h| h.name == "queued_guests_must_not_wait_forever")
+        .expect("the near-miss run keeps its held entry");
+    // Exactly one closed sub-soak episode; its span is ≥ the one
+    // inter-sample interval the stint covered (1.0 s) and < the
+    // 2.0 s soak. The worst-span witness names the same episode.
+    assert_eq!(held.episodes_observed, Some(1));
+    let (span, frame) = held
+        .worst_episode_span
+        .zip(held.worst_episode_frame)
+        .expect("the near-miss span and its start frame are witnessed");
+    assert!(
+        (1.0..2.0).contains(&span),
+        "the sub-soak span must be banked: {span}"
+    );
+    assert!(frame > 0, "the stint started after the first sample");
+}
+
+/// Vacuous-not-held doctrine: a watch whose selector resolved the
+/// TYPE but matched zero entities gets NO held entry — an entry
+/// would claim a workload that never happened. (The audit already
+/// fails the run as `vacuous_invariant`; the collector's guard is
+/// the belt-and-braces mirror for the manual-App path.)
+#[test]
+fn vacuous_watch_gets_no_held_entry() {
+    let _slot = common::run_slot();
+    let mut app = base_app();
+    // Registered, reflected, ZERO instances.
+    app.register_type::<HappyGuest>();
+    app.register_type::<HappyState>();
+    let report = run_scenario(
+        &mut app,
+        &scenario_with_invariant(
+            r#"
+    "name": "watch_nobody_held",
+    "rule": "entity_stagnation",
+    "target_selector": {"with_component": {"name": "HappyGuest"}},
+    "watch_path": "state.Queued.waited",
+    "window_s": 2.0"#,
+        ),
+    )
+    .unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
+    assert!(
+        !report
+            .held_invariants
+            .iter()
+            .any(|h| h.name == "watch_nobody_held"),
+        "a zero-instance watch must not claim held evidence"
+    );
+}
+
+/// The never-stuck complement: the watch judged entities every
+/// sample but no stint ever accrued (leaf ticks, or a never-true
+/// leaf_where), and the run passes. Distinct from vacuity: the
+/// held entry EXISTS (judged entities) and reports zero episodes.
+#[test]
+fn never_stuck_watch_keeps_a_held_entry_with_zero_episodes() {
+    let _slot = common::run_slot();
+    let mut app = base_app();
+    app.world_mut().spawn((
+        StagGuest {
+            state: StagGuestState::Idle,
+        },
+        Transform::default(),
+    ));
+    let report = run_scenario(
+        &mut app,
+        &scenario_with_invariant(
+            r#"
+    "name": "queued_watch",
+    "rule": "entity_stagnation",
+    "target_selector": {"with_component": {"name": "StagGuest"}},
+    "watch_path": "state.Queued.waited",
+    "leaf_where": "state == Queued",
+    "window_s": 2.0"#,
+        ),
+    )
+    .unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    let held = report
+        .held_invariants
+        .iter()
+        .find(|h| h.name == "queued_watch")
+        .expect("a watch with a live selector keeps its held entry");
+    assert_eq!(held.entity_judgments, Some(0), "no digests were ever read");
+    assert_eq!(held.episodes_observed, Some(0));
+}
