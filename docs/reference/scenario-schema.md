@@ -757,8 +757,13 @@ Two distinct error classes, at different stages:
   Id-reuse soundness is generation-tracked: the diff keys on
   (index, generation) pairs, and a despawned pair leaving the
   previous snapshot forces every re-entry to be judged anew —
-  including the bit-identical recycled slots bevy 0.20's
-  allocator hands back. An invariant whose anchors never
+  and observable recycles cannot forge continuity anyway: the
+  World-path despawn bumps the generation before freeing
+  (`mark_free(index, 1)`), so a recycled slot returns as a NEW
+  (index, generation) pair unknown to the previous snapshot,
+  while same-tick re-fills take a fresh slot outright
+  (`Commands::spawn` allocates eagerly at queue time, before
+  any despawn command applies). An invariant whose anchors never
   resolve over the whole run → `vacuous_invariant` (the rule
   could never judge anything, the pairwise never-a-pair
   doctrine, anchor-shaped). `window_s`/`driver_resource`/
