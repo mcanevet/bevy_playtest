@@ -35,6 +35,7 @@ pub enum InvariantRule {
     DerivedTransformConsistency,
     ForbiddenRegion,
     SpawnSafety,
+    EntityStagnation,
 }
 
 impl std::fmt::Display for InvariantRule {
@@ -48,6 +49,7 @@ impl std::fmt::Display for InvariantRule {
             Self::DerivedTransformConsistency => f.write_str("derived_transform_consistency"),
             Self::ForbiddenRegion => f.write_str("forbidden_region"),
             Self::SpawnSafety => f.write_str("spawn_safety"),
+            Self::EntityStagnation => f.write_str("entity_stagnation"),
         }
     }
 }

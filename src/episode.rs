@@ -102,6 +102,24 @@ impl PairKey {
     }
 }
 
+/// Per-ENTITY stagnation identity: the entity's index AND
+/// generation. A bare index would let a recycled slot inherit its
+/// predecessor's open stint — bevy 0.20 recycles slots, and the
+/// composite key seals that corner twice (a reused index presents a
+/// NEW key, so the fold treats the successor as a fresh entity
+/// even if some intermediate bookkeeping missed the despawn).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StagKey {
+    pub index: u32,
+    pub generation: u32,
+}
+
+impl StagKey {
+    pub fn new(index: u32, generation: u32) -> Self {
+        Self { index, generation }
+    }
+}
+
 /// A per-frame violating observation: the observed KEY and the
 /// measured VALUE seen that frame. Value semantics are fixed by the
 /// folder's [`WorstDirection`] — the engine itself only requires
@@ -337,6 +355,13 @@ pub struct EpisodeFolder<K = PairKey> {
     open: Option<OpenEpisode<K>>,
     roster_cap: usize,
     direction: WorstDirection,
+    /// The frame STRIDE between consecutive observations: 1 for
+    /// every-frame recorders (the family default), or the
+    /// sampler's cadence for sampled rules (`with_step`). A push
+    /// welds to the open episode only when it lands exactly
+    /// `step` frames after the episode's end frame — "the
+    /// sampler, not the scheduler, defines continuity."
+    step: u64,
 }
 
 impl Default for EpisodeFolder<PairKey> {
@@ -351,6 +376,26 @@ impl<K: Copy + Ord + std::hash::Hash> EpisodeFolder<K> {
             open: None,
             roster_cap: roster_cap.max(1),
             direction,
+            step: 1,
+        }
+    }
+
+    /// A folder that observes every `step`-th frame: the sampled
+    /// cadence. Consecutiveness is generalized, not REMOVED — a
+    /// push at frames 0, 60, 120 with step 60 welds (continuity
+    /// defined by the sampler, exactly as a stride allows), while
+    /// a push landing OFF-stride still closes-and-reopens, so a
+    /// mis-recording sampler cannot silently invent continuity.
+    /// The span arithmetic is unchanged (forward inter-sample
+    /// driver deltas are what extend credits); every-frame-push
+    /// discipline becomes every-SAMPLED-frame push.
+    pub fn with_step(roster_cap: usize, direction: WorstDirection, step: u64) -> Self {
+        debug_assert!(step >= 1, "sampling stride must be >= 1");
+        Self {
+            open: None,
+            roster_cap: roster_cap.max(1),
+            direction,
+            step: step.max(1),
         }
     }
 
@@ -386,10 +431,17 @@ impl<K: Copy + Ord + std::hash::Hash> EpisodeFolder<K> {
         }
         // A non-consecutive frame (a skipped observation slot)
         // would silently invent continuity, so close and reopen.
+        // Stride-aware: with step 1 (every-frame recorders, the
+        // family default) consecutive means +1; a sampled folder
+        // (with_step) defines continuity BY THE CADENCE — the
+        // check generalizes to `frame == end_frame + step`, so an
+        // on-stride push welds while an off-stride push still
+        // closes-and-reopens (a mis-recording sampler cannot
+        // invent continuity at any cadence).
         if self
             .open
             .as_ref()
-            .is_some_and(|ep| frame != ep.end_frame.saturating_add(1))
+            .is_some_and(|ep| frame != ep.end_frame.saturating_add(self.step))
         {
             let closed = self.open.take().map(|ep| ep.close());
             self.push(frame, driver, obs);
@@ -610,6 +662,55 @@ mod tests {
         assert_eq!(ep2.end_frame, 4);
         assert_eq!(ep2.worst.key, PairKey::new(5, 6));
         assert!((ep2.driver_span - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn stride_folder_welds_on_stride_and_splits_off_stride() {
+        // The sampled-cadence folder (entity_stagnation's engine
+        // substrate): `with_step(_, _, 60)` defines continuity BY
+        // THE CADENCE — "the sampler, not the scheduler, defines
+        // continuity." Both halves pinned:
+        // - ON-stride: pushes at frames 0, 60, 120 weld into ONE
+        //   episode; the driver span telescopes the inter-sample
+        //   deltas (0.0→1.0→2.0 = 2.0 total, the full run).
+        // - OFF-stride: a push landing at frame 55 (a genuinely
+        //   skipped slot relative to the cadence) closes the open
+        //   episode and reopens at the observing frame — the
+        //   recorder-bug guard survives at any cadence; removing
+        //   the check outright would have thrown that invariant
+        //   away.
+        let mut f = EpisodeFolder::with_step(DEFAULT_ROSTER_CAP, WorstDirection::LargerIsWorse, 60);
+        assert!(f.push(0, Some(0.0), &[obs(1, 2, 0.2)]).is_none());
+        assert!(f.push(60, Some(1.0), &[obs(1, 2, 0.4)]).is_none());
+        assert!(f.push(120, Some(2.0), &[obs(1, 2, 0.6)]).is_none());
+        // Close the run: the three on-stride pushes formed ONE
+        // episode with the telescoped span and the LAST value as
+        // the worst (LargerIsWorse).
+        let ep = f.close_run().expect("on-stride pushes weld");
+        assert_eq!(ep.start_frame, 0);
+        assert_eq!(ep.end_frame, 120);
+        assert!((ep.driver_span - 2.0).abs() < 1e-9);
+        assert_eq!(ep.worst.value, 0.6);
+        assert_eq!(ep.worst.frame, 120);
+
+        // Off-stride: fresh folder, pushes at 0 then 55 (a slot
+        // the cadence cannot explain — the recorder skipped or
+        // double-fired). The stretch closes at the off-stride
+        // push and reopens there.
+        let mut g = EpisodeFolder::with_step(DEFAULT_ROSTER_CAP, WorstDirection::LargerIsWorse, 60);
+        assert!(g.push(0, Some(0.0), &[obs(1, 2, 0.2)]).is_none());
+        let closed = g
+            .push(55, Some(1.0), &[obs(1, 2, 0.9)])
+            .expect("off-stride push closes the open stretch");
+        assert_eq!(closed.start_frame, 0);
+        assert_eq!(closed.end_frame, 0);
+        assert!((closed.driver_span - 0.0).abs() < 1e-9);
+        assert!(g.push(115, Some(2.0), &[obs(1, 2, 0.9)]).is_none());
+        let ep2 = g
+            .close_run()
+            .expect("the reopened stretch closes at run end");
+        assert_eq!(ep2.start_frame, 55);
+        assert_eq!(ep2.end_frame, 115);
     }
 
     #[test]

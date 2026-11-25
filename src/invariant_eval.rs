@@ -1249,6 +1249,133 @@ pub(crate) fn not_a_reflected_component_message(name: &str) -> String {
     )
 }
 
+/// Definite resolution of an entity_stagnation watch path against
+/// the registry — NO live instance needed. Walks the path's static
+/// type information: struct fields via `StructInfo::field`, enum
+/// VARIANT names via `EnumInfo::variant` (the variant-qualified
+/// path `state.Queued.waited` walks component field `state` →
+/// variant `Queued` → field `waited`), and struct-variant fields
+/// via `StructVariantInfo::field`. This is leaf_where's safety
+/// hinge: a variant typo in either `watch_path` or `leaf_where`
+/// is a CONFIG error caught at probe time, never a silent
+/// "never true" that masquerades as a passing workload fact. A
+/// path that resolves here can STILL fail per-instance at run
+/// time (an entity whose enum currently holds a different
+/// variant) — that is the leaf_where precondition, not an error.
+pub(crate) fn probe_entity_watch_path(
+    registry: &TypeRegistry,
+    component: &str,
+    path: &str,
+) -> Result<(), String> {
+    use bevy_reflect::TypeInfo;
+    let registration = resolve_registration(registry, component, "component")?;
+    let mut ty: &TypeInfo = registration.type_info();
+    let segments: Vec<&str> = path.split('.').filter(|s| !s.is_empty()).collect();
+    if segments.is_empty() {
+        return Err(format!(
+            "watch path '{path}' is empty — a blank path resolves the \
+             component root, never a watchable leaf"
+        ));
+    }
+    // Manual index loop: an ENUM segment consumes TWO segments (the
+    // variant name and the field inside it), which a for-loop
+    // cannot express.
+    let mut i = 0;
+    while i < segments.len() {
+        let segment = segments[i];
+        match ty {
+            TypeInfo::Struct(info) => {
+                let Some(field) = info.field(segment) else {
+                    return Err(format!(
+                        "watch path '{path}' does not resolve on component \
+                         '{component}': struct has no field named '{segment}' \
+                         (fields: {})",
+                        info.field_names().join(", ")
+                    ));
+                };
+                let Some(next) = field.type_info() else {
+                    return Err(format!(
+                        "watch path '{path}': field '{segment}' on component \
+                         '{component}' carries no static type information — \
+                         its leaf cannot be resolved at probe time"
+                    ));
+                };
+                ty = next;
+                i += 1;
+            }
+            TypeInfo::Enum(info) => {
+                let Some(variant) = info.variant(segment) else {
+                    return Err(format!(
+                        "watch path '{path}' does not resolve on component \
+                         '{component}': enum '{}' has no variant named \
+                         '{segment}' (variants: {})",
+                        ty.type_path(),
+                        info.iter()
+                            .map(|v| v.name().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                };
+                // The variant name itself can be the watch leaf
+                // (`watch_path: "state" == leaf_where's variant) —
+                // resolved, nothing more to descend.
+                if i + 1 == segments.len() {
+                    return Ok(());
+                }
+                // Continue INSIDE the variant: only struct variants
+                // carry named fields — the same constraint the live
+                // path resolver enforces on enum field access.
+                let struct_variant = variant.as_struct_variant().map_err(|_| {
+                    format!(
+                        "watch path '{path}' resolves into variant \
+                         '{segment}', which is not a struct variant — only \
+                         struct variants carry named fields to continue the \
+                         path"
+                    )
+                })?;
+                let next_segment = segments[i + 1];
+                let Some(field) = struct_variant.field(next_segment) else {
+                    return Err(format!(
+                        "watch path '{path}' does not resolve on component \
+                         '{component}': variant '{segment}' has no field named \
+                         '{next_segment}' (fields: {})",
+                        struct_variant.field_names().join(", ")
+                    ));
+                };
+                let Some(next) = field.type_info() else {
+                    return Err(format!(
+                        "watch path '{path}': field '{next_segment}' inside \
+                         variant '{segment}' carries no static type \
+                         information — its leaf cannot be resolved at probe \
+                         time"
+                    ));
+                };
+                ty = next;
+                i += 2;
+            }
+            other => {
+                return Err(format!(
+                    "watch path '{path}' does not resolve on component \
+                     '{component}': segment '{segment}' descends into a {}, \
+                     which carries no named fields or variants — the path \
+                     cannot continue",
+                    match other {
+                        TypeInfo::TupleStruct(_) => "tuple struct",
+                        TypeInfo::Tuple(_) => "tuple",
+                        TypeInfo::List(_) => "list",
+                        TypeInfo::Array(_) => "array",
+                        TypeInfo::Map(_) => "map",
+                        TypeInfo::Set(_) => "set",
+                        TypeInfo::Opaque(_) => "leaf value",
+                        TypeInfo::Struct(_) | TypeInfo::Enum(_) => unreachable!(),
+                    }
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Resolve a numeric path on a matched entity: selector component
 /// first, Transform fallback — the doctrine BOTH the run's
 /// component oracle and lint's registry probe follow, extracted so
@@ -2402,6 +2529,7 @@ fn judge_closed_episode(
                 pairwise_episode: Some(pairwise_meta_of(ep)),
                 consistency_episode: None,
                 forbidden_episode: None,
+                stagnation_episode: None,
             });
         }
     }
@@ -2933,6 +3061,7 @@ fn judge_fr_episode(
                 pairwise_episode: None,
                 consistency_episode: None,
                 forbidden_episode: Some(forbidden_meta_of(ep)),
+                stagnation_episode: None,
             });
         }
     }
@@ -3574,6 +3703,7 @@ fn judge_dtc_episode(
                 pairwise_episode: None,
                 consistency_episode: Some(consistency_meta_of(ep)),
                 forbidden_episode: None,
+                stagnation_episode: None,
             });
         }
     }
@@ -3678,6 +3808,650 @@ pub fn audit_derived_transform_consistency(
                     "invariant '{}' never found a parented entity to check",
                     inv.name
                 ),
+                meta: None,
+            });
+        }
+    }
+    entries
+}
+
+// ===========================================================================
+// entity_stagnation (judgement layer, second vocabulary)
+// ===========================================================================
+//
+// Per-entity rate-form liveness: each selected entity's watched leaf
+// must not stay digest-constant while the driver advances. The
+// reviewed semantics (proposal §7, spec, review-corrected):
+//
+// - SCOPED WATCH: `watch_path` names the leaf whose digest is
+//   compared across samples; a mutation anywhere outside the path
+//   does not clear stagnation.
+// - leaf_where PRECONDITION: only entities whose `path == Variant`
+//   holds are watched; a definite-resolution failure is an
+//   oracle_error (probe-time doctrine), never a silent pass.
+// - DESPAWN = ACQUITTAL: a vanished key ends its stint; its accrued
+//   span freezes into the roster but the JUDGMENT rides the shared
+//   episode (aggregate-first). Turnover never refunds the span —
+//   an episode whose last key despawns is judged on the span it
+//   already accrued. Equally: CHANGE = the stint ends; a re-stuck
+//   key starts a FRESH stint (a new observation with value 0
+//   re-enters the set only once it is stuck across two samples
+//   again).
+// - AGGREGATE-FIRST SHARED TIMELINE: one folder per invariant,
+//   K = (index, generation), obs = the still-stuck set; empty obs
+//   closes the episode. A RELAY — obs never empties while no
+//   individual entity soaks — FIRES once the union span crosses
+//   window_s: the authored invariant says "this watch must not
+//   stay stagnant continuously for window_s", and in a relay some
+//   guest is frozen at every instant. Deliberate doctrine, pinned
+//   by the battery (the batched-service-tick false-positive trap).
+// - OBSERVATION VALUE = the entity's ACCRUED stuck-span in driver
+//   units, LargerIsWorse — the fold's `worst` naturally names the
+//   longest-stuck guest and `worst_frame` lands at its stint end.
+// - SAMPLED CADENCE: the leaf is read every sampling_s of driver
+//   advance (scheduled as a frame stride); two consecutive
+//   equal-digest samples credit driver(k) − driver(k−1), and the
+//   episode's telescoped span is compared against window_s. The
+//   folder is a `with_step` folder — the stride generalizes the
+//   consecutiveness check, it does not remove it.
+
+/// Bookkeeping for the entity_stagnation recorders: the fold
+/// engines plus the per-invariant SAMPLER state. Sampling is
+/// per-invariant (each invariant declares its own cadence), so
+/// the state cannot ride the world — it lives beside the fold.
+#[derive(bevy_ecs::resource::Resource, Default)]
+pub struct StagnationBookkeeping {
+    /// Invariant name → the selector resolved AND ≥1 watchable
+    /// entity was enumerated in at least one sampled frame
+    /// (vacuity evidence — the selector never resolving is
+    /// `vacuous_invariant`; the selector resolving but
+    /// leaf_where never holding is a PASS with evidence, a
+    /// held-trace workload fact, NOT vacuity).
+    pub matched: std::collections::HashSet<String>,
+    /// Invariant name → the selector resolved at least once
+    /// (distinct from `matched`: leaf_where may never hold, the
+    /// held trace tells that story).
+    pub selector_resolved: std::collections::HashSet<String>,
+    /// Invariant name → a resolution/config failure was seen
+    /// during the run (already reported as `oracle_error`); the
+    /// audit suppresses its vacuity entry (N-B/N-C doctrine).
+    pub config_errored: std::collections::HashSet<String>,
+    /// (invariant name, error class) pairs already reported as
+    /// `oracle_error` this run — the once-per-distinct-error dedup.
+    pub oracle_error_seen: std::collections::HashSet<String>,
+    /// Invariant name → the sampled-cadence fold engine.
+    pub folders:
+        std::collections::HashMap<String, crate::episode::EpisodeFolder<crate::episode::StagKey>>,
+    /// Invariant name → the pass-side held statistics.
+    pub episode_stats: std::collections::HashMap<String, crate::held::EpisodeHeldStats>,
+    /// Invariant name → per-key sampler state: the previous
+    /// sample's digest (None until the first digest is taken).
+    pub last_digest:
+        std::collections::HashMap<String, std::collections::HashMap<crate::episode::StagKey, u64>>,
+    /// Invariant name → per-key accrued stuck-span in driver
+    /// units, and the DRIVER LEAF VALUE at the key's last sample
+    /// (the inter-sample delta base). Reset (removed) on change;
+    /// a key absent from a sample is REMOVED (its stint ended —
+    /// despawn, precondition lapse, or selector exit are
+    /// indistinguishable at this layer and all acquit).
+    pub stint: std::collections::HashMap<
+        String,
+        std::collections::HashMap<crate::episode::StagKey, (f64 /* span */, f64 /* driver_base */)>,
+    >,
+    /// Invariant name → the frame stride the cadence resolves to
+    /// (cached at first use; the folder's `step`).
+    pub strides: std::collections::HashMap<String, u64>,
+}
+
+/// One frame's stagnation outcome for one invariant (the
+/// owned-data phase-split doctrine: computed under `&World`,
+/// applied after the borrow ends). The digests are the raw
+/// &World-derived data; stint accrual (which needs the previous
+/// sample) happens in the write phase against the bookkeeping.
+struct StagOutcome {
+    /// The frame's per-entity leaf digests (raw; every
+    /// precondition-satisfying, path-resolvable entity).
+    digests: Vec<(crate::episode::StagKey, u64)>,
+    /// Whether THIS frame was a sampling frame for the invariant.
+    sampled: bool,
+    /// The driver-leaf sample (driver units) on a sampled frame.
+    driver: Option<f64>,
+    /// First config error this frame, if any.
+    config_error: Option<String>,
+    /// How many selector-component entities the enumeration
+    /// walked this sampled frame (precondition or not — the
+    /// held-trace workload figure and the selector-resolves
+    /// evidence).
+    enumerated: usize,
+}
+
+/// Driver-loop recorder for `entity_stagnation` invariants: the
+/// per-entity rate-form liveness oracle (second vocabulary). The
+/// cadence is per-invariant: the watched leaf is digest-read only
+/// on SAMPLING frames (a frame stride resolved from sampling_s,
+/// the driver's rate, and tps), and the still-stuck set folds
+/// into the shared-timeline episode via `with_step` — the stride
+/// generalizes consecutiveness, the sampler defines continuity.
+pub fn record_entity_stagnation(world: &mut World, frame: u64, tps: u64) {
+    let invariants: Vec<Invariant> = world
+        .get_resource::<ScenarioInvariants>()
+        .map(|invariants| {
+            invariants
+                .0
+                .iter()
+                .filter(|i| i.rule == InvariantRule::EntityStagnation)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if invariants.is_empty() {
+        return;
+    }
+    let Some(atr) = world.get_resource::<AppTypeRegistry>().cloned() else {
+        world.resource_scope(|world, mut book: Mut<StagnationBookkeeping>| {
+            let mut violations = world.resource_mut::<RunViolations>();
+            for inv in &invariants {
+                book.config_errored.insert(inv.name.clone());
+                let why = &no_atr_message("entity stagnation checks");
+                report_config_error_once(
+                    &mut violations.0,
+                    &mut book.oracle_error_seen,
+                    &inv.name,
+                    why,
+                    frame,
+                );
+            }
+        });
+        return;
+    };
+    let registry = atr.read();
+
+    // Read phase: every invariant is evaluated for cadence; only
+    // sampling frames walk entities and take digests.
+    let mut outcomes: Vec<(Invariant, StagOutcome)> = Vec::with_capacity(invariants.len());
+    for inv in &invariants {
+        outcomes.push((
+            inv.clone(),
+            eval_stagnation(world, &registry, inv, frame, tps),
+        ));
+    }
+    drop(registry);
+
+    // Write phase: fold, judge soak, report.
+    world.resource_scope(|world, mut book: Mut<StagnationBookkeeping>| {
+        let mut violations = world.resource_mut::<RunViolations>();
+        for (inv, outcome) in outcomes {
+            apply_stag_outcome(&inv, outcome, frame, tps, &mut book, &mut violations.0);
+        }
+    });
+}
+
+/// The frame stride a stagnation invariant's cadence resolves to:
+/// sampling_s driver units -> wall seconds (via the driver's
+/// declared rate) -> frames (via tps), rounded, floored at 1.
+/// Validation guarantees rate > 0.
+fn stagnation_stride(inv: &Invariant, tps: u64) -> u64 {
+    let sampling_s = inv.sampling_s.unwrap_or(1.0) as f64;
+    let rate = match inv.driver.as_deref() {
+        Some("resource") => inv.driver_units_per_second.unwrap_or(1.0) as f64,
+        _ => 1.0,
+    };
+    let frame_s = 1.0 / tps as f64;
+    ((sampling_s / rate) / frame_s).round().max(1.0) as u64
+}
+
+/// Read phase: one invariant's frame outcome. Non-sampling frames
+/// are cheap no-ops for the watch itself — digest reads are the
+/// cost being sampled away. The first sample lands at the first
+/// frame divisible by the stride, then every stride-th frame
+/// after; the schedule is deterministic from frame 0 and cannot
+/// drift.
+fn eval_stagnation(
+    world: &World,
+    registry: &TypeRegistry,
+    inv: &Invariant,
+    frame: u64,
+    tps: u64,
+) -> StagOutcome {
+    use bevy_reflect::GetPath;
+    let err = |why: String, sampled: bool| StagOutcome {
+        digests: vec![],
+        sampled,
+        driver: None,
+        config_error: Some(why),
+        enumerated: 0,
+    };
+    // Validation guarantees these; the Options are defensive only.
+    let Some(crate::enums::TargetSelector::WithComponent { name }) = inv.target_selector.as_ref()
+    else {
+        return err(
+            "entity_stagnation requires a with_component selector (validated)".into(),
+            false,
+        );
+    };
+    let Some(watch_path) = inv.watch_path.as_deref() else {
+        return err(
+            "entity_stagnation requires 'watch_path' (validated)".into(),
+            false,
+        );
+    };
+    let type_reg = match resolve_registration(registry, name, "component") {
+        Ok(t) => t,
+        Err(why) => return err(why, false),
+    };
+    let Some(reflect_component) = type_reg.data::<bevy_ecs::reflect::ReflectComponent>() else {
+        return err(not_a_reflected_component_message(name), false);
+    };
+    // Cadence: the stride, cached per-invariant in the bookkeeping
+    // (write phase), is recomputed here cheaply and must agree —
+    // it is a pure function of the immutable invariant + tps.
+    let stride = stagnation_stride(inv, tps);
+    let sampled = frame.is_multiple_of(stride);
+    if !sampled {
+        return StagOutcome {
+            digests: vec![],
+            sampled: false,
+            driver: None,
+            config_error: None,
+            enumerated: 0,
+        };
+    }
+    // leaf_where parses to (path, variant); validation guaranteed
+    // the `path == Variant` shape, the probe guaranteed definite
+    // resolution. Variant-equality is checked against the LIVE
+    // value each sample — the precondition is a per-frame fact.
+    let leaf_where = inv.leaf_where.as_deref().map(|lw| {
+        let (p, v) = lw.split_once("==").expect("validated shape");
+        (p.trim().to_string(), v.trim().to_string())
+    });
+    let mut digests: Vec<(crate::episode::StagKey, u64)> = Vec::new();
+    let mut enumerated = 0usize;
+    if let Some(component_id) = world.components().get_valid_id(type_reg.type_id()) {
+        for archetype in world.archetypes().iter() {
+            if !archetype.components().contains(&component_id) {
+                continue;
+            }
+            for entry in archetype.entities() {
+                let Ok(entity_ref) = world.get_entity(entry.id()) else {
+                    continue;
+                };
+                let Some(reflect) = reflect_component.reflect(entity_ref) else {
+                    continue;
+                };
+                enumerated += 1;
+                // leaf_where precondition: `path == Variant` must
+                // hold NOW (variant-equality only).
+                if let Some((lw_path, lw_variant)) = &leaf_where {
+                    let holds = reflect
+                        .reflect_path(lw_path.as_str())
+                        .ok()
+                        .and_then(|leaf| {
+                            leaf.try_as_reflect().map(|r| {
+                                matches!(
+                                    r.as_partial_reflect().reflect_ref(),
+                                    bevy_reflect::ReflectRef::Enum(e)
+                                        if e.variant_name() == lw_variant
+                                )
+                            })
+                        })
+                        .unwrap_or(false);
+                    if !holds {
+                        continue;
+                    }
+                }
+                // The scoped watch leaf. An entity in the WRONG
+                // enum variant fails path resolution legitimately
+                // — the precondition lapsed (the leaf_where
+                // mechanism when the watch path is
+                // variant-qualified), not an error.
+                let Some(leaf) = reflect.reflect_path(watch_path).ok() else {
+                    continue;
+                };
+                let mut hasher = crate::digest::fnv_hasher();
+                crate::digest::hash_canonical(leaf, &mut hasher);
+                digests.push((
+                    crate::episode::StagKey::new(
+                        entity_ref.id().index().index(),
+                        entity_ref.id().generation().to_bits(),
+                    ),
+                    hasher,
+                ));
+            }
+        }
+    }
+    // Driver sample: the declared resource leaf, or the frame
+    // clock (seconds) — read on sampled frames only.
+    let driver = match inv.driver.as_deref() {
+        Some("resource") => {
+            let (res_name, path) = (
+                inv.driver_resource.as_deref().expect("validated"),
+                inv.driver_path.as_deref().expect("validated"),
+            );
+            match sample_declared_driver(world, registry, res_name, path) {
+                Ok(Some(v)) => Some(v),
+                // Absent resource: a gap, not an error.
+                Ok(None) => None,
+                Err(why) => return err(why, true),
+            }
+        }
+        _ => frame_clock(frame, tps),
+    };
+    StagOutcome {
+        digests,
+        sampled: true,
+        driver,
+        config_error: None,
+        enumerated,
+    }
+}
+
+/// Write-phase fold of one frame's stagnation outcome: digest
+/// diffs against the previous sample accrue per-key stints, the
+/// still-stuck set is pushed into the sampled-cadence folder, and
+/// any closed episode is judged against the soak.
+///
+/// A `None` driver on a sampled frame is a GAP: stints do not
+/// accrue (the clock is unobservable) and the folder closes its
+/// open episode (the engine's own gap doctrine); digests still
+/// UPDATE (the sample happened) so the next interval is measured
+/// from this frame's value.
+fn apply_stag_outcome(
+    inv: &Invariant,
+    outcome: StagOutcome,
+    frame: u64,
+    tps: u64,
+    book: &mut StagnationBookkeeping,
+    violations: &mut crate::state::Violations,
+) {
+    if let Some(why) = &outcome.config_error {
+        book.config_errored.insert(inv.name.clone());
+        report_config_error_once(
+            violations,
+            &mut book.oracle_error_seen,
+            &inv.name,
+            &format!("invariant '{}': {why}", inv.name),
+            frame,
+        );
+        return;
+    }
+    let stride = stagnation_stride(inv, tps);
+    book.strides.entry(inv.name.clone()).or_insert(stride);
+    if !outcome.sampled {
+        return;
+    }
+    // Selector-resolution evidence: the enumeration walked ≥1
+    // selector-component entity. `matched` (watchability: the
+    // rule actually judged entities) requires ≥1 digest — a
+    // resolved selector whose entities never satisfy
+    // leaf_where is a held-trace workload fact, not vacuity.
+    if outcome.enumerated > 0 {
+        book.selector_resolved.insert(inv.name.clone());
+    }
+    if !outcome.digests.is_empty() {
+        book.matched.insert(inv.name.clone());
+        book.episode_stats
+            .entry(inv.name.clone())
+            .or_default()
+            .observe_frame(None, Some(outcome.digests.len() as u64));
+    }
+    let last_digest = book.last_digest.entry(inv.name.clone()).or_default();
+    let stint = book.stint.entry(inv.name.clone()).or_default();
+    // Step 1: close stints for keys ABSENT from this sample
+    // (despawn, precondition lapse, selector exit — all
+    // acquittal; the span is already banked in the roster and
+    // the key leaves the stuck set).
+    let present: std::collections::HashSet<crate::episode::StagKey> =
+        outcome.digests.iter().map(|(k, _)| *k).collect();
+    stint.retain(|k, _| present.contains(k));
+    // Step 2: accrue or reset stints from the digest diff.
+    let mut stuck: Vec<crate::episode::Observation<crate::episode::StagKey>> = Vec::new();
+    for (key, digest) in &outcome.digests {
+        let prev = last_digest.get(key);
+        match prev {
+            Some(prev_digest) if prev_digest == digest => {
+                // Still stuck: accrue the inter-sample driver
+                // delta onto the stint.
+                if let Some(driver) = outcome.driver {
+                    let entry = stint.entry(*key).or_insert((0.0, driver));
+                    // Gap handling: if the stint's base is ahead
+                    // of the driver (a retreat or a gap in
+                    // between), credit no negative span — forward
+                    // deltas only (the episode engine's doctrine).
+                    let delta = driver - entry.1;
+                    if delta > 0.0 {
+                        entry.0 += delta;
+                    }
+                    entry.1 = driver;
+                    stuck.push(crate::episode::Observation {
+                        key: *key,
+                        value: entry.0 as f32,
+                    });
+                } else {
+                    // A gap this sample: the stint survives (the
+                    // digest did not change) but accrues nothing
+                    // and the key enters the push with its
+                    // CURRENT accrued span so the folder can
+                    // close the episode (its gap doctrine).
+                    if let Some(entry) = stint.get(key) {
+                        stuck.push(crate::episode::Observation {
+                            key: *key,
+                            value: entry.0 as f32,
+                        });
+                    }
+                }
+            }
+            _ => {
+                // Changed (or first sample): a FRESH stint base.
+                // First sample seeds the digest with span 0; the
+                // key becomes stuck only when the NEXT sample's
+                // digest is equal.
+                stint.remove(key);
+                if let Some(driver) = outcome.driver {
+                    // Seed the base so the NEXT equal sample
+                    // accrues from here; span stays 0 until then.
+                    stint.insert(*key, (0.0, driver));
+                }
+            }
+        }
+    }
+    // Step 3: update the digest memory (the sample happened).
+    last_digest.clear();
+    for (key, digest) in &outcome.digests {
+        last_digest.insert(*key, *digest);
+    }
+    // Step 4: push the still-stuck set into the sampled-cadence
+    // folder. Empty stuck set closes any open episode; a gap
+    // (driver None) also closes (the engine's gap doctrine).
+    let folder = book
+        .folders
+        .entry(inv.name.clone())
+        .or_insert_with(|| StagnationBookkeeping::folder_for(stride));
+    let closed = folder.push(frame, outcome.driver, &stuck);
+    if let Some(closed) = closed {
+        book.episode_stats
+            .entry(inv.name.clone())
+            .or_default()
+            .observe_episode_span(closed.driver_span, closed.start_frame);
+        judge_stag_episode(inv, &closed, violations);
+    }
+}
+
+impl StagnationBookkeeping {
+    /// The sampled-cadence folder for one stagnation invariant:
+    /// composite entity keys, LargerIsWorse (the accrued span
+    /// grows within a stint; the worst observation naturally
+    /// names the longest-stuck guest), constructed with the
+    /// invariant's stride so pushes weld ON-cadence and an
+    /// off-cadence push still closes-and-reopens.
+    fn folder_for(stride: u64) -> crate::episode::EpisodeFolder<crate::episode::StagKey> {
+        crate::episode::EpisodeFolder::with_step(
+            crate::episode::DEFAULT_ROSTER_CAP,
+            crate::episode::WorstDirection::LargerIsWorse,
+            stride,
+        )
+    }
+}
+
+/// Soak judgment and finding emission for one closed stagnation
+/// episode: sub-soak stretches are lulls, discarded; a soaked
+/// episode is ONE finding naming the longest-stuck guest, with
+/// the roster carrying every participant (a crowd is one
+/// incident, many participants — aggregate-first doctrine).
+fn judge_stag_episode(
+    inv: &Invariant,
+    ep: &crate::episode::ClosedEpisode<crate::episode::StagKey>,
+    violations: &mut crate::state::Violations,
+) {
+    let Some(window_s) = inv.window_s else {
+        return; // Validated required; defensive only.
+    };
+    if ep.driver_span < window_s as f64 {
+        // Sub-soak: a lull the window doctrine discards.
+        return;
+    }
+    let worst = &ep.worst;
+    // The soak span is in the DRIVER LEAF'S OWN UNIT — seconds
+    // only for the frame-clock default.
+    let (span, span_unit) = match inv.driver.as_deref() {
+        Some("resource") => (ep.driver_span, " driver units"),
+        _ => (ep.driver_span, "s of frame clock"),
+    };
+    violations.report(
+        crate::rules::Rule::EntityStagnation.name(),
+        &inv.name,
+        format!(
+            "entity #{} (gen {}) stayed digest-constant on its watched leaf for {:.3}{} \
+             (worst single-entity stuck-span; the EPISODE's union span across all \
+             {} stuck entit{} is {:.3}{}, frames {}-{} ({} frame{})); a stagnation \
+             this long while the driver advanced is a per-entity livelock, not a lull",
+            worst.key.index,
+            worst.key.generation,
+            worst.value,
+            span_unit,
+            ep.distinct_keys,
+            if ep.distinct_keys == 1 { "y" } else { "ies" },
+            span,
+            span_unit,
+            ep.start_frame,
+            ep.end_frame,
+            ep.end_frame - ep.start_frame + 1,
+            if ep.end_frame - ep.start_frame == 0 { "" } else { "s" },
+        ),
+        ep.start_frame,
+    );
+    if let Some(entry) = violations.entries.get_mut(&(
+        crate::rules::Rule::EntityStagnation.name().to_string(),
+        inv.name.clone(),
+    )) {
+        entry.last_frame = entry.last_frame.max(ep.end_frame);
+        if entry.meta.is_none() {
+            entry.meta = Some(crate::discovery::surface::ViolationMeta {
+                stepping: None,
+                pairwise_episode: None,
+                consistency_episode: None,
+                forbidden_episode: None,
+                stagnation_episode: Some(stagnation_meta_of(ep)),
+            });
+        }
+    }
+}
+
+/// Convert a closed stagnation episode into its `_meta` evidence
+/// block. The roster's per-entry span is the accrued stuck-span
+/// frozen at the key's stint end (change, despawn, or run end) —
+/// a participant that left mid-episode keeps its personal soak
+/// measure readable even though the shared timeline continued.
+fn stagnation_meta_of(
+    ep: &crate::episode::ClosedEpisode<crate::episode::StagKey>,
+) -> crate::discovery::surface::StagnationEpisodeMeta {
+    crate::discovery::surface::StagnationEpisodeMeta {
+        sampled_entities: ep.distinct_keys,
+        roster: ep
+            .roster
+            .iter()
+            .map(|r| crate::discovery::surface::StagnationRosterEntry {
+                entity: r.key.index,
+                generation: r.key.generation,
+                first_frame: r.first_frame,
+                last_frame: r.worst_frame,
+                stuck_span: r.worst_value,
+                stuck_frames: r.violating_frames,
+            })
+            .collect(),
+        roster_truncated: ep.roster_truncated,
+    }
+}
+
+/// Run-end drain: an episode still open at the last frame is a
+/// complete stretch on its own — fold it out and judge it (the
+/// pairwise/consistency doctrine verbatim).
+pub fn close_stagnation_episodes(world: &mut World) {
+    let invariants: Vec<Invariant> = world
+        .get_resource::<ScenarioInvariants>()
+        .map(|invariants| {
+            invariants
+                .0
+                .iter()
+                .filter(|i| i.rule == InvariantRule::EntityStagnation)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if invariants.is_empty() {
+        return;
+    }
+    world.resource_scope(|world, mut book: Mut<StagnationBookkeeping>| {
+        let mut violations = world.resource_mut::<RunViolations>();
+        for inv in &invariants {
+            let closed = book
+                .folders
+                .get_mut(&inv.name)
+                .and_then(|folder| folder.close_run());
+            if let Some(closed) = closed {
+                book.episode_stats
+                    .entry(inv.name.clone())
+                    .or_default()
+                    .observe_episode_span(closed.driver_span, closed.start_frame);
+                judge_stag_episode(inv, &closed, &mut violations.0);
+            }
+        }
+    });
+}
+
+/// Post-run audit for `entity_stagnation` invariants: a selector
+/// that never RESOLVED proves nothing — `vacuous_invariant`. A
+/// selector that resolved but whose entities never satisfied
+/// leaf_where (or the watch path) is a PASS with evidence (the
+/// held trace carries the story); a rule whose selector resolved
+/// and whose entities were watched but nothing was stuck ALSO
+/// passes — stagnation is an absence finding, a clean world is
+/// the success case.
+pub fn audit_entity_stagnation(
+    invariants: &[Invariant],
+    book: &StagnationBookkeeping,
+    last_frame: u64,
+) -> Vec<crate::state::ViolationEntry> {
+    let mut entries = Vec::new();
+    for inv in invariants
+        .iter()
+        .filter(|i| i.rule == InvariantRule::EntityStagnation)
+    {
+        if book.config_errored.contains(&inv.name) {
+            continue;
+        }
+        if !book.selector_resolved.contains(&inv.name) {
+            entries.push(crate::state::ViolationEntry {
+                rule: crate::rules::Rule::VacuousInvariant.name().to_string(),
+                target: inv.name.clone(),
+                first_frame: 0,
+                last_frame,
+                count: 1,
+                detail: format!(
+                    "invariant '{}' matched zero entities over the whole run; \
+                     the check proves nothing until there is something to check",
+                    inv.name
+                ),
+                last_detail: format!("invariant '{}' matched zero entities", inv.name),
                 meta: None,
             });
         }
