@@ -3199,6 +3199,10 @@ pub struct SpawnSafetyBookkeeping {
     /// audit reports `vacuous_invariant` — the anchor side of the
     /// pairwise "never had a pair to check" doctrine.
     pub matched: std::collections::HashSet<String>,
+    /// Invariant name → run-total frames with ≥1 resolvable anchor
+    /// — the held trace's `frames_matched` (existence evidence: the
+    /// frames the rule COULD have judged an entry).
+    pub frames_matched: std::collections::HashMap<String, u64>,
     /// Invariant name → a resolution/config failure was seen
     /// during the run (already reported as `oracle_error`); the
     /// audit suppresses its vacuity entry so the game is not
@@ -3322,6 +3326,7 @@ pub fn record_spawn_safety(world: &mut World, frame: u64) {
             }
             if outcome.any_anchor {
                 book.matched.insert(inv.name.clone());
+                *book.frames_matched.entry(inv.name.clone()).or_insert(0) += 1;
             }
             // The diff. A stored previous snapshot means judged
             // transitions; a MISSING one is the invariant's first

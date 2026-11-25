@@ -410,6 +410,7 @@ fn never_any_anchor_is_vacuous() {
         },
     );
     let report = run_scenario(&mut app, &scenario_with_invariant(SAFETY_INV)).unwrap();
+    assert_eq!(report.status, PlaytestStatus::Fail);
     let v = report
         .violations
         .iter()
