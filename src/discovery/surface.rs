@@ -316,6 +316,14 @@ pub struct ViolationMeta {
     /// holds the full story.
     #[serde(default)]
     pub forbidden_episode: Option<ForbiddenEpisodeMeta>,
+    /// `entity_stagnation` only: the episode's evidence — the
+    /// distinct stuck entities (first/worst frames, per-entity
+    /// accrued stuck-span, capped, truncation disclosed via
+    /// `roster_truncated`). Roster entries carry BOTH the entity
+    /// index and its GENERATION (slot recycling must never weld
+    /// a successor to its predecessor's stint).
+    #[serde(default)]
+    pub stagnation_episode: Option<StagnationEpisodeMeta>,
 }
 
 /// The `pairwise_separation` episode evidence block (`_meta`).
@@ -422,6 +430,28 @@ pub struct ForbiddenEpisodeMeta {
     pub roster_truncated: bool,
 }
 
+/// The `entity_stagnation` episode evidence block (`_meta`).
+/// Roster entries are per-entity (index + generation), ordered
+/// worst first (maximum accrued stuck-span in driver units, then
+/// earliest frame). `PartialEq` only — the roster carries `f32`
+/// spans, which have no total `Eq`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct StagnationEpisodeMeta {
+    /// How many DISTINCT stuck entities the episode saw in total —
+    /// `roster.len()` plus the entities the cap dropped. Disclosed
+    /// so `_meta` never lies by omission when a crowd exceeds the
+    /// cap (`roster_truncated`).
+    pub sampled_entities: u64,
+    /// Distinct stuck entities with first/worst/span evidence,
+    /// worst-first (longest stuck). Capped at the roster cap;
+    /// `roster_truncated` discloses when the episode had more.
+    pub roster: Vec<StagnationRosterEntry>,
+    /// True when the episode saw more distinct entities than the
+    /// roster cap admits — disclosed truncation, never silent
+    /// subsampling.
+    pub roster_truncated: bool,
+}
+
 /// One roster entry: the evidence for one distinct incursive
 /// entity inside an episode. Serialized field names are
 /// wire-stable (`entity`, `first_frame`, `worst_frame`,
@@ -440,6 +470,29 @@ pub struct ForbiddenRosterEntry {
     /// How many frames this entity stayed incursive within the
     /// episode.
     pub violating_frames: u64,
+}
+
+/// One roster entry: the evidence for one distinct stuck entity
+/// inside an episode. `stuck_span` is the entity's accrued
+/// stuck-span in DRIVER-LEAF UNITS (its personal soak measure,
+/// frozen when its stint ended by change or despawn). Serialized
+/// field names are wire-stable.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StagnationRosterEntry {
+    /// The stuck entity's index.
+    pub entity: u32,
+    /// The entity's generation — slot recycling must never weld
+    /// a successor to its predecessor's stint.
+    pub generation: u32,
+    /// First sampled frame this entity was stuck in the episode.
+    pub first_frame: u64,
+    /// Last sampled frame this entity remained stuck in the
+    /// episode (its stint's end: change, despawn, or run end).
+    pub last_frame: u64,
+    /// The entity's accrued stuck-span in driver-leaf units.
+    pub stuck_span: f32,
+    /// How many sampled frames this entity was stuck.
+    pub stuck_frames: u64,
 }
 
 #[cfg(test)]
@@ -463,6 +516,7 @@ mod tests {
                 pairwise_episode: None,
                 consistency_episode: None,
                 forbidden_episode: None,
+                stagnation_episode: None,
             }),
         };
         let json = serde_json::to_string(&entry).unwrap();

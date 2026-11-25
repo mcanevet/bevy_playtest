@@ -60,6 +60,7 @@ impl Rule {
             Self::PairwiseSeparation => "Coincident-bodies spatial oracle: every pair of selected entities (via a with_component selector) must stay at least min_distance apart; violating frames fold into episodes, and only an episode that soaks past window_s (in driver units) becomes a finding — sub-soak overlaps are transient fly-bys, not bugs.",
             Self::ForbiddenRegion => "Declarative no-go zone: a selected entity's Transform translation must not linger inside an author-declared box region; inside-frames fold into incursion episodes, and only an episode that soaks past window_s (in driver units) becomes a finding with entry frame and position — sub-soak incursions are transient fly-bys, not bugs.",
             Self::DerivedTransformConsistency => "Compositional identity over Bevy's derived Transform relationship: every parented entity's GlobalTransform must equal the parent's GlobalTransform composed with its own Transform, both read at the same settled frame — stale or foreign-written globals (sprites frozen at identity under a moving parent) are state bugs, folded into episodes that must persist past a window_s soak. Promoted to gating (fail-power) on flip-test evidence: the multi-child pile-up fixture comes out RED with the defect present and GREEN with it absent, and the rotating/scaling hierarchy stays coherent — the rule earned trust by demonstrating the discrimination, not by optimism (proposal §2).",
+            Self::EntityStagnation => "Per-entity rate-form liveness (judgement layer, second vocabulary): each selected entity's watched reflect path must not stay digest-constant while the driver leaf advances — entity-scoped livelocks (a guest queued forever at a demolished ride, `waited` frozen while the park clock runs) are invisible to every flat oracle. Entities leave the stuck set on any scoped change or on despawn (turnover is acquittal, never a refund); the still-stuck set is sampled every sampling_s of driver advance, folded into a shared-timeline episode per invariant, and only an episode soaking past window_s (driver-leaf units) becomes a finding with a capped per-guest _meta roster.",
             Self::HierarchyAbsent => "A derived_transform_consistency rule found no parented entities over the whole run: no hierarchy, no identity to check. Informational, not vacuous — a flat world is a coherent scene the rule simply cannot judge.",
             Self::SpawnSafety => "Archetype-entry spatial oracle: every entity entering the selected archetype — a newborn or a pre-existing entity first acquiring the target component — must be at least min_distance from every anchor selected by min_distance_from, judged once at the entry frame against same-frame anchors (snapshotted post-update); the respawn-ring shape — bodies appearing inside the danger zone — is a state bug at the transition frame, not a transient.",
             Self::FiniteTransforms => "Every entity's Transform holds finite values (no NaN/inf).",
@@ -130,6 +131,12 @@ declare_rules! {
     // A forbidden_region rule finding (judgement layer, spatial
     // family): an incursion episode that soaked past window_s.
     ForbiddenRegion => "forbidden_region",
+    // Per-entity rate-form liveness (judgement layer, second
+    // vocabulary, slice 3): each selected entity's watched path
+    // must not stay digest-constant across a window_s soak of
+    // driver advance; scoped digests, leaf_where
+    // preconditioning, sampled cadence, despawn = acquittal.
+    EntityStagnation => "entity_stagnation",
 
     // A derived_transform_consistency rule with zero parented
     // entities over the whole run (judgement layer, slice 2).

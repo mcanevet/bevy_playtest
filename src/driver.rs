@@ -1651,6 +1651,7 @@ fn frozen_world_oracle_system(
                         pairwise_episode: None,
                         consistency_episode: None,
                         forbidden_episode: None,
+                        stagnation_episode: None,
                     });
                 }
             }
@@ -2162,6 +2163,16 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         // audit reads `matched`.
         app.init_resource::<crate::invariant_eval::SpawnSafetyBookkeeping>();
     }
+    if scenario
+        .invariants
+        .iter()
+        .any(|i| i.rule == crate::enums::InvariantRule::EntityStagnation)
+    {
+        // Episode-fold bookkeeping for entity_stagnation: the
+        // sampled-cadence per-entity recorder folds into this,
+        // and the run-end drain + selector-vacuity audit read it.
+        app.init_resource::<crate::invariant_eval::StagnationBookkeeping>();
+    }
     if scenario.verify_replay {
         app.insert_resource(crate::replay::ReplaySeries::default());
     }
@@ -2517,6 +2528,13 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             // generation-tracked archetype diff judges each entry
             // once, at its transition frame.
             crate::invariant_eval::record_spawn_safety(app.world_mut(), i);
+            // entity_stagnation: same driver-loop recorder doctrine
+            // — but SAMPLED-CADENCE: the per-invariant stride skips
+            // non-sampling frames entirely (digest reads are the
+            // cost being sampled away), and the fold lands in the
+            // `with_step` folder whose stride generalizes
+            // consecutiveness.
+            crate::invariant_eval::record_entity_stagnation(app.world_mut(), i, tps);
             // Progress-surface sampling: same driver-loop recorder
             // doctrine as the digest above.
             crate::progress::record_progress_sample(app.world_mut(), i);
@@ -2589,6 +2607,11 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     // own — judged on its accumulated span before the bookkeeping
     // is removed for the audit below.
     crate::invariant_eval::close_forbidden_region_episodes(app.world_mut());
+    // Same drain for the stagnation recorder: an episode still open
+    // at the last frame is judged on the span it already accrued
+    // (despawn-acquittal doctrine: turnover never refunds the
+    // span, so the drain must judge before the bookkeeping dies).
+    crate::invariant_eval::close_stagnation_episodes(app.world_mut());
     let violations = app
         .world_mut()
         .remove_resource::<RunViolations>()
@@ -2823,6 +2846,29 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     for entry in crate::invariant_eval::audit_spawn_safety(
         &scenario.invariants,
         &spawn_safety_book,
+        state.frame,
+    ) {
+        // Same dedupe doctrine as the audits above.
+        if !snap
+            .iter()
+            .any(|v| v.rule == entry.rule && v.target == entry.target)
+        {
+            snap.push(entry);
+        }
+    }
+    // entity_stagnation vacuity audit: a selector that never
+    // RESOLVED proves nothing. A selector that resolved but whose
+    // entities never satisfied leaf_where (or never presented a
+    // resolvable watch path) is a PASS with evidence — the held
+    // trace carries that story (a clean world is the success
+    // case for a stagnation rule).
+    let stagnation_book = app
+        .world_mut()
+        .remove_resource::<crate::invariant_eval::StagnationBookkeeping>()
+        .unwrap_or_default();
+    for entry in crate::invariant_eval::audit_entity_stagnation(
+        &scenario.invariants,
+        &stagnation_book,
         state.frame,
     ) {
         // Same dedupe doctrine as the audits above.
@@ -3161,6 +3207,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             dtc_book: &consistency_book,
             fr_book: &forbidden_book,
             ss_book: &spawn_safety_book,
+            stag_book: &stagnation_book,
         },
         tps,
         &|name| snap.iter().any(|v| v.target == name),

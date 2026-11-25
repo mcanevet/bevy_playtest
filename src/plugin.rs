@@ -618,6 +618,13 @@ fn lint_probe_wanted(scenario: &crate::scenario::Scenario) -> bool {
             // spawn_safety resolves BOTH selectors via the same
             // registry machinery at probe time.
             InvariantRule::SpawnSafety => true,
+            // entity_stagnation resolves its selector, its
+            // variant-qualified watch_path, and leaf_where (path
+            // + variant existence) via the registry at probe
+            // time — the typos there are the probe's whole
+            // purpose (a variant typo would otherwise
+            // masquerade as "never true" for the entire run).
+            InvariantRule::EntityStagnation => true,
         }
     });
     invariant_probe || progress_surface_probe_wanted(scenario)
@@ -719,6 +726,7 @@ fn lint_registry_probe(
                 }
                 InvariantRule::ForbiddenRegion => "forbidden region selector probes",
                 InvariantRule::SpawnSafety => "spawn safety selector probes",
+                InvariantRule::EntityStagnation => "entity stagnation selector probes",
             };
             findings.push(ScenarioError::Rejected(format!(
                 "invariant '{}': {}",
@@ -870,6 +878,84 @@ fn lint_registry_probe(
                     if let Err(why) = &driver {
                         findings.push(ScenarioError::Rejected(inv_name(why)));
                     } else if let Ok(crate::invariant_eval::ResourceView::Value(value)) = &driver {
+                        if let Err(why) = crate::invariant_eval::reflect_numeric_path(
+                            *value,
+                            inv.driver_path.as_deref().expect("stage-1 guaranteed"),
+                            "resource",
+                        ) {
+                            findings.push(ScenarioError::Rejected(inv_name(&why)));
+                        }
+                    }
+                }
+            }
+            InvariantRule::EntityStagnation => {
+                // The probe resolves everything the recorder will:
+                // the selector component, the variant-qualified
+                // watch_path, leaf_where (path + variant), and
+                // the resource driver when declared. All
+                // definite-error — a typo in any would
+                // masquerade as "never true" for the whole run.
+                let Some(crate::enums::TargetSelector::WithComponent { name }) =
+                    inv.target_selector.as_ref()
+                else {
+                    // Stage-1 guaranteed; the match above stayed
+                    // fallible for symmetry with the other arms.
+                    continue;
+                };
+                // Selector type must resolve with component
+                // reflection data. Instance-level watch-path
+                // resolution is NOT probed per-entity: an entity
+                // whose enum is in a different variant fails
+                // path resolution legitimately (the leaf_where
+                // precondition, not an error) — only
+                // definite-type-level failures count, and the
+                // registry holds those.
+                if let Err(why) =
+                    crate::invariant_eval::resolve_registration(&registry, name, "component")
+                {
+                    findings.push(ScenarioError::Rejected(inv_name(&why)));
+                    continue;
+                }
+                // The variant-bearing portion of watch_path:
+                // every segment must exist on the component's
+                // reflect data — fields resolve via the registry
+                // without needing a live instance, and an enum
+                // VARIANT name is checkable against the enum's
+                // variant list. This is the leaf_where "definite
+                // resolution" hinge (Q2): a variant typo can
+                // never masquerade as "never true."
+                if let Some(watch_path) = inv.watch_path.as_deref() {
+                    if let Err(why) =
+                        crate::invariant_eval::probe_entity_watch_path(&registry, name, watch_path)
+                    {
+                        findings.push(ScenarioError::Rejected(inv_name(&why)));
+                    }
+                }
+                if let Some(leaf_where) = inv.leaf_where.as_deref() {
+                    // Stage-1 guaranteed the `path == Variant`
+                    // shape.
+                    let (lw_path, variant) = leaf_where
+                        .split_once("==")
+                        .expect("stage-1 guaranteed shape");
+                    if let Err(why) = crate::invariant_eval::probe_entity_watch_path(
+                        &registry,
+                        name,
+                        format!("{}.{}", lw_path.trim(), variant.trim()).as_str(),
+                    ) {
+                        findings.push(ScenarioError::Rejected(inv_name(&why)));
+                    }
+                }
+                // A declared resource driver: resolve the leaf
+                // on the resource, mirroring the
+                // stagnant_resource probe above.
+                if inv.driver.as_deref() == Some("resource") {
+                    let Some(resource) = inv.driver_resource.as_deref() else {
+                        continue;
+                    };
+                    let view = crate::invariant_eval::reflect_resource(world, &registry, resource);
+                    if let Err(why) = &view {
+                        findings.push(ScenarioError::Rejected(inv_name(why)));
+                    } else if let Ok(crate::invariant_eval::ResourceView::Value(value)) = &view {
                         if let Err(why) = crate::invariant_eval::reflect_numeric_path(
                             *value,
                             inv.driver_path.as_deref().expect("stage-1 guaranteed"),

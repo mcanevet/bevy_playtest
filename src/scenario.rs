@@ -571,6 +571,53 @@ pub struct Invariant {
     /// is the same bug as a respawned one).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spawn_only: Option<bool>,
+    /// Scoped watch path (`entity_stagnation` only): the reflect
+    /// path on the selected component whose leaf digests are
+    /// compared across samples — e.g. `state.Queued.waited` (a
+    /// variant-qualified path) or `hunger` (a plain field). The
+    /// watch is SCOPED: a change anywhere OUTSIDE this path does
+    /// not clear stagnation, so watching `state` does not care
+    /// that `hunger` mutated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watch_path: Option<String>,
+    /// Precondition (`entity_stagnation` only): a narrow grammar
+    /// `path == VariantName` — only entities whose reflected
+    /// `path` currently holds `VariantName` are watched (e.g.
+    /// `state == Queued`). Absent means no precondition. The
+    /// path must resolve and the variant must exist (validated
+    /// at probe time — a typo there is an oracle_error, never a
+    /// silent "never true"). Redundant with a variant-qualified
+    /// `watch_path` (`watch_path: "state.Queued.waited"` implies
+    /// `leaf_where: "state == Queued"`) — both present is legal
+    /// and idempotent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leaf_where: Option<String>,
+    /// Driver discriminator (`entity_stagnation` only): the flat
+    /// string naming WHAT leaf advances while the watch stays
+    /// digest-constant. `"global_time"` (the default) is the
+    /// run's frame clock — seconds, advancerate 1 unit/s by
+    /// definition. `"resource"` unlocks the driver triple
+    /// (`driver_resource` + `driver_path`, plus the optional
+    /// `driver_units_per_second`) VERBATIM — the
+    /// stagnant_resource grammar. For a `resource` driver,
+    /// `driver_units_per_second` is REQUIRED: the sampling
+    /// cadence is scheduled in frames, which needs the driver's
+    /// rate to convert `sampling_s` out of driver-leaf units.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver: Option<String>,
+    /// Sampling cadence (`entity_stagnation` only): the watched
+    /// leaf is read every `sampling_s` of driver-leaf advance
+    /// (default 1.0) — sampled evaluation is the rule's cost
+    /// story (digest reads at a cadence, not every frame). A
+    /// stagnation interval spans two consecutive equal-digest
+    /// samples, credited `driver(k) - driver(k-1)` and
+    /// telescoped across the episode, so firing granularity is
+    /// the cadence: `window_s >= 2 * sampling_s` is validated at
+    /// load. Coarsen the cadence to hide sub-interval flutters
+    /// (with `sampling_s = 10`, an 8s freeze never spans two
+    /// samples and is never stuck at all).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampling_s: Option<f32>,
 }
 
 /// An author-declared axis-aligned box region
@@ -1327,6 +1374,45 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                 errors.push(ScenarioError::Rejected(format!(
                     "invariant '{}': {} {} not supported by {} — {} \
                      spawn_safety only",
+                    rule.name,
+                    foreign.join(", "),
+                    if foreign.len() == 1 { "is" } else { "are" },
+                    rule.rule,
+                    if foreign.len() == 1 {
+                        "this field is"
+                    } else {
+                        "these fields are"
+                    }
+                )));
+            }
+        }
+    }
+    for rule in &scenario.invariants {
+        // Single-owner optional fields (entity_stagnation only):
+        // same reserved-field doctrine as the block above — the
+        // author writes a knob, the harness parses it, no rule
+        // ever reads it. (`driver_resource`/`driver_path`/
+        // `driver_units_per_second` are intentionally absent
+        // here: the driver triple is shared grammar, unlocked
+        // per-rule by validation.)
+        if rule.rule != InvariantRule::EntityStagnation {
+            let mut foreign: Vec<&str> = Vec::new();
+            if rule.watch_path.is_some() {
+                foreign.push("'watch_path'");
+            }
+            if rule.leaf_where.is_some() {
+                foreign.push("'leaf_where'");
+            }
+            if rule.driver.is_some() {
+                foreign.push("'driver'");
+            }
+            if rule.sampling_s.is_some() {
+                foreign.push("'sampling_s'");
+            }
+            if !foreign.is_empty() {
+                errors.push(ScenarioError::Rejected(format!(
+                    "invariant '{}': {} {} not supported by {} — {} \
+                     entity_stagnation only",
                     rule.name,
                     foreign.join(", "),
                     if foreign.len() == 1 { "is" } else { "are" },
@@ -2608,6 +2694,283 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                 // `min_distance_from` is spawn_safety-only —
                 // rejected elsewhere via the shared foreign-field
                 // loop below.
+            }
+            InvariantRule::EntityStagnation => {
+                // Per-entity rate-form liveness (judgement layer,
+                // second vocabulary): the watched leaf on each
+                // selected entity must not stay digest-constant
+                // while the driver advances. Shape checks only
+                // here — leaf_where/variant definite resolution is
+                // a PROBE-TIME check (the registry is not
+                // available at load), so a typo there surfaces as
+                // an oracle_error, never a silent "never true".
+
+                // Stagnation is per-ENTITY: `all` would watch
+                // every Transform-carrying entity (walls,
+                // cameras) which are legitimately inert — the
+                // same argument as pairwise's selector
+                // requirement.
+                let Some(crate::enums::TargetSelector::WithComponent { name }) =
+                    rule.target_selector.as_ref()
+                else {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': entity_stagnation requires \
+                         'target_selector: {{\"with_component\": {{\"name\": ...}}}}' \
+                         — the rule watches a named component's entities; 'all' \
+                         would stagnation-watch every Transform in the world \
+                         (walls, cameras) that are legitimately inert",
+                        rule.name
+                    )));
+                    continue;
+                };
+                if name.trim().is_empty() {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': with_component name must be non-empty",
+                        rule.name
+                    )));
+                }
+                // The watched leaf: required, non-empty.
+                match rule.watch_path.as_deref() {
+                    None => {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': entity_stagnation requires \
+                             'watch_path' — the scoped reflect path on the \
+                             selected component whose leaf digests are \
+                             compared across samples (e.g. \"state.Queued.waited\")",
+                            rule.name
+                        )));
+                    }
+                    Some(wp) if wp.trim().is_empty() => {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': 'watch_path' must be non-empty — \
+                             a blank reflect path resolves the component root",
+                            rule.name
+                        )));
+                    }
+                    _ => {}
+                }
+                // leaf_where: narrow grammar `path == VariantName`.
+                // Definite resolution (does the path resolve on
+                // the component, does the variant exist in the
+                // enum) is probe-time; here only the SHAPE is
+                // checkable — but a malformed clause is an
+                // authoring error caught once at load.
+                if let Some(lw) = rule.leaf_where.as_deref() {
+                    let mut parts = lw.split("==");
+                    let lhs = parts.next();
+                    let rhs = parts.next();
+                    let extra = parts.next();
+                    if lhs.is_none()
+                        || rhs.map(str::trim).is_none_or(str::is_empty)
+                        || extra.is_some()
+                        || lhs.map(str::trim).is_none_or(str::is_empty)
+                    {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': 'leaf_where' must be \
+                             '<path> == <VariantName>' (e.g. \"state == Queued\") \
+                             — got {:?}",
+                            rule.name, lw
+                        )));
+                    }
+                }
+                // Driver discriminator: flat string, default
+                // global_time. Anything else is a typo the author
+                // must hear about at load, not a silent fallback.
+                let driver = rule.driver.as_deref().unwrap_or("global_time");
+                let rate = match driver {
+                    "global_time" => {
+                        // The frame-clock driver is seconds by
+                        // definition; the driver triple belongs
+                        // to the resource form.
+                        if rule.driver_resource.is_some()
+                            || rule.driver_path.is_some()
+                            || rule.driver_units_per_second.is_some()
+                        {
+                            errors.push(ScenarioError::Rejected(format!(
+                                "invariant '{}': driver \"global_time\" does \
+                                 not use driver_resource/driver_path/\
+                                 driver_units_per_second — the frame clock \
+                                 advances 1 second per second by definition; \
+                                 declare 'driver: \"resource\"' to soak against \
+                                 a game leaf instead",
+                                rule.name
+                            )));
+                        }
+                        1.0
+                    }
+                    "resource" => {
+                        // The driver triple VERBATIM
+                        // (stagnant_resource grammar), with one
+                        // stagnation-specific addition: the rate
+                        // is REQUIRED because the sampling
+                        // cadence is scheduled in frames and
+                        // converting sampling_s out of driver-leaf
+                        // units needs it.
+                        let has_dr = rule.driver_resource.is_some();
+                        let has_dp = rule.driver_path.is_some();
+                        if !has_dr || !has_dp {
+                            errors.push(ScenarioError::Rejected(format!(
+                                "invariant '{}': driver \"resource\" needs \
+                                 both 'driver_resource' and 'driver_path'",
+                                rule.name
+                            )));
+                        }
+                        for field in [rule.driver_resource.as_deref(), rule.driver_path.as_deref()]
+                            .into_iter()
+                            .flatten()
+                        {
+                            if field.trim().is_empty() {
+                                errors.push(ScenarioError::Rejected(format!(
+                                    "invariant '{}': '{}' must be non-empty",
+                                    rule.name, field
+                                )));
+                            }
+                        }
+                        match rule.driver_units_per_second {
+                            Some(r) if r.is_finite() && r > 0.0 => r,
+                            Some(r) => {
+                                errors.push(ScenarioError::Rejected(format!(
+                                    "invariant '{}': driver_units_per_second \
+                                     must be a finite number > 0 (got {r})",
+                                    rule.name
+                                )));
+                                // Unusable rate: skip the
+                                // rate-derived fit checks below
+                                // rather than divide by it.
+                                continue;
+                            }
+                            None => {
+                                errors.push(ScenarioError::Rejected(format!(
+                                    "invariant '{}': driver \"resource\" \
+                                     requires 'driver_units_per_second' — the \
+                                     sampling cadence is scheduled in frames, \
+                                     which needs the driver's advance rate to \
+                                     convert sampling_s out of driver-leaf \
+                                     units (the global_time default needs no \
+                                     rate: the frame clock is seconds)",
+                                    rule.name
+                                )));
+                                continue;
+                            }
+                        }
+                    }
+                    other => {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': 'driver' must be \"global_time\" \
+                             (the default — the run's frame clock) or \
+                             \"resource\" (soak against a game leaf via \
+                             driver_resource + driver_path); got {:?}",
+                            rule.name, other
+                        )));
+                        continue;
+                    }
+                };
+                // window_s: required (the soak), finite > 0.
+                let Some(window_s) = rule.window_s else {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': entity_stagnation requires 'window_s' \
+                         — the soak in driver-leaf units (default driver: \
+                         the frame clock, so seconds); a stagnant stretch \
+                         shorter than the soak is a sub-window lull, not a \
+                         livelock",
+                        rule.name
+                    )));
+                    continue;
+                };
+                if !window_s.is_finite() || window_s <= 0.0 {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': window_s must be a finite number > 0 \
+                         (got {window_s})",
+                        rule.name
+                    )));
+                    continue;
+                }
+                // sampling_s: optional, default 1.0 driver-leaf
+                // unit; finite > 0. The floor — window_s >= 2 x
+                // sampling_s — is the rule's honesty floor: an
+                // episode needs at least two consecutive
+                // equal-digest samples to accrue ANY span, so a
+                // window narrower than two samples can never fire
+                // and would silently prove nothing.
+                let sampling_s = rule.sampling_s.unwrap_or(1.0);
+                if !sampling_s.is_finite() || sampling_s <= 0.0 {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': sampling_s must be a finite number \
+                         > 0 (got {sampling_s}) — it is the sampling cadence \
+                         in driver-leaf units (default 1.0)",
+                        rule.name
+                    )));
+                    continue;
+                }
+                if window_s < 2.0 * sampling_s {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': window_s ({window_s}) must be at \
+                         least twice sampling_s ({sampling_s}) — a stagnation \
+                         interval is two consecutive equal-digest samples, so \
+                         a window narrower than two samples can never accrue \
+                         span and the rule would silently prove nothing; \
+                         widen window_s or coarsen sampling_s",
+                        rule.name
+                    )));
+                }
+                // Fit checks, in the run's own arithmetic: the
+                // cadence is scheduled in frames
+                // (sampling_wall_s >= one frame, else every frame
+                // is a sample and the cadence collapses), and the
+                // soak must fit the run's duration. Same doctrine
+                // as liveness.progress's sample/window rejection.
+                let frame_s = 1.0 / scenario.tps as f32;
+                let sampling_wall_s = sampling_s / rate;
+                if sampling_wall_s < frame_s {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': sampling cadence ({sampling_s} driver \
+                         units, {:.4}s at {rate} units/s) is shorter than one \
+                         frame at tps {} ({frame_s:.6}s) — sub-frame sampling \
+                         collapses to repeated identical samples; raise \
+                         sampling_s to at least one frame",
+                        rule.name, sampling_wall_s, scenario.tps
+                    )));
+                }
+                let window_wall_s = window_s / rate;
+                if window_wall_s > scenario.duration_s {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': soak window ({window_s} driver units, \
+                         {window_wall_s:.1}s effective) exceeds the run \
+                         duration ({duration}s) — a soak the run can never \
+                         elapse is unjudgeable; shorten window_s, or adjust \
+                         driver_units_per_second",
+                        rule.name,
+                        duration = scenario.duration_s
+                    )));
+                }
+                // Foreign fields: the reserved-field doctrine.
+                // eventually_s is left to the generic check so one
+                // defect yields one error. tolerance/grace_frames/
+                // exclude_components are caught by the
+                // derived_transform_consistency-only block above;
+                // the stagnation-only fields are caught by the
+                // entity_stagnation-only block above.
+                if rule.check.is_some()
+                    || rule.value.is_some()
+                    || rule.path.is_some()
+                    || rule.resource.is_some()
+                    || rule.min_distance.is_some()
+                    || rule.min_x.is_some()
+                    || rule.max_x.is_some()
+                    || rule.min_y.is_some()
+                    || rule.max_y.is_some()
+                    || rule.min_z.is_some()
+                    || rule.max_z.is_some()
+                {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': entity_stagnation does not use \
+                         check/value/path/resource/min_distance/bounds — it \
+                         digest-compares the leaf at watch_path across \
+                         samples and folds the still-stuck set into \
+                         episodes within window_s",
+                        rule.name
+                    )));
+                }
             }
         }
     }

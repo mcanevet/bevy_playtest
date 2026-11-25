@@ -1408,6 +1408,7 @@ fn dtc_owned_fields_reject_on_foreign_rules() {
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // spawn_safety — the authoring grammar (remaining-spatial-family part 1)
 // ---------------------------------------------------------------------------
 
@@ -1632,5 +1633,392 @@ fn spawn_safety_fields_are_foreign_on_other_rules() {
                 "{rule} + {field}: {errs:?}"
             );
         }
+    }
+}
+fn stag_json(
+    selector: Option<&str>,
+    watch_path: serde_json::Value,
+    window_s: serde_json::Value,
+) -> serde_json::Value {
+    let selector = match selector {
+        Some(name) => serde_json::json!({ "with_component": { "name": name } }),
+        None => serde_json::json!(null),
+    };
+    serde_json::json!({
+        "bot": { "type": "chaos" },
+        "duration_s": 10.0,
+        "invariants": [{
+            "name": "ride_queue_must_not_stall",
+            "rule": "entity_stagnation",
+            "target_selector": selector,
+            "watch_path": watch_path,
+            "window_s": window_s,
+        }],
+    })
+}
+
+#[test]
+fn entity_stagnation_parses_and_validates_clean() {
+    // The full authoring surface, minimal shape: selector +
+    // watch_path + window_s. The driver defaults to the run's
+    // frame clock and sampling_s to 1.0 second — a coherent
+    // cadence without a single extra knob.
+    let s = parse(stag_json(
+        Some("Guest"),
+        serde_json::json!("state.Queued.waited"),
+        serde_json::json!(2.0),
+    ));
+    assert_eq!(
+        s.invariants[0].watch_path.as_deref(),
+        Some("state.Queued.waited")
+    );
+    assert_eq!(s.invariants[0].window_s, Some(2.0));
+    assert!(
+        s.invariants[0].driver.is_none(),
+        "driver defaults to global_time"
+    );
+    assert_eq!(
+        s.invariants[0].sampling_s, None,
+        "sampling_s defaults to 1.0"
+    );
+    let errs = lint_errors(stag_json(
+        Some("Guest"),
+        serde_json::json!("state.Queued.waited"),
+        serde_json::json!(2.0),
+    ));
+    assert!(errs.is_empty(), "minimal grammar must lint clean: {errs:?}");
+
+    // The full surface: leaf_where precondition, explicit driver,
+    // driver triple with rate, explicit sampling cadence.
+    let mut json = stag_json(
+        Some("Guest"),
+        serde_json::json!("service.booked_at"),
+        serde_json::json!(240.0),
+    );
+    json["invariants"][0]["leaf_where"] = serde_json::json!("service == Boarded");
+    json["invariants"][0]["driver"] = serde_json::json!("resource");
+    json["invariants"][0]["driver_resource"] = serde_json::json!("MatchClock");
+    json["invariants"][0]["driver_path"] = serde_json::json!("ticks");
+    json["invariants"][0]["driver_units_per_second"] = serde_json::json!(30.0);
+    json["invariants"][0]["sampling_s"] = serde_json::json!(60.0);
+    let errs = lint_errors(json);
+    assert!(errs.is_empty(), "full grammar must lint clean: {errs:?}");
+}
+
+#[test]
+fn entity_stagnation_requires_named_component_selector() {
+    // `all` (or no selector) would stagnation-watch every
+    // Transform in the world — walls and cameras are legitimately
+    // inert; the rule demands a named component.
+    let errs = lint_errors(stag_json(
+        None,
+        serde_json::json!("state.Queued.waited"),
+        serde_json::json!(2.0),
+    ));
+    assert!(
+        errs.iter().any(|e| e.contains("requires")
+            && e.contains("target_selector")
+            && e.contains("with_component")),
+        "missing selector: {errs:?}"
+    );
+}
+
+#[test]
+fn entity_stagnation_requires_non_blank_watch_path() {
+    for watch_path in [
+        serde_json::json!(null),
+        serde_json::json!(""),
+        serde_json::json!("   "),
+    ] {
+        let errs = lint_errors(stag_json(
+            Some("Guest"),
+            watch_path.clone(),
+            serde_json::json!(2.0),
+        ));
+        assert!(
+            errs.iter().any(|e| e.contains("'watch_path'")),
+            "watch_path {watch_path}: {errs:?}"
+        );
+    }
+}
+
+#[test]
+fn entity_stagnation_leaf_where_shape_is_checked_at_load() {
+    // Definite RESOLUTION is probe-time (the registry is not
+    // available at load), but the `path == Variant` SHAPE is an
+    // authoring error caught here. Note "a===b" is deliberately
+    // absent: split_once("==") yields ("a", "=b"), a
+    // well-formed shape whose garbage variant surfaces at
+    // probe-time — never a silent "never true."
+    let shapes = ["", "==", "==Queued", "state =="];
+    let mut saw_shape_rejection = false;
+    for lw in shapes {
+        let mut json = stag_json(
+            Some("Guest"),
+            serde_json::json!("state.Queued.waited"),
+            serde_json::json!(2.0),
+        );
+        json["invariants"][0]["leaf_where"] = serde_json::json!(lw);
+        let errs = lint_errors(json);
+        if errs.iter().any(|e| e.contains("'leaf_where' must be")) {
+            saw_shape_rejection = true;
+        } else {
+            panic!("leaf_where {lw:?} must be shape-rejected: {errs:?}");
+        }
+    }
+    assert!(saw_shape_rejection);
+    // Redundant-but-consistent leaf_where alongside a
+    // variant-qualified watch_path is legal (idempotent), and a
+    // plain leaf_where without any variant in watch_path is the
+    // normal precondition form.
+    let mut json = stag_json(
+        Some("Guest"),
+        serde_json::json!("state.Queued.waited"),
+        serde_json::json!(2.0),
+    );
+    json["invariants"][0]["leaf_where"] = serde_json::json!("state == Queued");
+    let errs = lint_errors(json);
+    assert!(errs.is_empty(), "consistent leaf_where is legal: {errs:?}");
+}
+
+#[test]
+fn entity_stagnation_driver_discriminator_typo_rejects() {
+    // The driver is a flat discriminator: global_time (the
+    // default) or resource. Anything else is a typo the author
+    // must hear about at load, never a silent fallback.
+    for driver in ["clock", "frame_time", "Time<Virtual>", "Global"] {
+        let mut json = stag_json(
+            Some("Guest"),
+            serde_json::json!("state.Queued.waited"),
+            serde_json::json!(2.0),
+        );
+        json["invariants"][0]["driver"] = serde_json::json!(driver);
+        let errs = lint_errors(json);
+        assert!(
+            errs.iter().any(|e| e.contains("'driver' must be")
+                && e.contains("global_time")
+                && e.contains("resource")),
+            "driver {driver:?}: {errs:?}"
+        );
+    }
+}
+
+#[test]
+fn entity_stagnation_global_time_rejects_driver_triple() {
+    // The frame clock advances 1 second per second by definition;
+    // the driver triple belongs to the resource form.
+    let mut json = stag_json(
+        Some("Guest"),
+        serde_json::json!("state.Queued.waited"),
+        serde_json::json!(2.0),
+    );
+    json["invariants"][0]["driver"] = serde_json::json!("global_time");
+    json["invariants"][0]["driver_resource"] = serde_json::json!("MatchClock");
+    json["invariants"][0]["driver_path"] = serde_json::json!("ticks");
+    let errs = lint_errors(json);
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("global_time") && e.contains("does not use")),
+        "driver triple on global_time: {errs:?}"
+    );
+}
+
+#[test]
+fn entity_stagnation_resource_driver_requires_rate_and_both_halves() {
+    // The resource driver unlocks the driver triple verbatim, but
+    // the rate is REQUIRED (not optional like stagnant_resource):
+    // the sampling cadence is scheduled in frames, and converting
+    // sampling_s out of driver-leaf units needs the rate.
+    let base = |field: &str, value: serde_json::Value| {
+        let mut json = stag_json(
+            Some("Guest"),
+            serde_json::json!("state.Queued.waited"),
+            serde_json::json!(2.0),
+        );
+        json["invariants"][0]["driver"] = serde_json::json!("resource");
+        json["invariants"][0][field] = value;
+        json
+    };
+    // Missing halves.
+    for (field, _) in [
+        ("driver_resource", serde_json::json!("MatchClock")),
+        ("driver_path", serde_json::json!("ticks")),
+    ] {
+        let other = if field == "driver_resource" {
+            "driver_path"
+        } else {
+            "driver_resource"
+        };
+        let errs = lint_errors(base(field, serde_json::json!("MatchClock")));
+        let _ = other;
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("both 'driver_resource' and 'driver_path'")),
+            "driver resource missing {other}: {errs:?}"
+        );
+    }
+    // Missing rate.
+    let mut json = base("driver_resource", serde_json::json!("MatchClock"));
+    json["invariants"][0]["driver_path"] = serde_json::json!("ticks");
+    let errs = lint_errors(json);
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("requires 'driver_units_per_second'")
+                && e.contains("sampling cadence")),
+        "missing rate: {errs:?}"
+    );
+    // Bad rates. (NaN and infinities are unrepresentable in JSON,
+    // so they cannot reach validation from a scenario document;
+    // the finite->0 guard covers the reachable mistakes.)
+    for rate in [0.0, -1.0] {
+        let mut json = base("driver_resource", serde_json::json!("MatchClock"));
+        json["invariants"][0]["driver_path"] = serde_json::json!("ticks");
+        json["invariants"][0]["driver_units_per_second"] = serde_json::json!(rate);
+        let errs = lint_errors(json);
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("driver_units_per_second must be a finite number > 0")),
+            "rate {rate}: {errs:?}"
+        );
+    }
+}
+
+#[test]
+fn entity_stagnation_window_and_sampling_floor() {
+    // window_s is required and the honesty floor binds:
+    // window_s >= 2 x sampling_s — an episode needs two
+    // consecutive equal-digest samples to accrue any span.
+    let errs = lint_errors(stag_json(
+        Some("Guest"),
+        serde_json::json!("state.Queued.waited"),
+        serde_json::json!(null),
+    ));
+    assert!(
+        errs.iter().any(|e| e.contains("requires 'window_s'")),
+        "{errs:?}"
+    );
+
+    for (window_s, sampling_s) in [(1.5, 1.0), (3.0, 2.0), (0.0, 0.0)] {
+        let mut json = stag_json(
+            Some("Guest"),
+            serde_json::json!("state.Queued.waited"),
+            serde_json::json!(window_s),
+        );
+        json["invariants"][0]["sampling_s"] = serde_json::json!(sampling_s);
+        let errs = lint_errors(json);
+        // window_s = 0 trips its own positivity guard before the
+        // floor — any of the three rejections satisfies the test.
+        assert!(
+            errs.iter().any(|e| e.contains("at least twice sampling_s")
+                || e.contains("sampling_s must be a finite number > 0")
+                || e.contains("window_s must be a finite number > 0")),
+            "window {window_s} / sampling {sampling_s}: {errs:?}"
+        );
+    }
+    // Exactly at the floor is legal.
+    let mut json = stag_json(
+        Some("Guest"),
+        serde_json::json!("state.Queued.waited"),
+        serde_json::json!(2.0),
+    );
+    json["invariants"][0]["sampling_s"] = serde_json::json!(1.0);
+    let errs = lint_errors(json);
+    assert!(errs.is_empty(), "window == 2x sampling is legal: {errs:?}");
+}
+
+#[test]
+fn entity_stagnation_sub_frame_sampling_rejected() {
+    // A cadence finer than one frame collapses to repeated
+    // identical samples — the same doctrine as
+    // liveness.progress's sample/window rejection. At tps 60 a
+    // 0.005s cadence is sub-frame.
+    let mut json = stag_json(
+        Some("Guest"),
+        serde_json::json!("state.Queued.waited"),
+        serde_json::json!(0.02),
+    );
+    json["tps"] = serde_json::json!(60);
+    json["invariants"][0]["sampling_s"] = serde_json::json!(0.005);
+    let errs = lint_errors(json);
+    assert!(
+        errs.iter().any(|e| e.contains("sub-frame sampling")),
+        "sub-frame cadence: {errs:?}"
+    );
+}
+
+#[test]
+fn entity_stagnation_soak_exceeding_duration_rejected() {
+    // A soak the run can never elapse is unjudgeable.
+    let errs = lint_errors(stag_json(
+        Some("Guest"),
+        serde_json::json!("state.Queued.waited"),
+        serde_json::json!(3600.0),
+    ));
+    assert!(
+        errs.iter().any(|e| e.contains("exceeds the run duration")),
+        "window longer than duration: {errs:?}"
+    );
+}
+
+#[test]
+fn entity_stagnation_rejects_foreign_knobs() {
+    // The reserved-field doctrine: check/value/path/resource/
+    // min_distance/bounds are other rules' grammar. Values are
+    // typed per field so the document PARSES and the rejection
+    // comes from validation, not serde.
+    for (field, value) in [
+        ("check", serde_json::json!("le")),
+        ("value", serde_json::json!(1.0)),
+        ("path", serde_json::json!("translation.x")),
+        ("resource", serde_json::json!("MatchClock")),
+        ("min_distance", serde_json::json!(0.5)),
+        ("min_x", serde_json::json!(1.0)),
+        ("min_y", serde_json::json!(1.0)),
+        ("min_z", serde_json::json!(1.0)),
+        ("max_x", serde_json::json!(1.0)),
+        ("max_y", serde_json::json!(1.0)),
+        ("max_z", serde_json::json!(1.0)),
+    ] {
+        let mut json = stag_json(
+            Some("Guest"),
+            serde_json::json!("state.Queued.waited"),
+            serde_json::json!(2.0),
+        );
+        json["invariants"][0][field] = value;
+        let errs = lint_errors(json);
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("does not use") && e.contains("entity_stagnation")),
+            "field {field}: {errs:?}"
+        );
+    }
+}
+
+#[test]
+fn other_rules_reject_entity_stagnation_knobs() {
+    // The reverse direction: watch_path/leaf_where/driver/
+    // sampling_s on any other rule never fire — reject loudly
+    // with the entity_stagnation-only message. Values are typed
+    // per field so the document parses and the rejection comes
+    // from validation.
+    for (field, value) in [
+        ("watch_path", serde_json::json!("state.Queued.waited")),
+        ("leaf_where", serde_json::json!("state == Queued")),
+        ("driver", serde_json::json!("resource")),
+        ("sampling_s", serde_json::json!(1.0)),
+    ] {
+        let mut json = minimal_scenario("chaos");
+        json["invariants"] = serde_json::json!([
+            { "name": "hp_cap", "rule": "component_check",
+              "target_selector": {"with_component": {"name": "Hp"}},
+              "path": "current", "check": "le", "value": 100 }
+        ]);
+        json["invariants"][0][field] = value;
+        let errs = lint_errors(json);
+        assert!(
+            errs.iter()
+                .any(|e| e.contains(&format!("'{field}'")) && e.contains("entity_stagnation only")),
+            "field {field} on component_check: {errs:?}"
+        );
     }
 }
