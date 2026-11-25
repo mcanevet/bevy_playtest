@@ -49,6 +49,7 @@ mod report_integrity;
 mod resource_check;
 mod scan_purity;
 mod scenario_schema;
+mod spawn_safety;
 // Drives the capture rig and, for its GPU-positive cases, the real
 // renderer; both only exist under the feature.
 #[cfg(feature = "screen-liveness")]
