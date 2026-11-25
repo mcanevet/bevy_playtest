@@ -165,14 +165,18 @@ and reports an entry when (id, generation) is new, or the same
 tracking is what makes `spawn_only: true` survivable under entity
 id reuse and what keeps component-additions on pre-existing
 entities distinguishable from spawns. (AS BUILT, a precision the
-implementation owed to the engine's own source: bevy 0.20's
-allocator does NOT bump generations on despawn/recycle — its
-allocator tests assert recycled ids are bit-identical to the
-freed ones. Reuse soundness therefore rests on the SNAPSHOT half
-of the diff: a despawned pair VANISHES from the previous frame's
-snapshot, so its recycled re-entry arrives as an unknown pair and
-is judged anew — the desired behavior, delivered by the
-vanishing-record rather than the generation field.)
+implementation owes to the engine's own source: reuse soundness
+is sealed TWICE OVER. The raw `EntityAllocator` does recycle
+freed ids bit-identically without a generation bump — but games
+and harnesses only despawn through the World/command paths, and
+the World-path despawn bumps the generation before freeing
+(`mark_free(index, 1)`), so every observable recycle arrives as a
+NEW (index, generation) pair. And in the same-frame
+despawn-then-spawn shape, `Commands::spawn` allocates eagerly at
+QUEUE TIME, before any despawn command applies, so a same-tick
+re-fill takes a fresh slot in the first place. Either way the
+recycled re-entry is an unknown pair to the previous snapshot
+and is judged anew.)
 Three semantics follow and are fixed now, because each one
 changes what the rule fires on:
 

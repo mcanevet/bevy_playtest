@@ -294,16 +294,18 @@ fn component_addition_is_judged_by_default_and_filterable() {
     );
 }
 
-/// Id-reuse soundness: bevy 0.20's entity allocator does NOT
-/// bump the generation on despawn/recycle (its own allocator
-/// tests assert recycled ids are bit-identical to the freed
-/// ones), so a respawned slot re-enters observation with the
-/// SAME (index, generation) bits as its dead predecessor. The
-/// recorder must still judge that re-entry as a fresh event: the
-/// dead pair vanished from the previous frame's snapshot, so
-/// the diff must see the re-born pair as an unknown member —
-/// never silenced by a stale "stayed a member" record from the
-/// despawned predecessor.
+/// Id-reuse soundness: the recorder must judge a recycled
+/// slot's re-entry as a fresh event even though the index was
+/// seen before. Through the observable paths this is sealed
+/// twice: the World-path despawn bumps the generation before
+/// freeing (`mark_free(index, 1)`), so a recycled slot returns
+/// as a NEW (index, generation) pair the previous snapshot
+/// never recorded; and same-tick re-fills cannot occur at all
+/// (`Commands::spawn` allocates eagerly at queue time, before
+/// any despawn command applies — see
+/// same_frame_death_and_recycle_takes_a_fresh_slot_and_is_judged).
+/// The diff must never silence a re-born pair behind a stale
+/// "stayed a member" record from its despawned predecessor.
 #[test]
 fn id_reuse_recycled_pairs_are_new_entries() {
     let _slot = common::run_slot();
@@ -357,29 +359,32 @@ fn id_reuse_recycled_pairs_are_new_entries() {
     assert_eq!(ss.len(), 1, "expected exactly one finding: {ss:?}");
 }
 
-/// The one theoretically-suspicious corner, EMPIRICALLY CLOSED:
-/// a despawn AND same-slot recycle landing in the SAME frame's
+/// The tempting unsound corner, SEALED BY THE ENGINE TWICE OVER:
+/// a despawn and same-slot recycle landing in the SAME frame's
 /// update would leave the recycled occupant reading as "stayed
-/// a member" (a single-frame false negative) — but it cannot
-/// happen through the sanctioned path. bevy's command queue
-/// FREES SLOTS AT APPLY: the same-tick despawn-then-spawn below
-/// hands out a FRESH slot (empirically 37v0, not the freed
-/// 36v0), so the recorder sees a genuine unknown-pair entry and
-/// judges it. This test PINS that invariant: if it ever fails,
-/// the engine's slot-freeing semantics changed — update the
-/// recorder header comment alongside this test, and treat a
-/// recycled-into-slot-36 firing as a FALSE POSITIVE hole to
-/// close, not new doctrine.
+/// a member" (a single-frame false negative). It cannot produce
+/// a missed judgment, for two source-verified reasons: (a)
+/// `Commands::spawn` allocates EAGERLY AT QUEUE TIME — before
+/// any despawn command applies — so the same-tick shape below
+/// hands out a FRESH slot (empirically 37v0, never the freed
+/// 36v0), and (b) the slots that do recycle return
+/// GENERATION-BUMPED (the World-path despawn's
+/// `mark_free(index, 1)` bumps before freeing), so even a
+/// genuine recycle arrives as a pair unknown to the recorder's
+/// previous snapshot and is judged as a fresh entry. This test
+/// PINS the fresh-slot half (a): exactly one finding for the
+/// in-zone re-fill. If it ever fails, the engine's
+/// allocation/free semantics changed — update the recorder
+/// header comment alongside this test.
 #[test]
-fn same_frame_death_and_recycle_corner_is_pinned_as_not_judged() {
+fn same_frame_death_and_recycle_takes_a_fresh_slot_and_is_judged() {
     let _slot = common::run_slot();
     let mut app = base_app();
     app.world_mut()
         .spawn((Beacon, Transform::from_xyz(0.0, 0.0, 0.0)));
     // A projectile born SAFE at frame 1, then in ONE frame's
-    // update both despawned and its slot re-taken by an in-zone
-    // spawn (bevy recycles the freshest freed slot bit-identical,
-    // so the same system-tick despawn-then-spawn reuses it).
+    // update both despawned and an in-zone spawn queued in the
+    // same system tick — the maximal same-frame-corner provocation.
     app.add_systems(
         Update,
         |mut commands: Commands, q: Query<Entity, With<Projectile>>, mut frame: Local<u64>| {
@@ -399,14 +404,12 @@ fn same_frame_death_and_recycle_corner_is_pinned_as_not_judged() {
         },
     );
     let report = run_scenario(&mut app, &scenario_with_invariant(SAFETY_INV)).unwrap();
-    // If the engine ever hands the same-tick spawn the JUST-freed
-    // slot, the recycled occupant would read as stayed-a-member
-    // and this run would (correctly, per that hypothetical
-    // semantics) pass. As shipped, the spawn takes a fresh slot
-    // and the in-zone entry IS judged — the run FAILS with
-    // exactly one finding, the genuinely-recycled-slot behavior
-    // having been pinned separately by
-    // id_reuse_recycled_pairs_are_new_entries.
+    // The eager queue-time allocation hands the same-tick spawn a
+    // FRESH slot, so the in-zone entry IS judged: exactly one
+    // finding at its transition frame. A hypothetical engine
+    // handing back the JUST-freed slot unbumped would make the
+    // occupant read as stayed-a-member and this run pass —
+    // failure of this test means exactly that semantic shift.
     let ss: Vec<_> = report
         .violations
         .iter()
@@ -416,7 +419,7 @@ fn same_frame_death_and_recycle_corner_is_pinned_as_not_judged() {
         ss.len(),
         1,
         "same-tick re-fill takes a fresh slot and is judged (engine \
-         free-at-apply semantics changed?): {ss:?}"
+         queue-time-allocation semantics changed?): {ss:?}"
     );
 }
 

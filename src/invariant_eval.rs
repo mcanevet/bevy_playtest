@@ -3181,21 +3181,27 @@ pub fn audit_derived_transform_consistency(
 // entry is a current member that is either a pair new to the
 // snapshot (a spawn) or a known pair newly bearing the component
 // (component-addition). Generation tracking makes id reuse sound
-// in both directions: a reused index returning with a HIGHER
-// generation is a new pair (cannot forge continuity), and in
-// bevy 0.20's allocator — which recycles freed slots
-// BIT-IDENTICALLY, without a generation bump (its own allocator
-// tests assert exactly this) — soundness rests on the other
-// half of the diff: a despawned pair VANISHES from the previous
-// snapshot, so its recycled re-entry arrives as an unknown
-// pair and is judged anew (a stale membership record cannot
-// hide an entry — and the tempting same-frame corner, a despawn
-// and same-slot recycle landing in one update, cannot occur:
-// bevy's command queue FREES SLOTS AT APPLY, so a slot despawned
-// via commands is never re-handed-out within the same tick, and
-// the world-mut direct API is outside the driver-loop
-// recorder's observation window — pinned by
-// same_frame_death_and_recycle_corner_is_pinned_as_not_judged).
+// in both directions, and the same two facts seal the tempting
+// same-frame corner (a despawn and same-slot recycle landing in
+// one update, which would read as "stayed a member"):
+// (a) `Commands::spawn` allocates EAGERLY AT QUEUE TIME, before
+// any despawn command applies — the same-system
+// despawn-then-spawn shape hands out a fresh slot (verified
+// empirically: same-tick re-fills never observed at 36v0, always
+// a fresh index), and
+// (b) the slots that DO recycle come back GENERATION-BUMPED:
+// bevy 0.20's World-path despawn marks the index free with
+// `mark_free(index, 1)`, bumping the generation BEFORE the free,
+// so a recycled pair is by construction a pair the previous
+// snapshot never recorded — it arrives as an unknown pair and is
+// judged anew (a stale membership record cannot hide an entry).
+// The raw `EntityAllocator` recycles freed slots bit-identically
+// (no bump at that layer — its own allocator tests assert
+// UNIQUENESS of allocation, which bit-identity serves), but games
+// and harnesses only despawn through the bumped World path or
+// the command queue, so the bump covers every observable
+// recycle. Pinned by
+// same_frame_death_and_recycle_takes_a_fresh_slot_and_is_judged.
 // ---------------------------------------------------------------------
 
 /// Bookkeeping for `spawn_safety` invariants across frames (the
