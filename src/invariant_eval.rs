@@ -4000,6 +4000,38 @@ fn stagnation_stride(inv: &Invariant, tps: u64) -> u64 {
     ((sampling_s / rate) / frame_s).round().max(1.0) as u64
 }
 
+/// Resolve the scoped watch leaf on one live component value.
+/// bevy_reflect's path grammar has NO variant dispatch — it
+/// assumes the variant is known ahead of time — so a
+/// variant-qualified authoring path (`state.Queued.waited`)
+/// needs its own walk: a segment naming the LIVE variant is a
+/// confirmation (the leaf_where precondition in path form), and
+/// field segments route to the active variant through the
+/// ordinary path machinery. Any failure — a different live
+/// variant, a missing field inside it — is a PRECONDITION LAPSE
+/// (the entity is not watchable this frame), never an error.
+fn scoped_watch_leaf<'a>(
+    component: &'a dyn bevy_reflect::Reflect,
+    path: &str,
+) -> Option<&'a dyn bevy_reflect::PartialReflect> {
+    use bevy_reflect::GetPath;
+    let mut current: &dyn bevy_reflect::Reflect = component;
+    for segment in path.split('.').filter(|s| !s.is_empty()) {
+        if let bevy_reflect::ReflectRef::Enum(e) = current.as_partial_reflect().reflect_ref() {
+            if e.variant_name() == segment {
+                // Variant confirmation: consume the segment and
+                // stay on the enum — the next field segment
+                // routes to the active variant.
+                continue;
+            }
+        }
+        let seg = format!(".{segment}");
+        let next = current.reflect_path(seg.as_str()).ok()?.try_as_reflect()?;
+        current = next;
+    }
+    Some(current.as_partial_reflect())
+}
+
 /// Read phase: one invariant's frame outcome. Non-sampling frames
 /// are cheap no-ops for the watch itself — digest reads are the
 /// cost being sampled away. The first sample lands at the first
@@ -4099,12 +4131,14 @@ fn eval_stagnation(
                         continue;
                     }
                 }
-                // The scoped watch leaf. An entity in the WRONG
-                // enum variant fails path resolution legitimately
-                // — the precondition lapsed (the leaf_where
-                // mechanism when the watch path is
+                // The scoped watch leaf, variant-aware (bevy_reflect's
+                // path grammar cannot dispatch variants). An entity
+                // in the WRONG enum variant fails resolution
+                // legitimately — the precondition lapsed (the
+                // leaf_where mechanism when the watch path is
                 // variant-qualified), not an error.
-                let Some(leaf) = reflect.reflect_path(watch_path).ok() else {
+                let reflect: &dyn bevy_reflect::Reflect = reflect.as_reflect();
+                let Some(leaf) = scoped_watch_leaf(reflect, watch_path) else {
                     continue;
                 };
                 let mut hasher = crate::digest::fnv_hasher();
@@ -4335,7 +4369,11 @@ fn judge_stag_episode(
             ep.start_frame,
             ep.end_frame,
             ep.end_frame - ep.start_frame + 1,
-            if ep.end_frame - ep.start_frame == 0 { "" } else { "s" },
+            if ep.end_frame - ep.start_frame == 0 {
+                ""
+            } else {
+                "s"
+            },
         ),
         ep.start_frame,
     );
