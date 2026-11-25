@@ -136,10 +136,14 @@ the placeholder row while no such evidence exists.
 
 ```json
 { "name": "respawn_not_on_player", "rule": "spawn_safety",
-  "target_selector": "Demon",
-  "min_distance_from": "Player", "min_distance": 1.5 }
+  "target_selector": {"with_component": {"name": "Demon"}},
+  "min_distance_from": {"with_component": {"name": "Player"}}, "min_distance": 1.5 }
 ```
 
+(Selector spellings throughout this proposal use the bare-string
+shorthand for readability; the SHIPPED wire form is the object
+selector shown here, the same grammar as every other rule —
+`min_distance_from` also admits `"all"`.)
 Judges entities at their spawn moment only: a NEWBORN must satisfy
 the distance predicate against a selector-selected anchor set. The
 arena-shooter respawn-ring defect fires on the exact frame it
@@ -160,7 +164,15 @@ and reports an entry when (id, generation) is new, or the same
 (id, generation) newly bears the target component. Generation
 tracking is what makes `spawn_only: true` survivable under entity
 id reuse and what keeps component-additions on pre-existing
-entities distinguishable from spawns.
+entities distinguishable from spawns. (AS BUILT, a precision the
+implementation owed to the engine's own source: bevy 0.20's
+allocator does NOT bump generations on despawn/recycle — its
+allocator tests assert recycled ids are bit-identical to the
+freed ones. Reuse soundness therefore rests on the SNAPSHOT half
+of the diff: a despawned pair VANISHES from the previous frame's
+snapshot, so its recycled re-entry arrives as an unknown pair and
+is judged anew — the desired behavior, delivered by the
+vanishing-record rather than the generation field.)
 Three semantics follow and are fixed now, because each one
 changes what the rule fires on:
 
@@ -187,8 +199,12 @@ changes what the rule fires on:
   scheduled system competing for `&World`), evaluating after
   propagation so GlobalTransform is settled. Frame N's component
   additions are visible at frame N's post-update observation —
-  judged once, at the transition frame, with `after_s`/`before_s`
-  gating when authored. (This judge-at-transition-frame doctrine
+  judged once, at the transition frame. AS BUILT: the shipped rule
+  REJECTS `after_s`/`before_s` (both are informational-window
+  semantics from the eventually-era, incompatible with a rule
+  whose whole verdict is the single transition frame; a rule that
+  can only fire once has no window to bound). (This
+  judge-at-transition-frame doctrine
   is the frame-0-double-billing lesson from §8 item 5 applied to
   spawn safety.)
 
@@ -409,7 +425,17 @@ until this closes (their verdict: blocks-adoption). Fixes:
   clean run with zero entries cannot be distinguished from a
   never-fired rule by incursions alone — the coverage story of
   held traces depends on naming what was judged, not only what
-  violated.
+  violated. AS BUILT (spawn_safety, the transition-only rule with
+  no episode machinery to log): the exercise story rides the
+  held record's entry counts — `entity_judgments` (ALL entries
+  judged, once per entry) plus a new `entries_clean` field (the
+  matched-newborns count this section demanded) and
+  `frames_matched` (frames with ≥1 resolvable anchor, the
+  would-have-judged existence evidence); a zero-entries run
+  earns no held entry at all, making exercised-vs-never-triggered
+  a structural distinction rather than a count comparison.
+  `forbidden_region` (episode-shaped, not yet shipped) keeps the
+  bounded episode-log plan above.
 - The sandbox's predicted experiment (a passive run where the
   component-tier contract `skater_starts_centered` is held but absent
   from the trace) becomes the regression test.

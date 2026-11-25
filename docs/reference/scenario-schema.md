@@ -467,7 +467,13 @@ Two distinct error classes, at different stages:
   `derived_transform_consistency`), and
   binding any of it to `component_check` or `nodes_in_bounds` fails
   at load — a silently-ignored `window_s` on a component check
-  would masquerade as a temporal bound that never existed. Blank
+  would masquerade as a temporal bound that never existed. The
+  spawn vocabulary extends the same doctrine:
+  `min_distance_from`/`spawn_only` are meaningful only on
+  `spawn_safety`, `min_distance`/`window_s`/`driver_*` never on
+  it — an `all` target_selector there rejects too (the judged
+  archetype must be named; `min_distance_from` is the side that
+  may go `all`). Blank
   string fields (`path`, `driver_path`, `driver_resource`,
   `resource`) reject at load too: a blank reflect path resolves the
   resource root, never a numeric leaf.
@@ -715,3 +721,46 @@ Two distinct error classes, at different stages:
   `check`/`value`/`eventually_s`/`path`/
   `resource`/`min_distance` and the bounds fields are rejected
   at load.
+- `spawn_safety`: the archetype-entry spatial oracle — the rule
+  for the pile-up incident class where a respawned body APPEARS
+  inside the danger zone. Judged ONCE, at the frame an entity
+  enters the selected archetype: a newborn bearing the target
+  component at spawn, or a PRE-EXISTING entity first acquiring
+  it (the component-addition transition; `spawn_only: true`
+  filters the verdict to brand-new entities when the
+  conversion shape is legitimate). `target_selector` is
+  REQUIRED and must name a component (the same resolution
+  rules as `component_check`; an explicit `all` is rejected —
+  the judged archetype must be named) and
+  `min_distance_from` selects the ANCHOR set (the full
+  target-selector grammar including `all`: everything with a
+  settled `GlobalTransform`), against which every entry must
+  clear `min_distance` (a positive finite radius). Anchors are
+  snapshotted at the END of the same judging frame, so
+  same-frame anchors PARTICIPATE — an anchor arriving alongside
+  the entry is a participant in the judgment, not an excuse.
+  The entering entity itself is never its own anchor (an `all`
+  anchor selector would otherwise measure every entry at
+  distance 0 from itself). There is NO episode and NO soak:
+  the transition frame is the whole verdict, and the rule
+  GATES — a body appearing inside the zone is a state bug AT
+  the transition, not a transient fly-by the window doctrine
+  exists to smooth over (the pairwise rule owns the
+  persisted-overlap shape; the entry verdict and the soak
+  verdict are different questions). The frame-0 scene is never
+  an entry: the recorder stores its first snapshot at frame 0
+  and judges nothing — entities the scenario authored upfront
+  are the initial scene, not spawn events, and planted
+  mid-run transitions are exactly what the rule exists for.
+  Id-reuse soundness is generation-tracked: the diff keys on
+  (index, generation) pairs, and a despawned pair leaving the
+  previous snapshot forces every re-entry to be judged anew —
+  including the bit-identical recycled slots bevy 0.20's
+  allocator hands back. An invariant whose anchors never
+  resolve over the whole run → `vacuous_invariant` (the rule
+  could never judge anything, the pairwise never-a-pair
+  doctrine, anchor-shaped). `window_s`/`driver_resource`/
+  `driver_path`/`driver_units_per_second`/`check`/`value`/
+  `path`/`resource`/`eventually_s` and the bounds fields are
+  rejected at load; `min_distance_from`/`spawn_only` on other
+  rules are rejected too (foreign fields).

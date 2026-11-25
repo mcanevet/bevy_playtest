@@ -1,7 +1,8 @@
 //! `held_invariants` report section (the passing-invariant trace): the
 //! pass-side evidence trace — one compact object per PASSING
 //! resource_check / stagnant_resource / component_check /
-//! nodes_in_bounds invariant.
+//! nodes_in_bounds / pairwise_separation /
+//! derived_transform_consistency / spawn_safety invariant.
 //!
 //! Fixture doctrine mirrors `resource_check.rs`: frame-counter time
 //! (60 tps ⇒ dt = 1/60), the scenario JSON harness, and
