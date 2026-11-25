@@ -1650,6 +1650,7 @@ fn frozen_world_oracle_system(
                         stepping,
                         pairwise_episode: None,
                         consistency_episode: None,
+                        forbidden_episode: None,
                     });
                 }
             }
@@ -2143,6 +2144,16 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     if scenario
         .invariants
         .iter()
+        .any(|i| i.rule == crate::enums::InvariantRule::ForbiddenRegion)
+    {
+        // Episode-fold bookkeeping for forbidden_region (the same
+        // doctrine): the per-frame recorder folds into this, the
+        // run-end drain and the vacuity audit read it.
+        app.init_resource::<crate::invariant_eval::ForbiddenRegionBookkeeping>();
+    }
+    if scenario
+        .invariants
+        .iter()
         .any(|i| i.rule == crate::enums::InvariantRule::SpawnSafety)
     {
         // Diff/judge bookkeeping for spawn_safety (the same
@@ -2496,6 +2507,11 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             // the settled frame; per-entity episodes, judged
             // against a persistence soak.
             crate::invariant_eval::record_derived_transform_consistency(app.world_mut(), i, tps);
+            // forbidden_region: same driver-loop recorder doctrine —
+            // post-update observation of the settled frame; per-
+            // entity incursion episodes inside the declared region,
+            // judged against the window_s soak.
+            crate::invariant_eval::record_forbidden_region(app.world_mut(), i, tps);
             // spawn_safety: same driver-loop recorder doctrine —
             // post-update observation of the settled frame; the
             // generation-tracked archetype diff judges each entry
@@ -2568,6 +2584,11 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     // at the last frame is judged on its own accumulated span,
     // before the bookkeeping is removed for the audit below.
     crate::invariant_eval::close_consistency_episodes(app.world_mut());
+    // Same drain for the forbidden_region recorder: an incursion
+    // still open at the last frame is a complete stretch on its
+    // own — judged on its accumulated span before the bookkeeping
+    // is removed for the audit below.
+    crate::invariant_eval::close_forbidden_region_episodes(app.world_mut());
     let violations = app
         .world_mut()
         .remove_resource::<RunViolations>()
@@ -2758,6 +2779,30 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     for entry in crate::invariant_eval::audit_derived_transform_consistency(
         &scenario.invariants,
         &consistency_book,
+        state.frame,
+    ) {
+        // Same dedupe doctrine as the audits above.
+        if !snap
+            .iter()
+            .any(|v| v.rule == entry.rule && v.target == entry.target)
+        {
+            snap.push(entry);
+        }
+    }
+    // forbidden_region vacuity audit: a selector that never had a
+    // checkable entity over the whole run proves nothing. Needs the
+    // bookkeeping, so it runs before it is removed (the episode
+    // drain already ran, before RunViolations was extracted
+    // above). Runs BEFORE the non-informational status flip below
+    // so its vacuous_invariant entries gate the run like
+    // pairwise's.
+    let forbidden_book = app
+        .world_mut()
+        .remove_resource::<crate::invariant_eval::ForbiddenRegionBookkeeping>()
+        .unwrap_or_default();
+    for entry in crate::invariant_eval::audit_forbidden_region(
+        &scenario.invariants,
+        &forbidden_book,
         state.frame,
     ) {
         // Same dedupe doctrine as the audits above.
@@ -3114,6 +3159,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             watched_inv: &watched,
             pw_book: &pairwise_book,
             dtc_book: &consistency_book,
+            fr_book: &forbidden_book,
             ss_book: &spawn_safety_book,
         },
         tps,

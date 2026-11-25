@@ -2401,6 +2401,7 @@ fn judge_closed_episode(
                 stepping: None,
                 pairwise_episode: Some(pairwise_meta_of(ep)),
                 consistency_episode: None,
+                forbidden_episode: None,
             });
         }
     }
@@ -2501,6 +2502,534 @@ pub fn audit_pairwise_separation(
                     inv.name
                 ),
                 last_detail: format!("invariant '{}' never had a pair to check", inv.name),
+                meta: None,
+            });
+        }
+    }
+    entries
+}
+
+// ---------------------------------------------------------------------------
+// forbidden_region: the declarative no-go-zone oracle
+// (judgement layer, spatial family, per the reviewer-confirmed
+// design: GATING posture — the acceptance-table row carries a
+// RED/GREEN litmus pair, not a placeholder — and ONE EpisodeFolder
+// PER INVARIANT keyed by ENTITY INDEX, so each region's incursion
+// timeline is independent).
+// ---------------------------------------------------------------------------
+
+/// Bookkeeping for `forbidden_region` invariants (same doctrine as
+/// [`PairwiseBookkeeping`]): per-frame recorder ownership, full-
+/// series observability flags for the vacuity audit.
+#[derive(Resource, Default)]
+pub struct ForbiddenRegionBookkeeping {
+    /// Invariant name → the selector resolved AND at least one
+    /// checkable entity (marker + Transform) existed in some
+    /// observed frame. Otherwise vacuous — a region rule with
+    /// nothing to select proves nothing.
+    pub matched: std::collections::HashSet<String>,
+    /// Invariant name → a resolution/config failure was seen
+    /// during the run (already reported as `oracle_error`); the
+    /// audit suppresses its vacuity entry (N-B/N-C doctrine).
+    pub config_errored: std::collections::HashSet<String>,
+    /// (invariant name, error class) pairs already reported as
+    /// `oracle_error` this run — the once-per-distinct-error dedup.
+    pub oracle_error_seen: std::collections::HashSet<String>,
+    /// Invariant name → the fold engine. One folder per invariant:
+    /// the grammar allows exactly one region per invariant, so
+    /// folder identity IS region identity; episodes in one region
+    /// never weld to another's (an author wanting two regions
+    /// writes two named invariants).
+    pub folders: std::collections::HashMap<String, crate::episode::EpisodeFolder<u32>>,
+    /// Invariant name → the pass-side held statistics, folding
+    /// alongside the engine so sub-soak incursions survive the
+    /// soak judgment as near-miss story.
+    pub episode_stats: std::collections::HashMap<String, crate::held::EpisodeHeldStats>,
+}
+
+impl ForbiddenRegionBookkeeping {
+    /// The folder shape for a forbidden_region invariant: entity
+    /// keys, larger-is-worse (the observation value is penetration
+    /// depth — DEEPER is WORSE). Constructed explicitly (not via
+    /// Default) so the direction choice stays visible at the
+    /// type-erased HashMap boundary, same doctrine as
+    /// [`ConsistencyBookkeeping::new_folder`].
+    fn new_folder() -> crate::episode::EpisodeFolder<u32> {
+        crate::episode::EpisodeFolder::new(
+            crate::episode::DEFAULT_ROSTER_CAP,
+            crate::episode::WorstDirection::LargerIsWorse,
+        )
+    }
+}
+
+/// One frame's forbidden_region outcome for one invariant
+/// (owned-data phase-split doctrine).
+struct FrOutcome {
+    /// The frame's incursive entities (empty = a clean frame,
+    /// which ends any open episode).
+    incursions: Vec<crate::episode::Observation<u32>>,
+    /// The driver-leaf sample; `None` on a gap.
+    driver: Option<f64>,
+    /// First config error this frame, if any.
+    config_error: Option<String>,
+    /// The selector resolved AND ≥1 checkable entity existed.
+    checkable: bool,
+    /// How many checkable entities the enumeration walked this
+    /// frame (the workload figure behind the held trace's
+    /// per-frame count).
+    checkable_count: usize,
+}
+
+/// Driver-loop recorder for `forbidden_region` invariants: the
+/// declarative no-go-zone oracle. Selects every entity carrying
+/// the named registered component; a selected entity whose
+/// Transform translation lies INSIDE the author-declared box
+/// region (boundaries INCLUDED — the on-edge doctrine, pinned by
+/// the battery) is incursive. Incursion frames fold into EPISODES
+/// (maximal stretches over time — see [`crate::episode`]) and an
+/// episode becomes ONE finding when its `window_s` soak elapses
+/// (in the declared driver leaf's own units; the frame clock in
+/// seconds when no driver is declared).
+///
+/// Cost is O(n) over the selector's entities — the author bounds
+/// it by choosing the selector (that is why `all` is rejected at
+/// load: forbidding every `Transform` in the world — walls,
+/// camera, UI — from a region is never what an author means).
+///
+/// Soak semantics follow `pairwise_separation`'s window doctrine
+/// exactly: forward driver deltas credit the span, retreats
+/// advance no budget, a gap (missing/non-finite driver sample)
+/// CLOSES the open episode, and sub-soak episodes are discarded as
+/// transient fly-bys (the ε doctrine: brushing a no-go zone in
+/// passing is gameplay, not a bug).
+///
+/// `allow_if` exempts per entity, per frame: an entity carrying
+/// the exemption component is never incursive, and never even
+/// opens an episode (so a lifetime-exempt presence inside the
+/// region is silence, not vacuity). The exemption is read at the
+/// same settled observation point as the position — the flip-test
+/// discipline (proposal §1) is the AUTHOR's job: the exemption
+/// must name the component marking LEGITIMATE presence, never the
+/// state the buggy run is in.
+///
+/// The EVERY-FRAME PUSH discipline: this recorder pushes to its
+/// folder EVERY observed frame, including frames with zero
+/// incursions — an empty observation set is what CLOSES an
+/// episode when the entity leaves the region, and skipping the
+/// push would weld two incursions into one across the gap.
+pub fn record_forbidden_region(world: &mut World, frame: u64, tps: u64) {
+    let invariants: Vec<Invariant> = world
+        .get_resource::<ScenarioInvariants>()
+        .map(|invariants| {
+            invariants
+                .0
+                .iter()
+                .filter(|i| i.rule == InvariantRule::ForbiddenRegion)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if invariants.is_empty() {
+        return;
+    }
+    let Some(atr) = world.get_resource::<AppTypeRegistry>().cloned() else {
+        world.resource_scope(|world, mut book: Mut<ForbiddenRegionBookkeeping>| {
+            let mut violations = world.resource_mut::<RunViolations>();
+            for inv in &invariants {
+                book.config_errored.insert(inv.name.clone());
+                let why = &no_atr_message("forbidden region checks");
+                report_config_error_once(
+                    &mut violations.0,
+                    &mut book.oracle_error_seen,
+                    &inv.name,
+                    why,
+                    frame,
+                );
+            }
+        });
+        return;
+    };
+    let registry = atr.read();
+
+    let mut outcomes: Vec<(Invariant, FrOutcome)> = Vec::with_capacity(invariants.len());
+    for inv in &invariants {
+        outcomes.push((
+            inv.clone(),
+            eval_forbidden_region(world, &registry, inv, frame, tps),
+        ));
+    }
+    drop(registry);
+
+    world.resource_scope(|world, mut book: Mut<ForbiddenRegionBookkeeping>| {
+        let mut violations = world.resource_mut::<RunViolations>();
+        for (inv, outcome) in outcomes {
+            apply_fr_outcome(&inv, &outcome, frame, &mut book, &mut violations.0);
+        }
+    });
+}
+
+/// Enumerate the frame's incursive entities for one invariant
+/// (the read phase).
+fn eval_forbidden_region(
+    world: &World,
+    registry: &TypeRegistry,
+    inv: &Invariant,
+    frame: u64,
+    tps: u64,
+) -> FrOutcome {
+    let err = |why: String| FrOutcome {
+        incursions: vec![],
+        driver: None,
+        config_error: Some(why),
+        checkable: false,
+        checkable_count: 0,
+    };
+    // Validation guarantees these; the Options are defensive only.
+    let Some(crate::enums::TargetSelector::WithComponent { name }) = inv.target_selector.as_ref()
+    else {
+        return err("forbidden_region requires a with_component selector (validated)".into());
+    };
+    let Some(region) = inv.region else {
+        return err("forbidden_region requires 'region' (validated)".into());
+    };
+    let type_reg = match resolve_registration(registry, name, "component") {
+        Ok(t) => t,
+        Err(why) => return err(why),
+    };
+    // Resolve the optional exemption component ONCE up front: a
+    // bad name is a config error regardless of whether anyone is
+    // inside the region this frame (the lint front-loads the
+    // same resolution; the recorder still guards defensively).
+    // Kept as a bare TypeId: the membership probe below is
+    // EntityRef::contains_type_id, no ComponentId round-trip.
+    let allow_type_id = match inv.allow_if.as_deref() {
+        Some(allow) => match resolve_registration(registry, allow, "component") {
+            Ok(t) => Some(t.type_id()),
+            Err(why) => return err(why),
+        },
+        None => None,
+    };
+    // Collect (entity, translation) for every entity carrying the
+    // marker AND a Transform — the bounds recorder's doctrine
+    // ("carries the marker but no Transform: not checkable"). The
+    // FULL Entity is kept (not just its index) so the exemption
+    // check below resolves the live entity, never a reconstructed
+    // index with a stale generation.
+    let mut nodes: Vec<(Entity, [f32; 3])> = Vec::new();
+    if let Some(component_id) = world.components().get_valid_id(type_reg.type_id()) {
+        for archetype in world.archetypes().iter() {
+            if !archetype.components().contains(&component_id) {
+                continue;
+            }
+            for entry in archetype.entities() {
+                let Ok(entity_ref) = world.get_entity(entry.id()) else {
+                    continue;
+                };
+                let Some(transform) = entity_ref.get::<Transform>() else {
+                    continue;
+                };
+                nodes.push((
+                    entity_ref.id(),
+                    [
+                        transform.translation.x,
+                        transform.translation.y,
+                        transform.translation.z,
+                    ],
+                ));
+            }
+        }
+    }
+    // Registered but never instantiated: nothing to select —
+    // vacuity is the audit's call, frames are clean (but STILL
+    // pushed, so any open episode closes: the every-frame-push
+    // discipline).
+    if nodes.is_empty() {
+        return FrOutcome {
+            incursions: vec![],
+            driver: frame_clock(frame, tps),
+            config_error: None,
+            checkable: false,
+            checkable_count: 0,
+        };
+    }
+    let mut incursions: Vec<crate::episode::Observation<u32>> = Vec::new();
+    let checkable_count = nodes.len();
+    for (entity, pos) in nodes {
+        // NaN translations are never inside (NaN comparisons are
+        // false) — the finite_transforms oracle owns NaN findings;
+        // never double-reported.
+        if !region.contains(pos) {
+            continue;
+        }
+        // allow_if exempts per entity, per frame, read at the
+        // settled observation point. An exempt entity never even
+        // opens an episode (silence, not vacuity).
+        if let Some(allow_tid) = allow_type_id {
+            let exempt = world
+                .get_entity(entity)
+                .map(|e| e.contains_type_id(allow_tid))
+                .unwrap_or(false);
+            if exempt {
+                continue;
+            }
+        }
+        // The observation value is PENETRATION DEPTH: distance
+        // from the translation to the NEAREST face of the box
+        // (the MINIMUM remaining margin over the axes — how far
+        // the entity must travel to exit through the closest
+        // face). DEEPER is WORSE (LargerIsWorse), so the
+        // engine's worst-selection and the roster's worst-first
+        // sort name the most-embedded observation as evidence.
+        // On-face depth is 0 (the inclusive-boundary doctrine:
+        // still incursive); at the very center it equals the
+        // smallest half_extent.
+        let depth = {
+            let dx = (pos[0] - region.center[0]).abs();
+            let dy = (pos[1] - region.center[1]).abs();
+            let dz = (pos[2] - region.center[2]).abs();
+            debug_assert!(
+                dx <= region.half_extents[0]
+                    && dy <= region.half_extents[1]
+                    && dz <= region.half_extents[2]
+            );
+            (region.half_extents[0] - dx)
+                .min(region.half_extents[1] - dy)
+                .min(region.half_extents[2] - dz)
+        };
+        incursions.push(crate::episode::Observation {
+            key: entity.index().index(),
+            value: depth,
+        });
+    }
+    // Driver sample: declared leaf, or the frame clock (seconds).
+    let driver = match (inv.driver_resource.as_deref(), inv.driver_path.as_deref()) {
+        (Some(res_name), Some(path)) => {
+            match sample_declared_driver(world, registry, res_name, path) {
+                Ok(Some(v)) => Some(v),
+                Ok(None) => None,
+                Err(why) => return err(why),
+            }
+        }
+        (None, None) => frame_clock(frame, tps),
+        _ => return err("forbidden_region's driver needs both halves (validated)".into()),
+    };
+    FrOutcome {
+        incursions,
+        driver,
+        config_error: None,
+        checkable: true,
+        checkable_count,
+    }
+}
+
+/// Write-phase fold of one frame's forbidden_region outcome: feed
+/// the engine (EVERY frame — an empty set closes the open
+/// episode), judge any closed episode against the soak, report ONE
+/// finding with the episode's evidence.
+fn apply_fr_outcome(
+    inv: &Invariant,
+    outcome: &FrOutcome,
+    frame: u64,
+    book: &mut ForbiddenRegionBookkeeping,
+    violations: &mut crate::state::Violations,
+) {
+    if let Some(why) = &outcome.config_error {
+        book.config_errored.insert(inv.name.clone());
+        report_config_error_once(
+            violations,
+            &mut book.oracle_error_seen,
+            &inv.name,
+            &format!("invariant '{}': {why}", inv.name),
+            frame,
+        );
+        return;
+    }
+    if outcome.checkable {
+        book.matched.insert(inv.name.clone());
+        // Held-trace workload fold: judged frames and per-frame
+        // selected-entity count (the consistency recorder's
+        // entity_count slot — same doctrine).
+        book.episode_stats
+            .entry(inv.name.clone())
+            .or_default()
+            .observe_frame(None, Some(outcome.checkable_count as u64));
+    }
+    let folder = book
+        .folders
+        .entry(inv.name.clone())
+        .or_insert_with(ForbiddenRegionBookkeeping::new_folder);
+    let closed = folder.push(frame, outcome.driver, &outcome.incursions);
+    if let Some(closed) = closed {
+        book.episode_stats
+            .entry(inv.name.clone())
+            .or_default()
+            .observe_episode_span(closed.driver_span, closed.start_frame);
+        judge_fr_episode(inv, &closed, violations);
+    }
+}
+
+/// Soak judgment and finding emission for one closed incursion
+/// episode: discard sub-soak episodes as transient fly-bys; report
+/// one finding with the worst observation and the roster
+/// evidence.
+fn judge_fr_episode(
+    inv: &Invariant,
+    ep: &crate::episode::ClosedEpisode<u32>,
+    violations: &mut crate::state::Violations,
+) {
+    let Some(window_s) = inv.window_s else {
+        return; // Validated required; defensive only.
+    };
+    if ep.driver_span < window_s as f64 {
+        // Sub-soak: a transient brush the ε doctrine discards.
+        return;
+    }
+    let Some(region) = inv.region else {
+        return; // Validated required; defensive only.
+    };
+    let (span, span_unit) = match inv.driver_path.as_deref() {
+        Some(_) => (ep.driver_span, " driver units"),
+        None => (ep.driver_span, "s of frame clock"),
+    };
+    let worst_depth_frame = ep.worst.frame;
+    violations.report(
+        crate::rules::Rule::ForbiddenRegion.name(),
+        &inv.name,
+        format!(
+            "entity #{} entered the forbidden region (center {:?}, \
+             half_extents {:?}), reaching a penetration depth of {:.3} \
+             (worst at frame {}), sustained for {:.3}{} across frames \
+             {}–{} ({} incursive entit{}); lingering inside a no-go \
+             zone is a state bug, not a fly-by",
+            ep.worst.key,
+            region.center,
+            region.half_extents,
+            ep.worst.value,
+            worst_depth_frame,
+            span,
+            span_unit,
+            ep.start_frame,
+            ep.end_frame,
+            ep.distinct_keys,
+            if ep.distinct_keys == 1 { "y" } else { "ies" },
+        ),
+        ep.start_frame,
+    );
+    // Attach the roster evidence (`_meta`) to the just-reported
+    // entry — first-write-wins, the pairwise doctrine: `report`
+    // keeps the FIRST episode's detail/first_frame, so the meta
+    // must describe the same episode — a later soaked episode
+    // extends last_frame (its detail span already told the reader
+    // there was more) but never swaps the evidence out from under
+    // the first finding.
+    if let Some(entry) = violations.entries.get_mut(&(
+        crate::rules::Rule::ForbiddenRegion.name().to_string(),
+        inv.name.clone(),
+    )) {
+        entry.last_frame = entry.last_frame.max(ep.end_frame);
+        if entry.meta.is_none() {
+            entry.meta = Some(crate::discovery::surface::ViolationMeta {
+                stepping: None,
+                pairwise_episode: None,
+                consistency_episode: None,
+                forbidden_episode: Some(forbidden_meta_of(ep)),
+            });
+        }
+    }
+}
+
+/// The `_meta` evidence block for one closed incursion episode:
+/// the roster maps the generic engine fields into the wire-stable
+/// names (entity, worst_depth — the penetration-depth value the
+/// recorder observes).
+fn forbidden_meta_of(
+    ep: &crate::episode::ClosedEpisode<u32>,
+) -> crate::discovery::surface::ForbiddenEpisodeMeta {
+    crate::discovery::surface::ForbiddenEpisodeMeta {
+        sampled_entities: ep.distinct_keys,
+        roster: ep
+            .roster
+            .iter()
+            .map(|r| crate::discovery::surface::ForbiddenRosterEntry {
+                entity: r.key,
+                first_frame: r.first_frame,
+                worst_depth: r.worst_value,
+                worst_frame: r.worst_frame,
+                violating_frames: r.violating_frames,
+            })
+            .collect(),
+        roster_truncated: ep.roster_truncated,
+    }
+}
+
+/// Run-end drain: an incursion still open at the last frame is a
+/// complete stretch on its own — fold it out and judge it like
+/// any other closed episode.
+pub fn close_forbidden_region_episodes(world: &mut World) {
+    let invariants: Vec<Invariant> = world
+        .get_resource::<ScenarioInvariants>()
+        .map(|invariants| {
+            invariants
+                .0
+                .iter()
+                .filter(|i| i.rule == InvariantRule::ForbiddenRegion)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if invariants.is_empty() {
+        return;
+    }
+    world.resource_scope(|world, mut book: Mut<ForbiddenRegionBookkeeping>| {
+        let mut violations = world.resource_mut::<RunViolations>();
+        for inv in &invariants {
+            let closed = book
+                .folders
+                .get_mut(&inv.name)
+                .and_then(|folder| folder.close_run());
+            if let Some(closed) = closed {
+                book.episode_stats
+                    .entry(inv.name.clone())
+                    .or_default()
+                    .observe_episode_span(closed.driver_span, closed.start_frame);
+                judge_fr_episode(inv, &closed, &mut violations.0);
+            }
+        }
+    });
+}
+
+/// Post-run audit for `forbidden_region` invariants: a selector
+/// that never had a checkable entity over the whole run proves
+/// nothing — reported as `vacuous_invariant`, named per
+/// invariant. Config-errored invariants are suppressed (their
+/// `oracle_error` already told the story).
+pub fn audit_forbidden_region(
+    invariants: &[Invariant],
+    book: &ForbiddenRegionBookkeeping,
+    last_frame: u64,
+) -> Vec<crate::state::ViolationEntry> {
+    let mut entries = Vec::new();
+    for inv in invariants
+        .iter()
+        .filter(|i| i.rule == InvariantRule::ForbiddenRegion)
+    {
+        if book.config_errored.contains(&inv.name) {
+            continue;
+        }
+        if !book.matched.contains(&inv.name) {
+            entries.push(crate::state::ViolationEntry {
+                rule: crate::rules::Rule::VacuousInvariant.name().to_string(),
+                target: inv.name.clone(),
+                first_frame: 0,
+                last_frame,
+                count: 1,
+                detail: format!(
+                    "invariant '{}' never resolved a checkable entity over the \
+                     whole run; the region rule proves nothing until there is \
+                     something to select",
+                    inv.name
+                ),
+                last_detail: format!("invariant '{}' never resolved a checkable entity", inv.name),
                 meta: None,
             });
         }
@@ -3044,6 +3573,7 @@ fn judge_dtc_episode(
                 stepping: None,
                 pairwise_episode: None,
                 consistency_episode: Some(consistency_meta_of(ep)),
+                forbidden_episode: None,
             });
         }
     }

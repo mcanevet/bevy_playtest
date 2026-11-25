@@ -281,7 +281,7 @@ to the full run stays accepted — fly-by controls pin this shape:
 a judged episode approaches but, by the grace and frame budget,
 never exactly reaches a full-run span) rejects at load for the
 soak-family rules (`pairwise_separation`,
-`derived_transform_consistency`). Otherwise the recorder would
+`derived_transform_consistency`, `forbidden_region`). Otherwise the recorder would
 silently discard every episode as sub-soak — a run that proves
 nothing, reported as Pass. For `derived_transform_consistency`
 the check compounds with `grace_frames`: episodes accrue span
@@ -463,8 +463,8 @@ Two distinct error classes, at different stages:
   reject with `Rejected` naming the invariant: the resource vocabulary
   (`resource`, `window_s`, `driver_resource`, `driver_path`) is
   meaningful only on `resource_check` / `stagnant_resource`
-  (`window_s`/`driver_*` also on `pairwise_separation` and
-  `derived_transform_consistency`), and
+  (`window_s`/`driver_*` also on `pairwise_separation`,
+  `derived_transform_consistency`, and `forbidden_region`), and
   binding any of it to `component_check` or `nodes_in_bounds` fails
   at load — a silently-ignored `window_s` on a component check
   would masquerade as a temporal bound that never existed. The
@@ -723,6 +723,54 @@ Two distinct error classes, at different stages:
   `check`/`value`/`eventually_s`/`path`/
   `resource`/`min_distance` and the bounds fields are rejected
   at load.
+- `forbidden_region`: the declarative no-go-zone oracle — the
+  author draws an axis-aligned box an entity's translation must
+  not LINGER inside (the rail-tunneling incident class, made
+  declarative). `target_selector` is REQUIRED (`with_component`
+  only; "all" rejects at load — a region forbidden to every
+  `Transform` in the world, walls and camera included, is never
+  what an author means) and selects Transform-bearing entities.
+  `region` is required and is an inclusive box:
+  `{"center": [x,y,z], "half_extents": [hx,hy,hz]}` — a
+  translation lying EXACTLY on a face counts as inside (the
+  boundary belongs to the region), half-extents must be finite
+  and strictly positive (a zero-thickness region is a plane —
+  vacuous by construction), and NaN translations are never
+  inside (comparisons are false — `finite_transforms` keeps
+  owning NaN findings, no double-reporting). `allow_if`
+  (optional) names a REGISTERED component that marks
+  LEGITIMATE presence (a mounted rider on the rail-surface may
+  legally overlap): the exemption is resolved per entity, per
+  frame — an exempt entity stops counting as incursive at the
+  acquisition frame, so its roster participation ends there and
+  loss re-opens its judgment; the EPISODE is per-invariant, so
+  an acquisition closes the open episode only when no incursive
+  entity remains (a survivor's soak spans the exempted
+  period — the roster still shows the exempted entity's
+  `violating_frames` stopping at acquisition). AUTHOR IT AS A
+  FLIP TEST: name
+  the component whose presence is the LEGITIMATE state, never
+  the buggy one, and keep a RED/GREEN pair in the acceptance
+  table. Incursion frames fold into EPISODES keyed by entity
+  (one region per invariant — folder identity IS region
+  identity; two zones means two named invariants), with the
+  every-frame-push discipline: frames with zero incursions still
+  push, so an excursion out and back cannot weld two visits into
+  one long stretch. An episode only becomes a finding when its
+  `window_s` soak elapses (REQUIRED; the same
+  both-halves-or-neither driver grammar, frame-clock default in
+  seconds, declared-rate fit at load — a window the run can
+  never elapse rejects). Sub-soak incursions are transient
+  fly-bys, discarded. The observation value is PENETRATION DEPTH
+  (distance to the nearest face; deeper is worse), so the worst
+  evidence names the most-embedded frame, and the finding's
+  `_meta` carries a capped roster of distinct incursive entities
+  (worst depth + frame per entity, truncation-disclosed) — a
+  crowd cannot hide behind the cap. A selector that never
+  resolves a checkable entity over the whole run →
+  `vacuous_invariant` (gating). `check`/`value`/`eventually_s`/
+  `path`/`resource`/`min_distance`/`tolerance` and the bounds
+  fields are rejected at load.
 - `spawn_safety`: the archetype-entry spatial oracle — the rule
   for the pile-up incident class where a respawned body APPEARS
   inside the danger zone. Judged ONCE, at the frame an entity

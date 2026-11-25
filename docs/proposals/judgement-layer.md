@@ -225,6 +225,32 @@ finding per incursion episode, WITH the entry frame and position. The
 skate sandbox's rail-tunneling pin (currently a scripted/behavioral
 pin) becomes declaratively judgeable.
 
+(AS BUILT, the deviations and precisions the shipped rule adds to
+this sketch: the wire selector is the object form,
+`target_selector: {"with_component": {"name": "..."}}`, REQUIRED —
+`all` rejects at load; the region carries no `shape` key — the box is
+the grammar and unknown keys fail `deny_unknown_fields` — and its
+half-extents must be finite and strictly positive, with containment
+INCLUSIVE on every face (a translation exactly on a face is inside;
+NaN translations are never inside, `finite_transforms` keeps owning
+NaN findings). `window_s` is REQUIRED and is a SOAK in the driver
+leaf's own units — the same both-halves-or-neither driver grammar as
+`pairwise_separation`, frame-clock default in seconds, with the
+declared-rate fit check at load — an incursion must LINGER, sub-soak
+incursions being transient fly-bys, discarded. The "fires one finding
+per incursion episode" promise is delivered by the episode-fold
+machinery, not the literal sketch above, so the entry frame and
+position arrive as the episode's evidence: worst penetration depth +
+frame, per-distinct-entity capped roster with truncation disclosed,
+`allow_if` exemptions resolved per entity per frame (an exempt
+entity's roster participation ends at acquisition; the episode —
+per-invariant — closes only when NO incursive entity remains, so a
+survivor's soak spans the exempted period).
+And the harness checks the entity's `Transform` translation — bevy's
+canonical own-space position; a `GlobalTransform` read would import
+propagation timing into a rule whose defect class (noclip tunneling)
+survives propagation intact.)
+
 The escape-hatch grammar deserves care — this is the lesson the first
 draft of this example taught. `allow_if` (optional component/tag
 exemption) exists for the "decorative cover you can walk through"

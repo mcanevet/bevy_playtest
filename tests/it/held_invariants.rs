@@ -1075,6 +1075,164 @@ fn dtc_flat_world_gets_no_held_entry() {
 }
 
 // ---------------------------------------------------------------------------
+// forbidden_region held evidence
+// ---------------------------------------------------------------------------
+
+/// The FR selector marker (unique-short-name doctrine).
+#[derive(Component, Reflect, Default)]
+#[reflect(Component)]
+struct HeldWanderer;
+
+/// Backing clock for the phase-driven wiggle (a wiggle derived from
+/// a settled x would be a CONSTANT transform — frozen_world).
+#[derive(Resource, Default)]
+struct HeldPhaseClock {
+    frame: u32,
+}
+
+/// The pure-coverage FR shape: one wanderer walking strictly OUTSIDE
+/// the region, transforms changing every frame. The rule is exercised
+/// every frame (the selector resolves, one entity judged) and zero
+/// episodes ever form.
+fn held_walk_outside(mut q: Query<&mut Transform, With<HeldWanderer>>) {
+    for mut t in q.iter_mut() {
+        t.translation.x += 0.05;
+    }
+}
+
+/// The sub-soak crossing: the wanderer sweeps from x=+2 toward −2 at
+/// 0.02/frame, entering the region (half-width 0.5) around frame 75
+/// and exiting by ~125 — ≈50 frames ≈ 0.83s, sub-soak against the
+/// 2.0s window. The discarded episode is exactly the near-miss the
+/// held record must name (the pairwise crossing fixture's shape).
+fn held_sweep_through(
+    mut q: Query<&mut Transform, With<HeldWanderer>>,
+    mut clock: ResMut<HeldPhaseClock>,
+) {
+    clock.frame += 1;
+    let x = 2.0 - 0.02 * clock.frame as f32;
+    for mut t in q.iter_mut() {
+        t.translation.x = x;
+    }
+}
+
+const HELD_FR_INV: &str = r#"
+    "name": "stay_off_tracks",
+    "rule": "forbidden_region",
+    "target_selector": {"with_component": {"name": "HeldWanderer"}},
+    "region": {"center": [0.0, 0.0, 0.0], "half_extents": [0.5, 1.0, 0.5]},
+    "window_s": 2.0"#;
+
+/// A passing FR run with zero episodes: the held record carries the
+/// workload figures and NO span witness. `entity_judgments` counts
+/// the selected entity every judged frame (the DTC entity-count
+/// doctrine); `frames_matched == frame_count` (no grace frames for
+/// FR); `pair_judgments` stays None (pairwise's field).
+#[test]
+fn forbidden_region_clean_pass_reports_workload_without_span() {
+    let _slot = common::run_slot();
+    let mut app = App::new();
+    app.register_type::<HeldWanderer>();
+    app.register_type::<Transform>();
+    app.add_systems(Update, held_walk_outside);
+    app.world_mut()
+        .spawn((HeldWanderer, Transform::from_xyz(10.0, 0.0, 0.0)));
+    let report = run_scenario(&mut app, &scenario_with_invariants(HELD_FR_INV)).unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    let held = report
+        .held_invariants
+        .iter()
+        .find(|h| h.name == "stay_off_tracks")
+        .expect("held entry for passing region invariant");
+    assert_eq!(held.rule, "forbidden_region");
+    assert_eq!(held.target, "HeldWanderer");
+    // The soak window renders in predicate syntax as the window.
+    assert_eq!(
+        held.predicate.as_deref(),
+        Some("inside at most 2 driver units")
+    );
+    // One selected entity judged every frame (no grace).
+    assert_eq!(held.frames_matched, report.frame_count);
+    assert_eq!(held.entity_judgments, Some(report.frame_count));
+    // Clean run: no episode ever formed.
+    assert_eq!(held.episodes_observed, Some(0));
+    assert!(held.worst_episode_span.is_none());
+    assert!(held.worst_episode_frame.is_none());
+    // FR never carries the pairwise field.
+    assert!(held.pair_judgments.is_none());
+    // The window rides along for the span-vs-window story.
+    assert_eq!(held.window_s, Some(2.0));
+}
+
+/// A sweeping crosser leaves a sub-soak episode: the run passes and
+/// the held record names it — `episodes_observed: 1` plus the span
+/// witness, honest about being sub-window. Same promise as the
+/// pairwise/DTC near-miss fixtures.
+#[test]
+fn forbidden_region_subsoak_nearmiss_gets_span_witness() {
+    let _slot = common::run_slot();
+    let mut app = App::new();
+    app.register_type::<HeldWanderer>();
+    app.register_type::<Transform>();
+    app.insert_resource(HeldPhaseClock::default());
+    app.add_systems(Update, held_sweep_through);
+    app.world_mut()
+        .spawn((HeldWanderer, Transform::from_xyz(2.0, 0.0, 0.0)));
+    let report = run_scenario(&mut app, &scenario_with_invariants(HELD_FR_INV)).unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    assert!(
+        !report
+            .violations
+            .iter()
+            .any(|v| v.rule == "forbidden_region"),
+        "a 0.83s crossing is sub-soak: {:?}",
+        report.violations
+    );
+    let held = report
+        .held_invariants
+        .iter()
+        .find(|h| h.name == "stay_off_tracks")
+        .expect("held entry for passing region invariant");
+    assert_eq!(held.episodes_observed, Some(1));
+    let span = held
+        .worst_episode_span
+        .expect("the crossing's episode carries a span witness");
+    assert!(
+        span > 0.0 && span < 2.0,
+        "passing run's worst span {span} must be sub-window (2.0)"
+    );
+    assert!(held.worst_episode_frame.is_some());
+}
+
+/// A vacuous FR rule (never-instantiated selector) gets NO held
+/// entry — the violation owns the story.
+#[test]
+fn vacuous_forbidden_region_gets_no_held_entry() {
+    let _slot = common::run_slot();
+    let mut app = App::new();
+    app.register_type::<HeldWanderer>();
+    app.register_type::<Transform>();
+    // Observable world for vacuous_RUN suppression: a moving plain
+    // Transform entity.
+    app.add_systems(Update, |mut q: Query<&mut Transform>| {
+        for mut t in q.iter_mut() {
+            t.translation.x += 0.01;
+        }
+    });
+    app.world_mut().spawn(Transform::from_xyz(0.0, 1.0, 0.0));
+    let report = run_scenario(&mut app, &scenario_with_invariants(HELD_FR_INV)).unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
+    assert!(report
+        .violations
+        .iter()
+        .any(|v| v.rule == "vacuous_invariant" && v.target == "stay_off_tracks"));
+    assert!(report
+        .held_invariants
+        .iter()
+        .all(|h| h.name != "stay_off_tracks"));
+}
+
+// ---------------------------------------------------------------------------
 // BatteryConfig::new (the constructor fix)
 // ---------------------------------------------------------------------------
 
