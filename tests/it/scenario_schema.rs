@@ -1361,7 +1361,6 @@ fn spawn_safety_rejects_temporal_and_foreign_knobs() {
         ("value", &[&serde_json::json!(900.0)]),
         ("path", &[&serde_json::json!("translation.x")]),
         ("resource", &[&serde_json::json!("MatchClock")]),
-        ("eventually_s", &[&serde_json::json!(2.0)]),
         ("min_x", &[&serde_json::json!(1.0)]),
     ] {
         for value in values {
@@ -1378,6 +1377,22 @@ fn spawn_safety_rejects_temporal_and_foreign_knobs() {
             );
         }
     }
+    // eventually_s rejects too — via the GENERIC eventually-mode
+    // arm, not the spawn_safety bundle (one defect, one error,
+    // the pairwise doctrine: the generic message is the better
+    // error and the rule-specific one would double-report).
+    let mut json = spawn_safety_json(
+        Some("Projectile"),
+        Some(serde_json::json!("all")),
+        serde_json::json!(0.5),
+    );
+    json["invariants"][0]["eventually_s"] = serde_json::json!(2.0);
+    let errs = lint_errors(json.clone());
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("eventually mode is only supported")),
+        "eventually_s: {errs:?}"
+    );
 }
 
 #[test]

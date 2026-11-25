@@ -2288,9 +2288,11 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                 // temporal knobs of every other rule are foreign
                 // here. after_s/before_s are ALREADY rejected
                 // universally (not-implemented), so they need no
-                // arm; window_s/driver/tolerance/grace/exclude/
-                // check/value/path/resource/eventually_s/bounds are
-                // this rule's foreign surface.
+                // arm; eventually_s is likewise left to the
+                // generic eventually-mode check above (one
+                // defect, one error); window_s/driver/tolerance/
+                // grace/exclude/check/value/path/resource/bounds
+                // are this rule's foreign surface.
                 if rule.window_s.is_some() {
                     errors.push(ScenarioError::Rejected(format!(
                         "invariant '{}': spawn_safety does not use window_s — \
@@ -2319,7 +2321,6 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                     || rule.value.is_some()
                     || rule.path.is_some()
                     || rule.resource.is_some()
-                    || rule.eventually_s.is_some()
                     || rule.min_x.is_some()
                     || rule.max_x.is_some()
                     || rule.min_y.is_some()
@@ -2329,7 +2330,7 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                 {
                     errors.push(ScenarioError::Rejected(format!(
                         "invariant '{}': spawn_safety does not use \
-                         check/value/path/resource/eventually_s/bounds — it \
+                         check/value/path/resource/bounds — it \
                          judges entry-frame distance against min_distance, \
                          once (tolerance/grace_frames/exclude_components are \
                          rejected separately as DTC-only fields)",

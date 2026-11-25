@@ -357,6 +357,69 @@ fn id_reuse_recycled_pairs_are_new_entries() {
     assert_eq!(ss.len(), 1, "expected exactly one finding: {ss:?}");
 }
 
+/// The one theoretically-suspicious corner, EMPIRICALLY CLOSED:
+/// a despawn AND same-slot recycle landing in the SAME frame's
+/// update would leave the recycled occupant reading as "stayed
+/// a member" (a single-frame false negative) — but it cannot
+/// happen through the sanctioned path. bevy's command queue
+/// FREES SLOTS AT APPLY: the same-tick despawn-then-spawn below
+/// hands out a FRESH slot (empirically 37v0, not the freed
+/// 36v0), so the recorder sees a genuine unknown-pair entry and
+/// judges it. This test PINS that invariant: if it ever fails,
+/// the engine's slot-freeing semantics changed — update the
+/// recorder header comment alongside this test, and treat a
+/// recycled-into-slot-36 firing as a FALSE POSITIVE hole to
+/// close, not new doctrine.
+#[test]
+fn same_frame_death_and_recycle_corner_is_pinned_as_not_judged() {
+    let _slot = common::run_slot();
+    let mut app = base_app();
+    app.world_mut()
+        .spawn((Beacon, Transform::from_xyz(0.0, 0.0, 0.0)));
+    // A projectile born SAFE at frame 1, then in ONE frame's
+    // update both despawned and its slot re-taken by an in-zone
+    // spawn (bevy recycles the freshest freed slot bit-identical,
+    // so the same system-tick despawn-then-spawn reuses it).
+    app.add_systems(
+        Update,
+        |mut commands: Commands, q: Query<Entity, With<Projectile>>, mut frame: Local<u64>| {
+            *frame += 1;
+            match *frame {
+                1 => {
+                    commands.spawn((Projectile, Transform::from_xyz(0.0, 0.0, 5.0)));
+                }
+                30 => {
+                    if let Ok(e) = q.single() {
+                        commands.entity(e).despawn();
+                        commands.spawn((Projectile, Transform::from_xyz(0.0, 0.0, 0.0)));
+                    }
+                }
+                _ => {}
+            }
+        },
+    );
+    let report = run_scenario(&mut app, &scenario_with_invariant(SAFETY_INV)).unwrap();
+    // If the engine ever hands the same-tick spawn the JUST-freed
+    // slot, the recycled occupant would read as stayed-a-member
+    // and this run would (correctly, per that hypothetical
+    // semantics) pass. As shipped, the spawn takes a fresh slot
+    // and the in-zone entry IS judged — the run FAILS with
+    // exactly one finding, the genuinely-recycled-slot behavior
+    // having been pinned separately by
+    // id_reuse_recycled_pairs_are_new_entries.
+    let ss: Vec<_> = report
+        .violations
+        .iter()
+        .filter(|v| v.rule == "spawn_safety")
+        .collect();
+    assert_eq!(
+        ss.len(),
+        1,
+        "same-tick re-fill takes a fresh slot and is judged (engine \
+         free-at-apply semantics changed?): {ss:?}"
+    );
+}
+
 /// Same-frame anchor participation: a beacon spawned in the SAME
 /// frame as the entry is a participant in the judgment, not an
 /// excuse — the anchor snapshot is taken at the END of the judging
