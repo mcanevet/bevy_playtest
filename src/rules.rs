@@ -60,6 +60,7 @@ impl Rule {
             Self::PairwiseSeparation => "Coincident-bodies spatial oracle: every pair of selected entities (via a with_component selector) must stay at least min_distance apart; violating frames fold into episodes, and only an episode that soaks past window_s (in driver units) becomes a finding — sub-soak overlaps are transient fly-bys, not bugs.",
             Self::DerivedTransformConsistency => "Compositional identity over Bevy's derived Transform relationship: every parented entity's GlobalTransform must equal the parent's GlobalTransform composed with its own Transform, both read at the same settled frame — stale or foreign-written globals (sprites frozen at identity under a moving parent) are state bugs, folded into episodes that must persist past a window_s soak.",
             Self::HierarchyAbsent => "A derived_transform_consistency rule found no parented entities over the whole run: no hierarchy, no identity to check. Informational, not vacuous — a flat world is a coherent scene the rule simply cannot judge.",
+            Self::SpawnSafety => "Archetype-entry spatial oracle: every entity entering the selected archetype — a newborn or a pre-existing entity first acquiring the target component — must be at least min_distance from every anchor selected by min_distance_from, judged once at the entry frame against same-frame anchors (snapshotted post-update); the respawn-ring shape — bodies appearing inside the danger zone — is a state bug at the transition frame, not a transient.",
             Self::FiniteTransforms => "Every entity's Transform holds finite values (no NaN/inf).",
             #[cfg(feature = "render-liveness")]
             Self::RenderLiveness => "A structurally live render path: a sim-active run with something to draw should have at least one camera that is enabled and written out; informational — a structural rule, it sees the main-world camera components, never the rendered pixels (a live camera rendering black passes).",
@@ -133,6 +134,15 @@ declare_rules! {
     // misauthored invariant, and a gating vacuity would punish
     // every legitimately hierarchy-free game that scopes the rule.
     HierarchyAbsent => "hierarchy_absent",
+
+    // Archetype-entry spatial oracle (judgement layer): entities
+    // judged ONCE at the moment they enter the selected archetype
+    // (newborn spawn or first component acquisition), against
+    // same-frame anchors. No episode, no soak — the rule sees the
+    // transition frame only. Judged events defined generation-
+    // tracked (id, generation) diff so id reuse cannot forge or
+    // hide an entry.
+    SpawnSafety => "spawn_safety",
 
     // Structural render-path health (informational; render-liveness
     // feature). A visual game with no working camera is soft-broken,

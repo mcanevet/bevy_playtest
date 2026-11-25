@@ -33,6 +33,7 @@ pub enum InvariantRule {
     StagnantResource,
     PairwiseSeparation,
     DerivedTransformConsistency,
+    SpawnSafety,
 }
 
 impl std::fmt::Display for InvariantRule {
@@ -44,6 +45,7 @@ impl std::fmt::Display for InvariantRule {
             Self::StagnantResource => f.write_str("stagnant_resource"),
             Self::PairwiseSeparation => f.write_str("pairwise_separation"),
             Self::DerivedTransformConsistency => f.write_str("derived_transform_consistency"),
+            Self::SpawnSafety => f.write_str("spawn_safety"),
         }
     }
 }

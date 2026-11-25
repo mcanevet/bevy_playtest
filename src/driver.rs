@@ -2140,6 +2140,17 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         // the run-end drain and hierarchy-absent audit read it.
         app.init_resource::<crate::invariant_eval::ConsistencyBookkeeping>();
     }
+    if scenario
+        .invariants
+        .iter()
+        .any(|i| i.rule == crate::enums::InvariantRule::SpawnSafety)
+    {
+        // Diff/judge bookkeeping for spawn_safety (the same
+        // doctrine): the per-frame recorder folds workload and
+        // clean/violating counts into this; the run-end vacuity
+        // audit reads `matched`.
+        app.init_resource::<crate::invariant_eval::SpawnSafetyBookkeeping>();
+    }
     if scenario.verify_replay {
         app.insert_resource(crate::replay::ReplaySeries::default());
     }
@@ -2485,6 +2496,11 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             // the settled frame; per-entity episodes, judged
             // against a persistence soak.
             crate::invariant_eval::record_derived_transform_consistency(app.world_mut(), i, tps);
+            // spawn_safety: same driver-loop recorder doctrine —
+            // post-update observation of the settled frame; the
+            // generation-tracked archetype diff judges each entry
+            // once, at its transition frame.
+            crate::invariant_eval::record_spawn_safety(app.world_mut(), i);
             // Progress-surface sampling: same driver-loop recorder
             // doctrine as the digest above.
             crate::progress::record_progress_sample(app.world_mut(), i);
@@ -2742,6 +2758,26 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     for entry in crate::invariant_eval::audit_derived_transform_consistency(
         &scenario.invariants,
         &consistency_book,
+        state.frame,
+    ) {
+        // Same dedupe doctrine as the audits above.
+        if !snap
+            .iter()
+            .any(|v| v.rule == entry.rule && v.target == entry.target)
+        {
+            snap.push(entry);
+        }
+    }
+    // spawn_safety vacuity audit: a rule whose anchors never
+    // resolved could never judge an entry — the same
+    // vacuous-proof shape as pairwise's never-a-pair audit.
+    let spawn_safety_book = app
+        .world_mut()
+        .remove_resource::<crate::invariant_eval::SpawnSafetyBookkeeping>()
+        .unwrap_or_default();
+    for entry in crate::invariant_eval::audit_spawn_safety(
+        &scenario.invariants,
+        &spawn_safety_book,
         state.frame,
     ) {
         // Same dedupe doctrine as the audits above.
