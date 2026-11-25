@@ -254,6 +254,7 @@ fn held_section_round_trips_through_serde() {
         worst_episode_span: None,
         worst_episode_frame: None,
         pair_judgments: None,
+        entries_clean: None,
     };
     let json = serde_json::to_string(&entry).unwrap();
     let back: HeldInvariant = serde_json::from_str(&json).unwrap();
@@ -297,6 +298,7 @@ fn held_section_round_trips_through_serde() {
         worst_episode_span: None,
         worst_episode_frame: None,
         pair_judgments: None,
+        entries_clean: None,
     };
     let json = serde_json::to_string(&component_entry).unwrap();
     let back: HeldInvariant = serde_json::from_str(&json).unwrap();
@@ -335,6 +337,7 @@ fn held_section_round_trips_through_serde() {
         worst_episode_span: Some(0.317),
         worst_episode_frame: Some(10),
         pair_judgments: Some(282_015),
+        entries_clean: None,
     };
     let json = serde_json::to_string(&episode_entry).unwrap();
     let back: HeldInvariant = serde_json::from_str(&json).unwrap();
@@ -714,6 +717,7 @@ fn twenty_held_invariants_serialize_under_4kb() {
             worst_episode_span: None,
             worst_episode_frame: None,
             pair_judgments: None,
+            entries_clean: None,
         });
     }
     let json = serde_json::to_string(&entries).unwrap();
@@ -1086,4 +1090,146 @@ fn battery_config_new_matches_run_defaults() {
         bevy_playtest::battery::DEFAULT_TIMEOUT_SECS
     );
     assert_eq!(cfg.seed_override, None);
+}
+
+// ---------------------------------------------------------------------------
+// spawn_safety held evidence
+// ---------------------------------------------------------------------------
+
+/// The judged archetype's marker and the anchor set's marker —
+/// uniquely named (the shared registry holds bevy_sprite's
+/// `Anchor`, so the anchor marker cannot be called that).
+#[derive(Component, Reflect, Default)]
+#[reflect(Component)]
+struct HeldRespawn;
+
+#[derive(Component, Reflect, Default)]
+#[reflect(Component)]
+struct HeldBeacon;
+
+/// Keep the beacon wiggling so frozen_world stays quiet without
+/// crossing the planted distance margin (±0.01 vs threshold 0.5).
+fn wiggle_held_beacon(mut q: Query<(&mut Transform, &HeldBeacon)>, mut t: Local<f32>) {
+    *t += 0.05;
+    for (mut tr, _) in q.iter_mut() {
+        tr.translation.y = 0.01 * t.sin();
+    }
+}
+
+/// The held-trace spawn_safety fixture: a beacon from the initial
+/// scene, one CLEAN projectile entry planted at frame 1 (frame 0 is
+/// the authored scene, never a judged entry).
+fn spawn_safety_app(spawn_z: f32) -> App {
+    let mut app = App::new();
+    app.add_plugins((TaskPoolPlugin::default(), TransformPlugin));
+    app.register_type::<HeldRespawn>();
+    app.register_type::<HeldBeacon>();
+    app.register_type::<Transform>();
+    app.add_systems(Update, wiggle_held_beacon);
+    app.world_mut()
+        .spawn((HeldBeacon, Transform::from_xyz(0.0, 0.0, 0.0)));
+    app.add_systems(
+        Update,
+        move |mut commands: Commands, mut fired: Local<bool>, mut frame: Local<u64>| {
+            *frame += 1;
+            if *frame > 1 && !*fired {
+                *fired = true;
+                commands.spawn((HeldRespawn, Transform::from_xyz(0.0, 0.0, spawn_z)));
+            }
+        },
+    );
+    app
+}
+
+const SPAWN_SAFETY_HELD_INV: &str = r#"
+    "name": "safe_respawns",
+    "rule": "spawn_safety",
+    "target_selector": {"with_component": {"name": "HeldRespawn"}},
+    "min_distance_from": {"with_component": {"name": "HeldBeacon"}},
+    "min_distance": 0.5"#;
+
+/// A passing spawn_safety run carries its entry-count story: one
+/// entry judged, one entry clean, and the anchor-present frame
+/// count as `frames_matched`. The workload figure rides
+/// `entity_judgments` (the field's spawn_safety doctrine: once per
+/// ENTRY, not per frame), and `entries_clean` is the pass-side
+/// proof that the one judged entry cleared every anchor.
+#[test]
+fn spawn_safety_clean_pass_reports_entry_counts() {
+    let _slot = common::run_slot();
+    let mut app = spawn_safety_app(5.0);
+    let report = run_scenario(&mut app, &scenario_with_invariants(SPAWN_SAFETY_HELD_INV)).unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    let held = report
+        .held_invariants
+        .iter()
+        .find(|h| h.name == "safe_respawns")
+        .expect("held entry for passing spawn_safety invariant");
+    assert_eq!(held.rule, "spawn_safety");
+    // The selector component is the judged scope.
+    assert_eq!(held.target, "HeldRespawn");
+    // min_distance renders in predicate syntax, pairwise-shaped.
+    assert_eq!(held.predicate.as_deref(), Some("ge 0.5"));
+    // Exactly one entry, judged once at its transition frame.
+    assert_eq!(held.entity_judgments, Some(1));
+    assert_eq!(held.entries_clean, Some(1));
+    // The beacon was present (an anchor) on every recorded frame.
+    assert_eq!(held.frames_matched, report.frame_count);
+    // No episode/soak machinery exists for this rule.
+    assert_eq!(held.episodes_observed, None);
+    assert!(held.worst_episode_span.is_none());
+    assert!(held.pair_judgments.is_none());
+    assert!(held.nearest_margin.is_none());
+    assert!(held.window_s.is_none());
+}
+
+/// A violating entry belongs to the violations list, not the held
+/// trace — the run FAILS and no held entry claims evidence.
+#[test]
+fn failing_spawn_safety_is_not_held() {
+    let _slot = common::run_slot();
+    let mut app = spawn_safety_app(0.0);
+    let report = run_scenario(&mut app, &scenario_with_invariants(SPAWN_SAFETY_HELD_INV)).unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
+    assert!(report
+        .violations
+        .iter()
+        .any(|v| v.rule == "spawn_safety" && v.target == "safe_respawns"));
+    assert!(report
+        .held_invariants
+        .iter()
+        .all(|h| h.name != "safe_respawns"));
+}
+
+/// A vacuous spawn_safety invariant (anchors never resolved) fails
+/// the run and earns no held entry — the violation owns the story.
+#[test]
+fn vacuous_spawn_safety_gets_no_held_entry() {
+    let _slot = common::run_slot();
+    let mut app = App::new();
+    app.add_plugins((TaskPoolPlugin::default(), TransformPlugin));
+    app.register_type::<HeldRespawn>();
+    app.register_type::<HeldBeacon>();
+    app.register_type::<Transform>();
+    // Entries appear, but no beacon ever exists.
+    app.add_systems(
+        Update,
+        |mut commands: Commands, mut fired: Local<bool>, mut frame: Local<u64>| {
+            *frame += 1;
+            if *frame > 1 && !*fired {
+                *fired = true;
+                commands.spawn((HeldRespawn, Transform::from_xyz(0.0, 0.0, 5.0)));
+            }
+        },
+    );
+    let report = run_scenario(&mut app, &scenario_with_invariants(SPAWN_SAFETY_HELD_INV)).unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
+    assert!(report
+        .violations
+        .iter()
+        .any(|v| v.rule == "vacuous_invariant" && v.target == "safe_respawns"));
+    assert!(report
+        .held_invariants
+        .iter()
+        .all(|h| h.name != "safe_respawns"));
 }

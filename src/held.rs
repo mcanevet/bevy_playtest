@@ -127,6 +127,9 @@ pub struct HeldInvariant {
     /// census: entities surviving many frames are counted once per
     /// observed frame. Pairwise counts PAIRS in its own
     /// `pair_judgments` field, so it never carries this one.
+    /// `spawn_safety` reuses the field for its own workload figure:
+    /// run-total ENTRIES judged (once per entry, not per frame —
+    /// the transition-frame-only doctrine).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub entity_judgments: Option<u64>,
     /// Component-tier only: peak per-frame entity count the judge
@@ -185,6 +188,15 @@ pub struct HeldInvariant {
     /// cap exists to prevent).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub pair_judgments: Option<u64>,
+    /// `spawn_safety` only: run-total entries judged CLEAN (entered
+    /// at least `min_distance` from every same-frame anchor) — the
+    /// pass-side "matched newborns" count. Together with
+    /// `entity_judgments` (ALL entries judged) it tells the
+    /// exercised-from-vacuous story: a rule that judged N entries
+    /// and cleared every one is a rule that was exercised, unlike a
+    /// vacuous twin whose anchors never resolved.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub entries_clean: Option<u64>,
 }
 
 /// An observed leaf extremum: the value and the FIRST frame it was
@@ -326,6 +338,8 @@ pub struct HeldSources<'a> {
     pub pw_book: &'a crate::invariant_eval::PairwiseBookkeeping,
     /// Consistency episode-fold bookkeeping.
     pub dtc_book: &'a crate::invariant_eval::ConsistencyBookkeeping,
+    /// Spawn-safety bookkeeping.
+    pub ss_book: &'a crate::invariant_eval::SpawnSafetyBookkeeping,
 }
 
 impl HeldBookkeeping {
@@ -447,12 +461,11 @@ impl HeldBookkeeping {
     /// so the caller judges by TARGET name, the invariant's unique
     /// key).
     ///
-    /// `sources` bundles the three tiers' bookkeeping
-    /// (`WatchedResources`, `WatchedInvariants`, and the episode
-    /// rules' `PairwiseBookkeeping` / `ConsistencyBookkeeping`,
-    /// whose held statistics live in their `episode_stats` maps);
-    /// each tier's exclusion evidence lives in its respective
-    /// bookkeeping.
+    /// `sources` bundles the tiers' bookkeeping
+    /// (`WatchedResources`, `WatchedInvariants`, the episode rules'
+    /// `PairwiseBookkeeping` / `ConsistencyBookkeeping`, and
+    /// `SpawnSafetyBookkeeping`); each tier's exclusion evidence
+    /// lives in its respective bookkeeping.
     ///
     /// Exclusions, each deliberate:
     /// - `failed(name)` — a violated invariant belongs in the
@@ -490,6 +503,7 @@ impl HeldBookkeeping {
             watched_inv,
             pw_book,
             dtc_book,
+            ss_book,
         } = sources;
         let mut out = Vec::new();
         for inv in invariants.iter().filter(|i| {
@@ -501,6 +515,7 @@ impl HeldBookkeeping {
                     | InvariantRule::NodesInBounds
                     | InvariantRule::PairwiseSeparation
                     | InvariantRule::DerivedTransformConsistency
+                    | InvariantRule::SpawnSafety
             )
         }) {
             if failed(&inv.name) {
@@ -514,6 +529,7 @@ impl HeldBookkeeping {
                 inv.rule,
                 InvariantRule::PairwiseSeparation | InvariantRule::DerivedTransformConsistency
             );
+            let is_spawn_safety = inv.rule == InvariantRule::SpawnSafety;
             // Tier-appropriate exclusion evidence. The component tier
             // additionally treats zero judged frames as vacuous: a
             // held record for a scope that never judged anything
@@ -547,6 +563,7 @@ impl HeldBookkeeping {
                     continue;
                 }
             } else if !is_episode_tier
+                && !is_spawn_safety
                 && (watched.config_errored.contains(&inv.name)
                     || !watched.matched.contains(&inv.name))
             {
@@ -587,6 +604,32 @@ impl HeldBookkeeping {
                     continue;
                 }
             }
+            // spawn_safety exclusions, mirroring the episode tier:
+            // config-errored already failed the run with an
+            // oracle_error (a held entry would claim evidence for a
+            // check that never judged anything), and a never-matched
+            // invariant already carries a `vacuous_invariant`
+            // finding (the audit ran before the collector; the
+            // guard stays for the manually-driven-App path where
+            // the audit never ran). A third, rule-specific guard:
+            // zero ENTRIES judged means the diff never saw a
+            // transition — a world whose selected archetype never
+            // gained a member proved nothing about entry safety,
+            // and a held entry may not claim otherwise (the
+            // zero-judged-frames DTC doctrine, entry-shaped).
+            if is_spawn_safety {
+                if ss_book.config_errored.contains(&inv.name) {
+                    continue;
+                }
+                if !ss_book.matched.contains(&inv.name)
+                    || ss_book
+                        .entries_judged
+                        .get(&inv.name)
+                        .is_none_or(|&n| n == 0)
+                {
+                    continue;
+                }
+            }
             // `frames_matched`: frames the check resolved and judged
             // something — for the resource tier the resource/leaf
             // resolved; for the component tier the selector matched
@@ -600,6 +643,11 @@ impl HeldBookkeeping {
                 pw_dtc_stats(pw_book, dtc_book, inv)
                     .map(|s| s.frames_judged)
                     .unwrap_or(0)
+            } else if is_spawn_safety {
+                // Existence evidence, entry-shaped: frames with ≥1
+                // resolvable anchor — the frames an incoming entry
+                // WOULD have been judged on had one arrived.
+                ss_book.frames_matched.get(&inv.name).copied().unwrap_or(0)
             } else {
                 self.frames_matched.get(&inv.name).copied().unwrap_or(0)
             };
@@ -615,7 +663,7 @@ impl HeldBookkeeping {
                 } else {
                     (None, None, None)
                 };
-            let predicate = if is_episode_tier {
+            let predicate = if is_episode_tier || is_spawn_safety {
                 // Episode rules' predicates live in their rule-specific
                 // threshold fields, not `check`/`value`: pairwise
                 // holds distance ≥ min_distance (a lower bound);
@@ -623,8 +671,10 @@ impl HeldBookkeeping {
                 // defaulted when the author omitted it). Wire syntax
                 // mirrors the resource tier so the field means one
                 // thing everywhere: operator + threshold.
+                // spawn_safety is pairwise-shaped: an entry holds
+                // at distance ≥ min_distance.
                 match inv.rule {
-                    InvariantRule::PairwiseSeparation => {
+                    InvariantRule::PairwiseSeparation | InvariantRule::SpawnSafety => {
                         inv.min_distance.map(|d| format!("ge {d}"))
                     }
                     _ => inv
@@ -719,6 +769,12 @@ impl HeldBookkeeping {
                     let entities = (inv.rule == InvariantRule::DerivedTransformConsistency)
                         .then(|| stats.map(|s| s.entity_judgments).unwrap_or(0));
                     (entities, None, None, None, None)
+                } else if is_spawn_safety {
+                    // Entry-tier workload: run-total entries judged
+                    // (the entity_judgments field's spawn_safety
+                    // doctrine — once per ENTRY, not per frame).
+                    let entries = ss_book.entries_judged.get(&inv.name).copied();
+                    (entries, None, None, None, None)
                 } else {
                     (None, None, None, None, None)
                 };
@@ -727,17 +783,28 @@ impl HeldBookkeeping {
             // (seconds only for the frame-clock default) — compare
             // against the shipped `window_s`, whose doc shares the
             // same caveat.
-            let (episodes_observed, worst_episode_span, worst_episode_frame, pair_judgments) =
-                if is_episode_tier {
-                    let stats = pw_dtc_stats(pw_book, dtc_book, inv);
-                    let episodes = stats.map(|s| s.episodes_observed);
-                    let (span, span_frame) = stats.and_then(|s| s.worst_span).unzip();
-                    let pairs = (inv.rule == InvariantRule::PairwiseSeparation)
-                        .then(|| stats.map(|s| s.pair_judgments).unwrap_or(0));
-                    (episodes, span, span_frame, pairs)
-                } else {
-                    (None, None, None, None)
-                };
+            let (
+                episodes_observed,
+                worst_episode_span,
+                worst_episode_frame,
+                pair_judgments,
+                entries_clean,
+            ) = if is_episode_tier {
+                let stats = pw_dtc_stats(pw_book, dtc_book, inv);
+                let episodes = stats.map(|s| s.episodes_observed);
+                let (span, span_frame) = stats.and_then(|s| s.worst_span).unzip();
+                let pairs = (inv.rule == InvariantRule::PairwiseSeparation)
+                    .then(|| stats.map(|s| s.pair_judgments).unwrap_or(0));
+                (episodes, span, span_frame, pairs, None)
+            } else if is_spawn_safety {
+                // The pass-side story: how many of the judged
+                // entries cleared every anchor (clean entries
+                // are why the run PASSED).
+                let clean = ss_book.entries_clean.get(&inv.name).copied();
+                (None, None, None, None, clean)
+            } else {
+                (None, None, None, None, None)
+            };
             out.push(HeldInvariant {
                 name: inv.name.clone(),
                 rule: inv.rule.to_string(),
@@ -763,6 +830,7 @@ impl HeldBookkeeping {
                 worst_episode_span,
                 worst_episode_frame,
                 pair_judgments,
+                entries_clean,
             });
         }
         out
@@ -811,6 +879,7 @@ fn leaf_target(inv: &Invariant) -> String {
     }
     if inv.rule == InvariantRule::PairwiseSeparation
         || inv.rule == InvariantRule::DerivedTransformConsistency
+        || inv.rule == InvariantRule::SpawnSafety
     {
         return match inv.target_selector.as_ref() {
             Some(crate::enums::TargetSelector::WithComponent { name }) => name.clone(),
