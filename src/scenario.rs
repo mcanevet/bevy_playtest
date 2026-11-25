@@ -536,6 +536,23 @@ pub struct Invariant {
     /// (`SkipDerivedConsistency`) for per-instance opt-outs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude_components: Vec<String>,
+    /// Anchor selector (`spawn_safety` only): the same
+    /// `target_selector` grammar (with_component / all), naming
+    /// the anchor set every entering entity must keep
+    /// `min_distance` away from, snapshotted at the END of the
+    /// judging frame (post-update — same-frame anchors count: an
+    /// anchor spawned alongside the entry is a participant, not
+    /// an excuse).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_distance_from: Option<crate::enums::TargetSelector>,
+    /// Spawn-only semantics (`spawn_safety` only): filter judged
+    /// entries to brand-new (id, generation) pairs — pre-existing
+    /// entities first acquiring the target component are NOT
+    /// judged. Default false: component-addition is the judged
+    /// event (a converted enemy appearing inside the anchor zone
+    /// is the same bug as a respawned one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spawn_only: Option<bool>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1233,6 +1250,35 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                 errors.push(ScenarioError::Rejected(format!(
                     "invariant '{}': {} {} not supported by {} — {} \
                      derived_transform_consistency only",
+                    rule.name,
+                    foreign.join(", "),
+                    if foreign.len() == 1 { "is" } else { "are" },
+                    rule.rule,
+                    if foreign.len() == 1 {
+                        "this field is"
+                    } else {
+                        "these fields are"
+                    }
+                )));
+            }
+        }
+    }
+    for rule in &scenario.invariants {
+        // Single-owner optional fields (spawn_safety only): the
+        // anchor selector and the spawn-only opt-out accepted on
+        // any other rule would be parsed-but-never-read knobs.
+        if rule.rule != InvariantRule::SpawnSafety {
+            let mut foreign: Vec<&str> = Vec::new();
+            if rule.min_distance_from.is_some() {
+                foreign.push("'min_distance_from'");
+            }
+            if rule.spawn_only.is_some() {
+                foreign.push("'spawn_only'");
+            }
+            if !foreign.is_empty() {
+                errors.push(ScenarioError::Rejected(format!(
+                    "invariant '{}': {} {} not supported by {} — {} \
+                     spawn_safety only",
                     rule.name,
                     foreign.join(", "),
                     if foreign.len() == 1 { "is" } else { "are" },
@@ -2180,6 +2226,121 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                         rule.name
                     )));
                 }
+            }
+            InvariantRule::SpawnSafety => {
+                // The archetype-entry spatial oracle (proposal §1):
+                // entities are judged ONCE, at the frame they ENTER
+                // the selected archetype — a newborn or a
+                // pre-existing entity first acquiring the target
+                // component — against anchors snapshotted at the END
+                // of the same judging frame. Generation-tracked
+                // (id, generation) diff semantics, NOT Added<T>:
+                // id reuse can neither forge nor hide an entry.
+                // Component-addition is the judged event by
+                // default; `spawn_only: true` filters to brand-new
+                // (id, generation) pairs.
+                let Some(crate::enums::TargetSelector::WithComponent { name }) =
+                    rule.target_selector.as_ref()
+                else {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': spawn_safety requires \
+                         'target_selector: {{\"with_component\": {{\"name\": ...}}}}' — \
+                         the archetype whose entries are judged",
+                        rule.name
+                    )));
+                    continue;
+                };
+                if name.trim().is_empty() {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': with_component name must be non-empty",
+                        rule.name
+                    )));
+                }
+                let Some(_anchor) = rule.min_distance_from.as_ref() else {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': spawn_safety requires 'min_distance_from' — \
+                         the anchor selector (with_component or all) every entering \
+                         entity must keep min_distance away from",
+                        rule.name
+                    )));
+                    continue;
+                };
+                match rule.min_distance {
+                    None => {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': spawn_safety requires 'min_distance' — \
+                             the minimum distance between an entering entity and \
+                             every same-frame anchor",
+                            rule.name
+                        )));
+                    }
+                    Some(d) => {
+                        if !d.is_finite() || d <= 0.0 {
+                            errors.push(ScenarioError::Rejected(format!(
+                                "invariant '{}': min_distance must be a finite \
+                                 number > 0 (got {d})",
+                                rule.name
+                            )));
+                        }
+                    }
+                }
+                // The transition frame is judged, never soaked:
+                // temporal knobs of every other rule are foreign
+                // here. after_s/before_s are ALREADY rejected
+                // universally (not-implemented), so they need no
+                // arm; window_s/driver/tolerance/grace/exclude/
+                // check/value/path/resource/eventually_s/bounds are
+                // this rule's foreign surface.
+                if rule.window_s.is_some() {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': spawn_safety does not use window_s — \
+                         entries are judged once at the transition frame, \
+                         never folded into episodes",
+                        rule.name
+                    )));
+                }
+                if rule.driver_resource.is_some() || rule.driver_path.is_some() {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': spawn_safety does not use \
+                         driver_resource/driver_path — there is no soak and \
+                         therefore no driver budget to consume",
+                        rule.name
+                    )));
+                }
+                if rule.driver_units_per_second.is_some() {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': spawn_safety does not use \
+                         driver_units_per_second — there is no soak and \
+                         therefore no rate to declare",
+                        rule.name
+                    )));
+                }
+                if rule.check.is_some()
+                    || rule.value.is_some()
+                    || rule.path.is_some()
+                    || rule.resource.is_some()
+                    || rule.eventually_s.is_some()
+                    || rule.min_x.is_some()
+                    || rule.max_x.is_some()
+                    || rule.min_y.is_some()
+                    || rule.max_y.is_some()
+                    || rule.min_z.is_some()
+                    || rule.max_z.is_some()
+                {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': spawn_safety does not use \
+                         check/value/path/resource/eventually_s/bounds — it \
+                         judges entry-frame distance against min_distance, \
+                         once (tolerance/grace_frames/exclude_components are \
+                         rejected separately as DTC-only fields)",
+                        rule.name
+                    )));
+                }
+                // Pairwise shares min_distance by design (one
+                // threshold field, one meaning: a distance floor);
+                // `min_distance_from` is spawn_safety-only —
+                // rejected elsewhere via the shared foreign-field
+                // loop below.
             }
         }
     }

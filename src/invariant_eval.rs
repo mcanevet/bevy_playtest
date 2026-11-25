@@ -3154,3 +3154,467 @@ pub fn audit_derived_transform_consistency(
     }
     entries
 }
+
+// ---------------------------------------------------------------------
+// spawn_safety: the archetype-entry spatial recorder (judgement
+// layer, remaining-spatial-family part 1).
+//
+// Doctrine: entries are judged ONCE, at the frame they enter the
+// selected archetype — a newborn entity bearing the target
+// component at spawn, or a PRE-EXISTING entity first acquiring it
+// (component-addition is the judged event by default; `spawn_only`
+// filters to brand-new (index, generation) pairs). Anchors are
+// snapshotted at the END of the same judging frame (post-update,
+// the harness's standard observation point): same-frame anchors
+// PARTICIPATE — an anchor spawned alongside the entry is a
+// participant in the judgment, not an excuse for it. There is NO
+// episode and NO soak: the transition frame is the whole verdict,
+// so a single violation gates immediately (the respawn-ring
+// incident class — bodies appearing inside the danger zone — is a
+// state bug AT the transition, not a persistence bug the window
+// doctrine exists to smooth over).
+//
+// The "newborn" definition is a GENERATION-TRACKED, FRAME-OVER-
+// FRAME ARCHETYPE DIFF, never bevy's Added<T>: the recorder keeps
+// the previous frame's entity snapshot — every (index, generation)
+// pair mapped to whether it bore the target component — and an
+// entry is a current member that is either a pair new to the
+// snapshot (a spawn) or a known pair newly bearing the component
+// (component-addition). Generation tracking makes id reuse sound
+// in both directions: a reused index with a bumped generation is
+// a new pair (cannot forge continuity), and a stale pair can
+// never re-enter (cannot hide an entry).
+// ---------------------------------------------------------------------
+
+/// Bookkeeping for `spawn_safety` invariants across frames (the
+/// pairwise bookkeeping doctrine, one shape per rule):
+/// observability for the vacuity audit, once-per-error-class
+/// dedup, the generation-tracked existence/membership snapshot,
+/// and the pass-side workload counts.
+#[derive(Resource, Default)]
+pub struct SpawnSafetyBookkeeping {
+    /// Invariant name → at least one anchor was resolvable in at
+    /// least one judged frame. Otherwise the rule could never
+    /// judge an entry (nothing was ever near anything) and the
+    /// audit reports `vacuous_invariant` — the anchor side of the
+    /// pairwise "never had a pair to check" doctrine.
+    pub matched: std::collections::HashSet<String>,
+    /// Invariant name → a resolution/config failure was seen
+    /// during the run (already reported as `oracle_error`); the
+    /// audit suppresses its vacuity entry so the game is not
+    /// blamed for an author-side problem.
+    pub config_errored: std::collections::HashSet<String>,
+    /// (invariant name, error class) pairs already reported as
+    /// `oracle_error` this run — the once-per-distinct-error dedup.
+    pub oracle_error_seen: std::collections::HashSet<String>,
+    /// Invariant name → the previous judged frame's entity
+    /// snapshot: (index, generation) → bore the target component
+    /// last frame. Recorded for EVERY entity (not just members):
+    /// distinguishing a spawn from a component-addition requires
+    /// knowing the pair existed before, which a members-only
+    /// snapshot cannot express.
+    pub prev_snapshot:
+        std::collections::HashMap<String, std::collections::HashMap<(u32, u32), bool>>,
+    /// Invariant name → run-total entries JUDGED (diff entries
+    /// surviving the spawn_only filter, when authored) — the
+    /// workload figure behind the held trace's entry counts.
+    pub entries_judged: std::collections::HashMap<String, u64>,
+    /// Invariant name → run-total entries judged CLEAN (entered
+    /// at least min_distance from every same-frame anchor) — the
+    /// pass-side matched-newborns count the held trace carries so
+    /// a clean run distinguishes exercised from never-triggered.
+    pub entries_clean: std::collections::HashMap<String, u64>,
+    /// Invariant name → run-total entries that VIOLATED (appeared
+    /// within min_distance of a same-frame anchor).
+    pub entries_violating: std::collections::HashMap<String, u64>,
+}
+
+/// One frame's spawn_safety outcome for one invariant (the
+/// owned-data phase-split doctrine: computed under `&World`,
+/// applied after the borrow ends).
+struct SsOutcome {
+    /// This frame's entity snapshot: (index, generation) → global
+    /// translation for every selector-matching, Transform-carrying
+    /// entity (members), plus the existence/membership map for the
+    /// ENTIRE world (the spawn-vs-component-addition diff needs
+    /// pre-existing non-members too).
+    members: Vec<((u32, u32), [f32; 3])>,
+    /// The full snapshot for the next frame's diff: pair → was a
+    /// member this frame.
+    next_snapshot: std::collections::HashMap<(u32, u32), bool>,
+    /// The anchor set's (entity, global translation) snapshots,
+    /// taken at the end of this frame (same-frame anchors
+    /// participate). The entity key lets the judge exclude the
+    /// entering entity ITSELF from the anchor set — an `all`
+    /// anchor selector (or overlapping target/anchor components)
+    /// would otherwise place every entry at distance 0 from
+    /// itself and trivially violate.
+    anchors: Vec<((u32, u32), [f32; 3])>,
+    /// First config error this frame, if any.
+    config_error: Option<String>,
+    /// At least one anchor resolvable this frame (observability
+    /// for the vacuity audit).
+    any_anchor: bool,
+}
+
+/// The driver-loop post-update recorder for `spawn_safety`: diff
+/// the current frame's selected membership against the previous
+/// frame's snapshot, judge each entry against the same-frame
+/// anchors, report violations immediately (no episode, no soak —
+/// the transition frame is the whole verdict).
+pub fn record_spawn_safety(world: &mut World, frame: u64) {
+    let invariants: Vec<Invariant> = world
+        .get_resource::<ScenarioInvariants>()
+        .map(|invariants| {
+            invariants
+                .0
+                .iter()
+                .filter(|i| i.rule == InvariantRule::SpawnSafety)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if invariants.is_empty() {
+        return;
+    }
+    let Some(atr) = world.get_resource::<AppTypeRegistry>().cloned() else {
+        // No registry at all: the same definite infra error the
+        // other reflected oracles front-load — one `oracle_error`
+        // per invariant, once per distinct error class.
+        world.resource_scope(|world, mut book: Mut<SpawnSafetyBookkeeping>| {
+            let mut violations = world.resource_mut::<RunViolations>();
+            for inv in &invariants {
+                book.config_errored.insert(inv.name.clone());
+                let why = &no_atr_message("spawn safety selectors");
+                report_config_error_once(
+                    &mut violations.0,
+                    &mut book.oracle_error_seen,
+                    &inv.name,
+                    &format!("invariant '{}': {why}", inv.name),
+                    frame,
+                );
+            }
+        });
+        return;
+    };
+    let registry = atr.read();
+    // Compute phase: everything read under &World, owned data out.
+    let outcomes: Vec<(Invariant, SsOutcome)> = invariants
+        .iter()
+        .filter_map(|inv| compute_ss_outcome(world, &registry, inv).map(|o| (inv.clone(), o)))
+        .collect();
+    drop(registry);
+    // Apply phase: bookkeeping folds + immediate violation
+    // reporting. No episode machinery exists here by design.
+    world.resource_scope(|world, mut book: Mut<SpawnSafetyBookkeeping>| {
+        let mut violations = world.resource_mut::<RunViolations>();
+        for (inv, outcome) in &outcomes {
+            if let Some(why) = &outcome.config_error {
+                book.config_errored.insert(inv.name.clone());
+                report_config_error_once(
+                    &mut violations.0,
+                    &mut book.oracle_error_seen,
+                    &inv.name,
+                    &format!("invariant '{}': {why}", inv.name),
+                    frame,
+                );
+                continue;
+            }
+            if outcome.any_anchor {
+                book.matched.insert(inv.name.clone());
+            }
+            // The diff. A stored previous snapshot means judged
+            // transitions; a MISSING one is the invariant's first
+            // judged frame — the observed membership is the
+            // scenario's initial scene (the frame-0-is-not-a-spawn
+            // doctrine: the scenario authored those entities; the
+            // run never observed their entry).
+            if book.prev_snapshot.contains_key(&inv.name) {
+                let spawn_only = inv.spawn_only.unwrap_or(false);
+                let min_distance = inv.min_distance.unwrap_or(0.0);
+                let prev = book.prev_snapshot[&inv.name].clone();
+                for ((index, generation), pos) in &outcome.members {
+                    match prev.get(&(*index, *generation)) {
+                        // Known member: stayed a member — no
+                        // transition, no judgment.
+                        Some(true) => {}
+                        // Known NON-member: the entity existed
+                        // last frame and now bears the component —
+                        // a component-addition entry (judged by
+                        // default; filtered out under spawn_only).
+                        Some(false) => {
+                            if spawn_only {
+                                continue;
+                            }
+                            book.judge_one(
+                                &mut violations.0,
+                                inv,
+                                ((*index, *generation), *pos),
+                                &outcome.anchors,
+                                min_distance,
+                                frame,
+                            );
+                        }
+                        // Unknown pair: a brand-new entity — a
+                        // spawn entry under both semantics.
+                        None => {
+                            book.judge_one(
+                                &mut violations.0,
+                                inv,
+                                ((*index, *generation), *pos),
+                                &outcome.anchors,
+                                min_distance,
+                                frame,
+                            );
+                        }
+                    }
+                }
+            }
+            book.prev_snapshot
+                .insert(inv.name.clone(), outcome.next_snapshot.clone());
+        }
+    });
+}
+
+impl SpawnSafetyBookkeeping {
+    /// Judge one entry against the same-frame anchors: fold the
+    /// workload count, then report a finding when the entry
+    /// appeared within min_distance of any anchor (nearest
+    /// anchor wins the finding's evidence), else fold the clean
+    /// count.
+    fn judge_one(
+        &mut self,
+        violations: &mut crate::state::Violations,
+        inv: &Invariant,
+        entry: ((u32, u32), [f32; 3]),
+        anchors: &[((u32, u32), [f32; 3])],
+        min_distance: f32,
+        frame: u64,
+    ) {
+        *self.entries_judged.entry(inv.name.clone()).or_default() += 1;
+        let ((index, generation), pos) = entry;
+        let threshold_sq = min_distance * min_distance;
+        // The NEAREST anchor carries the finding: minimum
+        // distance over all violating anchors.
+        let mut worst: Option<(usize, f32)> = None;
+        let entry_pair = (index, generation);
+        for (ai, (anchor_pair, anchor)) in anchors.iter().enumerate() {
+            // The entry itself is never its own anchor: an `all`
+            // anchor selector (or overlapping target/anchor
+            // components) would otherwise measure every entry at
+            // distance 0 from itself.
+            if *anchor_pair == entry_pair {
+                continue;
+            }
+            let dx = pos[0] - anchor[0];
+            let dy = pos[1] - anchor[1];
+            let dz = pos[2] - anchor[2];
+            let dist_sq = dx * dx + dy * dy + dz * dz;
+            // NaN translations yield NaN distances — the
+            // finite_transforms oracle owns NaN findings; skip
+            // rather than double-report.
+            if !dist_sq.is_finite() {
+                continue;
+            }
+            if dist_sq < threshold_sq {
+                let d = dist_sq.sqrt();
+                match worst {
+                    Some((_, wd)) if wd <= d => {}
+                    _ => worst = Some((ai, d)),
+                }
+            }
+        }
+        match worst {
+            Some((ai, d)) => {
+                let (_, anchor_pos) = anchors[ai];
+                *self.entries_violating.entry(inv.name.clone()).or_default() += 1;
+                violations.report(
+                    crate::rules::Rule::SpawnSafety.name(),
+                    &inv.name,
+                    format!(
+                        "entity #{}v{} entered the '{}' archetype at ({:.3}, {:.3}, {:.3}), \
+                         within min_distance ({:.3}) of a same-frame anchor at ({:.3}, \
+                         {:.3}, {:.3}) — nearest distance {:.3}; a body appearing inside \
+                         the danger zone is a state bug at the transition frame, not a \
+                         transient",
+                        index,
+                        generation,
+                        selector_display(inv),
+                        pos[0],
+                        pos[1],
+                        pos[2],
+                        min_distance,
+                        anchor_pos[0],
+                        anchor_pos[1],
+                        anchor_pos[2],
+                        d,
+                    ),
+                    frame,
+                );
+            }
+            None => {
+                *self.entries_clean.entry(inv.name.clone()).or_default() += 1;
+            }
+        }
+    }
+}
+
+/// The compute phase for one invariant, under `&World`: resolve
+/// both selectors, walk the world once building the
+/// existence/membership snapshot, collect the members' settled
+/// positions and the same-frame anchor positions.
+fn compute_ss_outcome(
+    world: &World,
+    registry: &bevy_reflect::TypeRegistry,
+    inv: &Invariant,
+) -> Option<SsOutcome> {
+    let err = |why: String| SsOutcome {
+        members: vec![],
+        next_snapshot: std::collections::HashMap::new(),
+        anchors: vec![],
+        config_error: Some(why),
+        any_anchor: false,
+    };
+    // Validation guarantees these; the Options are defensive only.
+    let Some(crate::enums::TargetSelector::WithComponent { name }) = inv.target_selector.as_ref()
+    else {
+        return Some(err(
+            "spawn_safety requires a with_component target selector (validated)".into(),
+        ));
+    };
+    if inv.min_distance.is_none() {
+        return Some(err(
+            "spawn_safety requires 'min_distance' (validated)".into()
+        ));
+    }
+    let type_reg = match resolve_registration(registry, name, "component") {
+        Ok(t) => t,
+        Err(why) => return Some(err(why)),
+    };
+    // The anchor selector's component id, when it names one.
+    let anchor_id = match inv.min_distance_from.as_ref() {
+        Some(crate::enums::TargetSelector::WithComponent { name }) => {
+            match resolve_registration(registry, name, "component") {
+                Ok(t) => Some((name.clone(), t.type_id())),
+                Err(why) => return Some(err(why)),
+            }
+        }
+        Some(crate::enums::TargetSelector::All) => None,
+        // Validation requires the field; defensive only.
+        None => {
+            return Some(err(
+                "spawn_safety requires 'min_distance_from' (validated)".into()
+            ))
+        }
+    };
+    let member_id = world.components().get_valid_id(type_reg.type_id());
+    let anchor_cid = match &anchor_id {
+        // Resolution succeeded above; the component SHOULD be
+        // valid. A non-valid id means it exists in the registry
+        // but not the world's component store yet — treat as
+        // zero anchors (same-frame absence, not an error).
+        Some((_, tid)) => world.components().get_valid_id(*tid),
+        None => None,
+    };
+    // One walk of the world: members (selector-bearing, spatially
+    // observable entities with their settled global positions),
+    // the existence/membership snapshot, and the anchor
+    // positions. Membership = target component + a settled
+    // GlobalTransform (the pairwise "checkable" doctrine: a
+    // marker without a position cannot be judged, and its FIRST
+    // observable frame is its judged entry — so an entity that
+    // gains a global later is judged then, never silently
+    // skipped).
+    let mut members: Vec<((u32, u32), [f32; 3])> = Vec::new();
+    let mut next_snapshot: std::collections::HashMap<(u32, u32), bool> =
+        std::collections::HashMap::new();
+    let mut anchors: Vec<((u32, u32), [f32; 3])> = Vec::new();
+    for entity_ref in world.iter_entities() {
+        let id = entity_ref.id();
+        let pair = (id.index().index(), id.generation().to_bits());
+        // Position read: the settled GlobalTransform (post-update
+        // doctrine). Entities without one are not spatial
+        // participants this frame.
+        let Some(global) = entity_ref.get::<bevy_transform::components::GlobalTransform>() else {
+            next_snapshot.insert(pair, false);
+            continue;
+        };
+        let p = global.translation();
+        let pos = [p.x, p.y, p.z];
+        let is_member = member_id.is_some_and(|cid| entity_ref.contains_id(cid));
+        next_snapshot.insert(pair, is_member);
+        if is_member {
+            members.push((pair, pos));
+        }
+        let is_anchor = match &anchor_id {
+            // with_component anchors: component + GlobalTransform
+            // (checked via contains_id; the anchor need not carry
+            // a Transform — its settled global IS the position).
+            Some((_, _)) => anchor_cid.is_some_and(|cid| entity_ref.contains_id(cid)),
+            // all-anchors: every entity with a settled global.
+            None => true,
+        };
+        if is_anchor {
+            anchors.push((pair, pos));
+        }
+    }
+    let anchor_count = anchors.len();
+    Some(SsOutcome {
+        members,
+        next_snapshot,
+        anchors,
+        config_error: None,
+        any_anchor: anchor_count > 0,
+    })
+}
+
+/// Display form of the target selector's component name (the
+/// finding's vocabulary for the entered archetype).
+fn selector_display(inv: &Invariant) -> String {
+    match inv.target_selector.as_ref() {
+        Some(crate::enums::TargetSelector::WithComponent { name }) => name.clone(),
+        _ => "all".to_string(),
+    }
+}
+
+/// Run-end vacuity audit for `spawn_safety` (the pairwise audit's
+/// doctrine): an invariant whose anchors never resolved could
+/// never judge an entry — the rule proved nothing until there was
+/// something to be near. Reported as `vacuous_invariant`
+/// (author-side blame), suppressed when a config error already
+/// spoke.
+pub fn audit_spawn_safety(
+    invariants: &[Invariant],
+    book: &SpawnSafetyBookkeeping,
+    last_frame: u64,
+) -> Vec<crate::state::ViolationEntry> {
+    let mut entries = Vec::new();
+    for inv in invariants
+        .iter()
+        .filter(|i| i.rule == InvariantRule::SpawnSafety)
+    {
+        if book.config_errored.contains(&inv.name) {
+            continue;
+        }
+        if !book.matched.contains(&inv.name) {
+            entries.push(crate::state::ViolationEntry {
+                rule: crate::rules::Rule::VacuousInvariant.name().to_string(),
+                target: inv.name.clone(),
+                first_frame: 0,
+                last_frame,
+                count: 1,
+                detail: format!(
+                    "invariant '{}' never resolved an anchor over the whole run; the \
+                     check proves nothing until there is something to be near",
+                    inv.name
+                ),
+                last_detail: format!(
+                    "invariant '{}' never resolved an anchor to judge entries against",
+                    inv.name
+                ),
+                meta: None,
+            });
+        }
+    }
+    entries
+}

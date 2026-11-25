@@ -1214,3 +1214,216 @@ fn dtc_owned_fields_reject_on_foreign_rules() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// spawn_safety — the authoring grammar (remaining-spatial-family part 1)
+// ---------------------------------------------------------------------------
+
+fn spawn_safety_json(
+    selector: Option<&str>,
+    min_distance_from: Option<serde_json::Value>,
+    min_distance: serde_json::Value,
+) -> serde_json::Value {
+    let selector = match selector {
+        Some(name) => serde_json::json!({ "with_component": { "name": name } }),
+        None => serde_json::json!(null),
+    };
+    serde_json::json!({
+        "bot": { "type": "chaos" },
+        "duration_s": 10.0,
+        "invariants": [{
+            "name": "safe_respawns",
+            "rule": "spawn_safety",
+            "target_selector": selector,
+            "min_distance_from": min_distance_from,
+            "min_distance": min_distance,
+        }],
+    })
+}
+
+#[test]
+fn spawn_safety_parses_and_validates_clean() {
+    // The full authoring surface is real: the parse succeeds, the
+    // shape lint is clean, and validation accepts the scenario —
+    // the diff/judge recorder evaluates the rule at run time.
+    let full = serde_json::json!({
+        "bot": { "type": "chaos" },
+        "duration_s": 10.0,
+        "invariants": [{
+            "name": "safe_respawns",
+            "rule": "spawn_safety",
+            "target_selector": { "with_component": { "name": "Projectile" } },
+            "min_distance_from": { "with_component": { "name": "Player" } },
+            "min_distance": 0.5,
+            "spawn_only": true,
+        }],
+    });
+    let s = parse(full.clone());
+    assert_eq!(s.invariants[0].spawn_only, Some(true));
+    let errs = lint_errors(full);
+    assert!(
+        errs.is_empty(),
+        "well-formed spawn_safety must lint clean: {errs:?}"
+    );
+    validate_scenario(&s).expect("well-formed spawn_safety validates");
+}
+
+#[test]
+fn spawn_safety_accepts_all_anchors() {
+    // `min_distance_from: "all"` is the broadest anchor set —
+    // every spatially observable entity — and must be legal.
+    let errs = lint_errors(spawn_safety_json(
+        Some("Projectile"),
+        Some(serde_json::json!("all")),
+        serde_json::json!(0.5),
+    ));
+    assert!(errs.is_empty(), "all-anchors is legal: {errs:?}");
+}
+
+#[test]
+fn spawn_safety_requires_a_component_selector() {
+    // The judged archetype must be NAMED: unlike DTC (whose '*'
+    // default is the whole hierarchy — exactly what that rule is
+    // for), an entry-diff over every Transform-carrying entity
+    // judges half the world's happenings by accident. The rule
+    // demands intent.
+    let errs = lint_errors(spawn_safety_json(
+        None,
+        Some(serde_json::json!("all")),
+        serde_json::json!(0.5),
+    ));
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("spawn_safety requires") && e.contains("target_selector")),
+        "missing selector: {errs:?}"
+    );
+    // An explicit all-selector is equally rejected: the default
+    // is not a stand-in for intent here.
+    let mut json = spawn_safety_json(None, Some(serde_json::json!("all")), serde_json::json!(0.5));
+    json["invariants"][0]["target_selector"] = serde_json::json!("all");
+    let errs = lint_errors(json);
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("spawn_safety requires") && e.contains("target_selector")),
+        "explicit all-selector: {errs:?}"
+    );
+}
+
+#[test]
+fn spawn_safety_requires_an_anchor_selector_and_positive_distance() {
+    // Both halves of the judgment are required: the anchor set
+    // (what entries must keep clear of) and a positive finite
+    // min_distance (the keep-clear radius).
+    let errs = lint_errors(spawn_safety_json(
+        Some("Projectile"),
+        None,
+        serde_json::json!(0.5),
+    ));
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("spawn_safety requires 'min_distance_from'")),
+        "missing anchors: {errs:?}"
+    );
+    for bad in [
+        serde_json::json!(null),
+        serde_json::json!(0.0),
+        serde_json::json!(-2.0),
+    ] {
+        let errs = lint_errors(spawn_safety_json(
+            Some("Projectile"),
+            Some(serde_json::json!("all")),
+            bad.clone(),
+        ));
+        assert!(
+            errs.iter().any(|e| {
+                e.contains("spawn_safety requires 'min_distance'")
+                    || e.contains("min_distance must be a finite number > 0")
+            }),
+            "bad min_distance {bad}: {errs:?}"
+        );
+    }
+}
+
+#[test]
+fn spawn_safety_rejects_temporal_and_foreign_knobs() {
+    // The transition frame is judged, never soaked: window_s and
+    // the driver knobs of the soak-era rules are foreign here, and
+    // the check/value/... surface of the scalar rules likewise.
+    for (field, values) in [
+        (
+            "window_s",
+            &[&serde_json::json!(1.0)] as &[&serde_json::Value],
+        ),
+        ("driver_resource", &[&serde_json::json!("MatchClock")]),
+        ("driver_path", &[&serde_json::json!("minutes")]),
+        ("driver_units_per_second", &[&serde_json::json!(10.0)]),
+        ("check", &[&serde_json::json!("lt")]),
+        ("value", &[&serde_json::json!(900.0)]),
+        ("path", &[&serde_json::json!("translation.x")]),
+        ("resource", &[&serde_json::json!("MatchClock")]),
+        ("eventually_s", &[&serde_json::json!(2.0)]),
+        ("min_x", &[&serde_json::json!(1.0)]),
+    ] {
+        for value in values {
+            let mut json = spawn_safety_json(
+                Some("Projectile"),
+                Some(serde_json::json!("all")),
+                serde_json::json!(0.5),
+            );
+            json["invariants"][0][field] = (*value).clone();
+            let errs = lint_errors(json.clone());
+            assert!(
+                errs.iter().any(|e| e.contains("spawn_safety does not use")),
+                "{field}: {errs:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn spawn_safety_fields_are_foreign_on_other_rules() {
+    // min_distance_from and spawn_only are single-owner fields:
+    // on any other rule they are parsed-but-never-read knobs and
+    // must reject as spawn_safety-only.
+    for (rule, filler) in [
+        (
+            "pairwise_separation",
+            serde_json::json!({
+                "target_selector": { "with_component": { "name": "Cabin" } },
+                "min_distance": 0.5,
+                "window_s": 1.0,
+            }),
+        ),
+        (
+            "component_check",
+            serde_json::json!({
+                "target_selector": { "with_component": { "name": "Cabin" } },
+                "path": "translation.x",
+                "check": "lt",
+                "value": 900.0,
+            }),
+        ),
+    ] {
+        for field in ["min_distance_from", "spawn_only"] {
+            let mut json = minimal_scenario("chaos");
+            let mut inv = serde_json::json!({
+                "name": "inv",
+                "rule": rule,
+            });
+            for (k, v) in filler.as_object().unwrap() {
+                inv[k] = v.clone();
+            }
+            inv[field] = if field == "spawn_only" {
+                serde_json::json!(true)
+            } else {
+                serde_json::json!("all")
+            };
+            json["invariants"] = serde_json::json!([inv]);
+            let errs = lint_errors(json);
+            assert!(
+                errs.iter().any(|e| e.contains("spawn_safety only")),
+                "{rule} + {field}: {errs:?}"
+            );
+        }
+    }
+}

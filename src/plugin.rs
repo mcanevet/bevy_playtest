@@ -610,6 +610,9 @@ fn lint_probe_wanted(scenario: &crate::scenario::Scenario) -> bool {
             // slice; until then the rule rejects at stage 1 with
             // NotImplemented).
             InvariantRule::DerivedTransformConsistency => true,
+            // spawn_safety resolves BOTH selectors via the same
+            // registry machinery at probe time.
+            InvariantRule::SpawnSafety => true,
         }
     });
     invariant_probe || progress_surface_probe_wanted(scenario)
@@ -709,6 +712,7 @@ fn lint_registry_probe(
                 InvariantRule::DerivedTransformConsistency => {
                     "derived-transform consistency selector probes"
                 }
+                InvariantRule::SpawnSafety => "spawn safety selector probes",
             };
             findings.push(ScenarioError::Rejected(format!(
                 "invariant '{}': {}",
@@ -784,6 +788,26 @@ fn lint_registry_probe(
                         crate::invariant_eval::resolve_registration(&registry, name, "component")
                     {
                         findings.push(ScenarioError::Rejected(inv_name(&why)));
+                    }
+                }
+            }
+            InvariantRule::SpawnSafety => {
+                // Same probe doctrine, applied to BOTH selectors:
+                // the target selector names the judged archetype
+                // and min_distance_from names the anchors — both
+                // are component TYPES that must resolve.
+                for selector in [inv.target_selector.as_ref(), inv.min_distance_from.as_ref()]
+                    .into_iter()
+                    .flatten()
+                {
+                    if let crate::enums::TargetSelector::WithComponent { name } = selector {
+                        if let Err(why) = crate::invariant_eval::resolve_registration(
+                            &registry,
+                            name,
+                            "component",
+                        ) {
+                            findings.push(ScenarioError::Rejected(inv_name(&why)));
+                        }
                     }
                 }
             }
