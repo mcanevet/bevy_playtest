@@ -464,7 +464,7 @@ until this closes (their verdict: blocks-adoption). Fixes:
   would-have-judged existence evidence); a zero-entries run
   earns no held entry at all, making exercised-vs-never-triggered
   a structural distinction rather than a count comparison.
-  `forbidden_region` (episode-shaped, not yet shipped) keeps the
+  `forbidden_region` (episode-shaped; AS BUILT, shipped) keeps the
   bounded episode-log plan above.
 - The sandbox's predicted experiment (a passive run where the
   component-tier contract `skater_starts_centered` is held but absent
@@ -676,6 +676,41 @@ engine on the flattest vocabulary), then entity_stagnation as the
 second vocabulary, which brings the variant-path/enum-digest
 reflection-layer work with it.
 
+(AS BUILT, the shipped `entity_stagnation` and where it had to
+deviate from or go beyond this paragraph: the reflection layer's
+variant-qualified watch paths needed a bespoke `scoped_watch_leaf`
+reader — bevy 0.20's reflect `GetPath` does not dispatch into enum
+variants, so `watch_path: "state.Queued.waited"` is resolved by
+walking `path`, variant name, and field manually; the leaf digest is
+BITWISE-canonical per entity (f32 `to_bits()` — -0.0 → +0.0 is a
+change, distinct NaN payloads distinct values) with despawn-ACQUITTAL
+mid-stint (banking
+the accrued span, never refunding it), and a RECYCLED slot is a new
+(index, generation) episode key — turnover cannot weld a successor
+to its predecessor's stint. The sampled cadence (`sampling_s`,
+default 1.0) is scheduled in FRAMES via the driver rate —
+`window_s >= 2 * sampling_s` is enforced at load, and a sub-frame
+cadence rejects (it would collapse to repeated identical samples).
+The flat `driver` discriminator is exactly as specced:
+`global_time` default, `"resource"` reusing the driver fields
+verbatim, both-halves-or-neither. Episode identity is the UNION
+TIMELINE over stuck entities — one episode per invariant, a
+stretch where ANY selected entity is stuck, spanning sampled gaps
+where nothing qualified — so the immortal guest's finding is the
+episode's worst-span witness, not per-entity noise; the `_meta`
+roster carries per-entity (index, generation, first/last frame,
+accrued span) worst-first with disclosed truncation. And one
+split the spec did not draw: VACUITY BY NON-RESOLUTION (selector
+never resolved a checkable entity → `vacuous_invariant`) is
+deliberately separated from a RESOLVED-but-never-qualifying watch
+(a `leaf_where` that was never true, or a watch that judged every
+sample and saw nothing stuck) — the latter is a PASS WITH
+EVIDENCE: the held trace keeps the entry, zero judgments or
+per-sample digest workload as the case may be, because a live
+watch the world never offered the qualifying state is coverage,
+not vacuity. Sampling-schedule and relay-union doctrines are the
+review's two veto points; both stand as shipped.)
+
 ## 8. Evidence appendix — the measured failures this design must catch
 
 1. Sports sim: players converge to one point; GlobalTransform
@@ -753,7 +788,7 @@ example that exempts its own litmus must not survive to the plan).
 | Decorative cover, no collision (arena shooter, Litmus 3) | none — judged only via declared intent (`forbidden_region` + `allow_if`); game defect | n/a (out of harness scope, §6) | n/a |
 | Player pile-up; GlobalTransform ≠ Parent composition (sports sim) | `derived_transform_consistency` — PROMOTED on the harness battery's flip-test (multi-child pile RED with full roster, propagated pile GREEN, rotating/scaling hierarchy coherent) | RED: both sides' values + frame | GREEN — demonstrated |
 | Possession frozen five clock-minutes under zero input (sports sim) | expressible TODAY: `passive: true` + `stagnant_resource` — ALREADY DEMONSTRABLE, free to verify now, not future work | RED on the frozen resource | GREEN |
-| Queue-on-dead-ride soft-lock: immortal queued guests (park sim) | `entity_stagnation` (`leaf_where state==Queued`, scoped `waited` watch, `global_time` driver) | RED: stagnation episode per guest, `_meta` roster | GREEN (despawn or state change acquires the episode) |
+| Queue-on-dead-ride soft-lock: immortal queued guests (park sim) | `entity_stagnation` (`leaf_where state==Queued`, scoped `waited` watch, `global_time` driver) — SHIPPED, pinned by the integration battery (17 tests: the litmus fixture RED with per-entity `_meta` roster, relay/id-reuse, cadence, vacuity split) | RED: stagnation episode per guest, `_meta` roster | GREEN (despawn or state change acquires the episode) |
 | Crowd congestion (park sim, candidate owner — NO measured litmus yet on record) | `occupancy_cap` — ships as grammar, unpromoted (§1): the park sim's queued-at-entrance crowds are the natural first owner; until a crowding incident demonstrates pre-fix-RED / post-fix-GREEN, the rule carries no fail-power claim and blocks nothing else | PLACEHOLDER: awaiting an owned crowding incident | PLACEHOLDER |
 | Camera smoothing / ghost-entity late GT writes (FP guard, all repos) | §2's opt-outs (`exclude` prefixes, `SkipDerivedConsistency`) | n/a — NEGATIVE acceptance: battery games must stay violation-clean (part (b) of §6's "prove" criterion; for WARN-phase rules read WARNING-clean, per §6's timing note) | n/a |
 
