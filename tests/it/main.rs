@@ -30,6 +30,7 @@ mod derived_transform_consistency;
 mod doc_examples;
 mod driver_smoke;
 mod engine_clock_drivers;
+mod entity_stagnation;
 mod explorer;
 mod fault_injection;
 mod forbidden_region;
