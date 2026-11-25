@@ -35,7 +35,8 @@
   the pass-side evidence trace — one compact object per PASSING
   `resource_check` / `stagnant_resource` / `component_check` /
   `nodes_in_bounds` / `pairwise_separation` /
-  `derived_transform_consistency` invariant, the mirror of the
+  `derived_transform_consistency` / `spawn_safety` invariant,
+  the mirror of the
   violations list for invariants that held. A passing run previously
   carried zero per-invariant evidence (a deadline met at frame 299 of
   300 was indistinguishable from one met at frame 3):
@@ -44,7 +45,8 @@
     tier; `Component.leaf` for `component_check`, the selector
     component for `nodes_in_bounds`, `all` for the all-selector;
     for the episode rules the selector component, or `all` for
-    DTC's whole-hierarchy scope)
+    DTC's whole-hierarchy scope; for `spawn_safety` the selector
+    component)
   - `frames_matched` — frames on which the check resolved and
     judged something (existence evidence; `frames_matched: 0` plus a
     `vacuous_invariant` finding is the wrong-path signal, since
@@ -52,12 +54,15 @@
     frames the selector matched ≥1 entity; for the episode rules,
     the frames the rule had something to judge — pairwise: ≥2
     checkable entities co-existed, DTC: ≥1 checkable parented
-    entity past the grace window)
+    entity past the grace window; for `spawn_safety`, the frames
+    with ≥1 resolvable anchor — the frames an incoming entry
+    would have been judged on had one arrived)
   - `predicate` (`resource_check` and `component_check`: the
     authored predicate in wire syntax, e.g. `ge 0`; episode rules:
     the rule's threshold rendered the same way — `ge <min_distance>`
     for pairwise, `le <tolerance>` for DTC with the documented
-    default when the author omitted it)
+    default when the author omitted it; `spawn_safety` renders
+    `ge <min_distance>`, pairwise-shaped)
   - `observed_min` / `observed_max` (`resource_check` only) —
     extrema of the sampled leaf across matched frames
   - `worst_frame` (`resource_check`, ordered predicates only) — the
@@ -76,7 +81,9 @@
     present; `window_s` rides the episode rules' entries too (the
     soak the worst-span witness is compared against)
   - `entity_judgments` (component tier: `component_check` /
-    `nodes_in_bounds`; also `derived_transform_consistency`) —
+    `nodes_in_bounds`; also `derived_transform_consistency`;
+    `spawn_safety` reuses the field for run-total ENTRIES judged —
+    once per entry, not per frame, the transition-frame doctrine) —
     run-total entity-judgments: the sum of
     per-frame matched-entity counts over observed frames. A
     workload figure ("N entity-judgments were made"), not a census —
@@ -114,6 +121,14 @@
     `entity_judgments` doctrine, which `derived_transform_consistency`
     reuses directly: its `entity_judgments` sums the checkable
     parented entities per judged frame
+  - `entries_clean` (`spawn_safety` only) — run-total entries judged
+    CLEAN (entered at least `min_distance` from every same-frame
+    anchor): together with its `entity_judgments` (ALL entries
+    judged — once per entry, not per frame, the transition-frame
+    doctrine) it separates the rule that exercised N entries from
+    the never-exercised twin; a zero-entries run earns no held
+    entry at all (an archetype that never gained a member proved
+    nothing about entry safety)
 - `harness_mode`: `"in_process"` for a real run, or `"lint"` for a
   lint-mode artifact (see below)
 - `scenario_source`: `"file"`, `"builtin_smoke"`, or `"builtin_battery"`

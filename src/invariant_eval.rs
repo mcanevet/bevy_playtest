@@ -3181,9 +3181,15 @@ pub fn audit_derived_transform_consistency(
 // entry is a current member that is either a pair new to the
 // snapshot (a spawn) or a known pair newly bearing the component
 // (component-addition). Generation tracking makes id reuse sound
-// in both directions: a reused index with a bumped generation is
-// a new pair (cannot forge continuity), and a stale pair can
-// never re-enter (cannot hide an entry).
+// in both directions: a reused index returning with a HIGHER
+// generation is a new pair (cannot forge continuity), and in
+// bevy 0.20's allocator — which recycles freed slots
+// BIT-IDENTICALLY, without a generation bump (its own allocator
+// tests assert exactly this) — soundness rests on the other
+// half of the diff: a despawned pair VANISHES from the previous
+// snapshot, so its recycled re-entry arrives as an unknown
+// pair and is judged anew (a stale membership record cannot
+// hide an entry).
 // ---------------------------------------------------------------------
 
 /// Bookkeeping for `spawn_safety` invariants across frames (the
