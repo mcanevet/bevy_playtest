@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+## [0.21.0](https://github.com/mcanevet/bevy_playtest/compare/v0.20.0...v0.21.0) - 2026-11-26
+
+### Added
+
+- *(judgement)* forbidden_region — declarative no-go-zone oracle
+
+### Other
+
+- ci Update taiki-e/install-action action to v2.90.10
+- reference docs and the proposal's AS-BUILT record
+- held-trace battery and the pass-with-evidence doctrine
+- behavioral battery and variant-aware leaf reads
+- authoring grammar, probe, and runtime recorder
+- ci Update taiki-e/install-action action to v2.90.9
+
 ## [0.20.0](https://github.com/mcanevet/bevy_playtest/compare/v0.19.0...v0.20.0) - 2026-11-25
 
 ### Added
