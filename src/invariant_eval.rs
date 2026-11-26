@@ -5539,7 +5539,8 @@ pub fn audit_occupancy_cap(
                 count: 1,
                 detail: format!(
                     "invariant '{}' never had a crowd to judge over the whole run \
-                     (no frame offered cap+1 coexisting '{}' entities); a population \
+                     (no frame offered even ONE checkable '{}' \
+                     entity); a population \
                      always within cap ({cap}, self-inclusive) is the healthy case — \
                      the census simply never had a bigger crowd to bound. \
                      UNPROMOTED RULE: occupancy_cap is warn-only and this note does \
