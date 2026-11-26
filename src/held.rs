@@ -102,7 +102,10 @@ pub struct HeldInvariant {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub deadline_frame: Option<u64>,
     /// Stagnant-mode only: stagnation episodes that fired this run
-    /// (0 on a passing run — a fired episode means the run FAILED).
+    /// (0 on a passing run — a fired stagnation episode means the
+    /// run FAILED; warn-only rules — see `occupancy_cap` — fire
+    /// episodes on passing runs, and their story lives in
+    /// `episodes_observed` instead).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub episodes_fired: Option<u64>,
     /// Stagnant-mode only: run-total driver advance — the sum of
