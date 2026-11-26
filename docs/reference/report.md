@@ -8,7 +8,12 @@
   last_detail }]` — aggregated by `(rule, target)`; `target` semantics
   vary by rule: the invariant's `name` for scenario bounds checks, the
   entity id for the global bounds oracle, the literal `"world"` for
-  `frozen_world`
+  `frozen_world`. Informational entries ride the same list: a
+  WARN-ONLY rule (`occupancy_cap` today — see the proposal §1/§8
+  ship-gate honesty) renders its findings as ordinary entries here
+  on a status `"Pass"` report; there is no separate
+  informational section, and `_meta.unpromoted_rule` plus the
+  detail's warn-only sentence mark the posture
 - `metrics`: `{ input_count, frame_count, worst_frame_ms, crash_detected }`
 - `schema_version`, `frame_count`, `tps`, `simulated_duration_s`,
   `wall_time_s`, `error`
@@ -36,7 +41,7 @@
   `resource_check` / `stagnant_resource` / `component_check` /
   `nodes_in_bounds` / `pairwise_separation` /
   `derived_transform_consistency` / `spawn_safety` / `forbidden_region` /
-  `entity_stagnation` invariant,
+  `entity_stagnation` / `occupancy_cap` invariant,
   the mirror of the
   violations list for invariants that held. A passing run previously
   carried zero per-invariant evidence (a deadline met at frame 299 of
@@ -48,7 +53,8 @@
     for the episode rules the selector component, or `all` for
     DTC's whole-hierarchy scope; `forbidden_region` names its
     selector component; for `spawn_safety` the selector
-    component; for `entity_stagnation` the selector component)
+    component; for `entity_stagnation` the selector component; for
+    `occupancy_cap` the selector component)
   - `frames_matched` — frames on which the check resolved and
     judged something (existence evidence; `frames_matched: 0` plus a
     `vacuous_invariant` finding is the wrong-path signal, since
@@ -58,7 +64,9 @@
     checkable entities co-existed, DTC: ≥1 checkable parented
     entity past the grace window, forbidden_region: ≥1 checkable
     selected entity, entity_stagnation: ≥1 sampled frame the
-    selector enumerated entities, digests or not; for `spawn_safety`, the frames
+    selector enumerated entities, digests or not; `occupancy_cap`:
+    ≥1 checkable entity offered — a density read runs every
+    frame; for `spawn_safety`, the frames
     with ≥1 resolvable anchor — the frames an incoming entry
     would have been judged on had one arrived)
   - `predicate` (`resource_check` and `component_check`: the
@@ -68,7 +76,9 @@
     default when the author omitted it, `inside at most <window_s>
     driver units` for forbidden_region, `window <window_s>` for
     entity_stagnation (the soak threshold the episode judge
-    compares against); `spawn_safety` renders
+    compares against); `occupancy_cap` renders
+    `count le <cap>` (the neighborhood bound, self-inclusive);
+    `spawn_safety` renders
     `ge <min_distance>`, pairwise-shaped)
   - `observed_min` / `observed_max` (`resource_check` only) —
     extrema of the sampled leaf across matched frames
@@ -94,7 +104,10 @@
     `nodes_in_bounds`; also `derived_transform_consistency`;
     `spawn_safety` reuses the field for run-total ENTRIES judged —
     once per entry, not per frame, the transition-frame doctrine;
-    `forbidden_region` sums the selected entities per judged frame)
+    `forbidden_region` sums the selected entities per judged frame;
+    `occupancy_cap` sums the checkable entities per judged frame —
+    a density rule judges entities, never pairs, so it rides this
+    slot, never `pair_judgments`)
     —
     run-total entity-judgments: the sum of
     per-frame matched-entity counts over observed frames. A
@@ -112,7 +125,7 @@
     leaf, so `nodes_in_bounds` carries workload fields only
   - `episodes_observed` (episode rules: `pairwise_separation`,
     `derived_transform_consistency`, `forbidden_region`,
-    `entity_stagnation`) — total
+    `entity_stagnation`, `occupancy_cap`) — total
     episodes observed this
     run INCLUDING the sub-soak ones the soak judgment discarded as
     transients: a passing run's episodes are precisely its
@@ -159,13 +172,19 @@
   WITH EVIDENCE, never vacuity; only a selector that never
   resolved at all is `vacuous_invariant` (the run already failed
   on it), and a zero-instance watch earns no held entry via the
-  resolution marker alone
+  resolution marker alone. `occupancy_cap` partitions the same
+  way a warn-only rule must: a run whose census judged crowds —
+  including a run WARNED for a soaked one — keeps no held entry
+  for the FIRED rule (the violations[] warning and the held
+  trace partition by verdict even on a passing report), while a
+  never-a-crowd selector (informational note emitted, no
+  census workload) claims no held evidence either
 - the violation-entry `_meta` block (wire key `_meta`): rule-owned
   structured evidence appended to findings. `pairwise_episode`
   (`sampled_pairs`, capped `roster` of per-pair worst-first
   frames + distances, `roster_truncated`),
   `consistency_episode` (same shape for divergent entities), and
-  `forbidden_episode` for `forbidden_region` findings:
+  `forbidden_region`'s `forbidden_episode`:
   `sampled_entities` (distinct incursive entities this episode),
   `roster` — per-entity `entity` (index), `first_frame`,
   `worst_depth` (penetration depth to the nearest face; deeper is
@@ -180,7 +199,19 @@
   entity's accrued stuck-span in driver-leaf units, frozen at
   stint end), `stuck_frames` (sampled frames stuck) — worst-first
   (longest span, then earliest frame), capped at 32 with
-  `roster_truncated` disclosing the drop. `stepping` (step-capture
+  `roster_truncated` disclosing the drop. `occupancy_episode` for
+  `occupancy_cap` findings: `sampled_entities` (distinct
+  WITNESSING entities this episode — each saw a self-inclusive
+  neighborhood count over cap), `radius` and `cap` echoed (the
+  evidence is self-describing), `roster` — per-entity `entity`
+  (index) AND `generation` (slot recycling must never weld a
+  successor to its predecessor's crowd), `first_frame`,
+  `worst_frame`, `worst_count` (the highest self-inclusive
+  crowd count the entity witnessed), `violating_frames` —
+  worst-first (highest count, then earliest frame), capped at 32
+  with `roster_truncated` disclosing the drop. The occupancy
+  finding also carries `unpromoted_rule: true` in its `_meta`
+  (see below). `stepping` (step-capture
   runs) predates the
   episode blocks. All fields are wire-stable names
 - `harness_mode`: `"in_process"` for a real run, or `"lint"` for a

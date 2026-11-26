@@ -103,22 +103,29 @@ the schema adopts ONE name when the engine lands, chosen then):
 
 ```json
 { "name": "max_three_in_a_room", "rule": "occupancy_cap",
-  "target_selector": "Demon", "radius": 2.0, "cap": 3,
-  "window_s": 30 }
+  "target_selector": { "with_component": { "name": "Demon" } },
+  "radius": 2.0, "cap": 3, "window_s": 30 }
 ```
 
 Generalizes the same family: at most `cap` selected entities within
 `radius` of any point. The demon-stack litmus expressed directly
 ("no more than N of kind X within R of each other, sustained").
 
+(AS BUILT: the shipped question is entity-witnessed rather than
+point-sampled — see the post-§7 AS-BUILT note and the schema doc's
+rule section for the exact semantics, the ring non-firing
+consequence, and the field-by-field grammar. The sample above is
+the shipped shape: `with_component` selector, integer `cap`, the
+`window_s` soak, the pairwise driver grammar.)
+
 Ship-gate honesty: the round-1–round-4 evidence contains NO
 measured crowding litmus — every stacked-bodies incident on record
 routes to `pairwise_separation` — so under §8's acceptance
 discipline `occupancy_cap` ships as grammar WITHOUT promotion:
 the vocabulary lands with the family — it shares the FOLD and the
-schema, but not necessarily the enumeration (pairwise enumerates
-pairs; occupancy asks "at most cap within radius of ANY POINT", a
-density query that wants a spatial hash, not a shared sweep) — and
+schema, but not the enumeration (pairwise enumerates
+pairs; occupancy witnesses entities against a spatial-hash
+density count, not a shared sweep) — and
 its findings are WARN-ONLY by construction, exactly §2's
 default-posture pattern: an unpromoted occupancy finding does not
 fail the run; it warns, with the finding's `_meta` marking it
@@ -711,6 +718,36 @@ watch the world never offered the qualifying state is coverage,
 not vacuity. Sampling-schedule and relay-union doctrines are the
 review's two veto points; both stand as shipped.)
 
+(AS BUILT, the shipped `occupancy_cap` and where it had to
+deviate from or go beyond §1's sketch: the question is
+ENTITY-WITNESSED, not point-sampled — §1's "at most cap within
+radius of ANY POINT" was the density formulation of the class,
+but the shipped grammar asks the per-entity question ("at most
+cap selected entities within radius of a selected entity's
+position, self-inclusive, inclusive on the boundary"), because a
+witness set must be enumerable evidence for the `_meta` roster. A
+disclosed consequence, pinned by the battery: a wide-spaced RING
+around an empty center is a documented NON-FIRING case — adjacent
+members within radius of each other but diagonals outside, each
+self-inclusive count exactly at cap — a point-density oracle
+would fire on the ring's center where the shipped one, honestly,
+does not; a promoted flip in §2 must decide whether the
+point-density formulation is a different rule or a widening of
+this one. Episodes ride the UNION TIMELINE (witness-set changes
+never close an episode; only an empty-observation frame, a
+non-finite driver sample, or a driver gap does), so slot
+recycling within a still-open crowd welds nothing: a recycled
+successor enters as a FRESH (index, generation) key. The
+finding is WARN-ONLY by construction — an ordinary
+`violations[]` entry on a status "Pass" report with
+`_meta.unpromoted_rule: true`, `strict_warnings` does not touch
+it, and the never-a-crowd audit emits under the rule's OWN
+informational name, never `vacuous_invariant`. The held trace
+participates with the entity-witnessed workload (entity_count
+slot, never pair_judgments), and the FIRED rule gets no held
+entry — the two sections partition by verdict even on a passing
+report. The litmus row below stays PLACEHOLDER.)
+
 ## 8. Evidence appendix — the measured failures this design must catch
 
 1. Sports sim: players converge to one point; GlobalTransform
@@ -789,7 +826,7 @@ example that exempts its own litmus must not survive to the plan).
 | Player pile-up; GlobalTransform ≠ Parent composition (sports sim) | `derived_transform_consistency` — PROMOTED on the harness battery's flip-test (multi-child pile RED with full roster, propagated pile GREEN, rotating/scaling hierarchy coherent) | RED: both sides' values + frame | GREEN — demonstrated |
 | Possession frozen five clock-minutes under zero input (sports sim) | expressible TODAY: `passive: true` + `stagnant_resource` — ALREADY DEMONSTRABLE, free to verify now, not future work | RED on the frozen resource | GREEN |
 | Queue-on-dead-ride soft-lock: immortal queued guests (park sim) | `entity_stagnation` (`leaf_where state==Queued`, scoped `waited` watch, `global_time` driver) — SHIPPED, pinned by the integration battery (17 tests: the litmus fixture RED with per-entity `_meta` roster, relay/id-reuse, cadence, vacuity split) | RED: stagnation episode per guest, `_meta` roster | GREEN (despawn or state change acquires the episode) |
-| Crowd congestion (park sim, candidate owner — NO measured litmus yet on record) | `occupancy_cap` — ships as grammar, unpromoted (§1): the park sim's queued-at-entrance crowds are the natural first owner; until a crowding incident demonstrates pre-fix-RED / post-fix-GREEN, the rule carries no fail-power claim and blocks nothing else | PLACEHOLDER: awaiting an owned crowding incident | PLACEHOLDER |
+| Crowd congestion (park sim, candidate owner — NO measured litmus yet on record) | `occupancy_cap` — grammar SHIPPED, unpromoted (§1): the park sim's queued-at-entrance crowds are the natural first owner; until a crowding incident demonstrates pre-fix-RED / post-fix-GREEN, the rule carries no fail-power claim and blocks nothing else | PLACEHOLDER: awaiting an owned crowding incident | PLACEHOLDER |
 | Camera smoothing / ghost-entity late GT writes (FP guard, all repos) | §2's opt-outs (`exclude` prefixes, `SkipDerivedConsistency`) | n/a — NEGATIVE acceptance: battery games must stay violation-clean (part (b) of §6's "prove" criterion; for WARN-phase rules read WARNING-clean, per §6's timing note) | n/a |
 
 A rule ships only when its row's two expectations are demonstrated
