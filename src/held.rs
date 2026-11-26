@@ -344,6 +344,8 @@ pub struct HeldSources<'a> {
     pub ss_book: &'a crate::invariant_eval::SpawnSafetyBookkeeping,
     /// Stagnation episode-fold bookkeeping.
     pub stag_book: &'a crate::invariant_eval::StagnationBookkeeping,
+    /// Occupancy episode-fold bookkeeping.
+    pub occ_book: &'a crate::invariant_eval::OccupancyBookkeeping,
 }
 
 impl HeldBookkeeping {
@@ -510,6 +512,7 @@ impl HeldBookkeeping {
             fr_book,
             ss_book,
             stag_book,
+            occ_book,
         } = sources;
         let mut out = Vec::new();
         for inv in invariants.iter().filter(|i| {
@@ -524,6 +527,7 @@ impl HeldBookkeeping {
                     | InvariantRule::ForbiddenRegion
                     | InvariantRule::SpawnSafety
                     | InvariantRule::EntityStagnation
+                    | InvariantRule::OccupancyCap
             )
         }) {
             if failed(&inv.name) {
@@ -539,6 +543,7 @@ impl HeldBookkeeping {
                     | InvariantRule::DerivedTransformConsistency
                     | InvariantRule::ForbiddenRegion
                     | InvariantRule::EntityStagnation
+                    | InvariantRule::OccupancyCap
             );
             let is_spawn_safety = inv.rule == InvariantRule::SpawnSafety;
             // Tier-appropriate exclusion evidence. The component tier
@@ -620,6 +625,12 @@ impl HeldBookkeeping {
                                 || stag_book.selector_resolved.contains(&inv.name),
                             stag_book.episode_stats.get(&inv.name),
                         )
+                    } else if inv.rule == InvariantRule::OccupancyCap {
+                        (
+                            occ_book.config_errored.contains(&inv.name),
+                            occ_book.matched.contains(&inv.name),
+                            occ_book.episode_stats.get(&inv.name),
+                        )
                     } else {
                         (
                             dtc_book.config_errored.contains(&inv.name),
@@ -672,7 +683,7 @@ impl HeldBookkeeping {
             let frames_matched = if is_component_tier {
                 self.frames_judged.get(&inv.name).copied().unwrap_or(0)
             } else if is_episode_tier {
-                pw_dtc_fr_stag_stats(pw_book, dtc_book, fr_book, stag_book, inv)
+                episode_tier_stats(pw_book, dtc_book, fr_book, stag_book, occ_book, inv)
                     .map(|s| s.frames_judged)
                     .unwrap_or(0)
             } else if is_spawn_safety {
@@ -718,6 +729,13 @@ impl HeldBookkeeping {
                         // driver units" (the soak threshold the
                         // episode judge compares against).
                         inv.window_s.map(|w| format!("window {w}"))
+                    }
+                    InvariantRule::OccupancyCap => {
+                        // The occupancy predicate is the CAP:
+                        // "at most cap entities (self-inclusive)
+                        // within radius" (the neighborhood bound
+                        // the episode judge compares against).
+                        inv.cap.map(|c| format!("count le {c}"))
                     }
                     _ => inv
                         .tolerance
@@ -804,16 +822,18 @@ impl HeldBookkeeping {
                     )
                 } else if is_episode_tier {
                     // Episode-tier workload: DTC, forbidden_region,
-                    // and entity_stagnation all reuse the
-                    // entity-judgment field (the same workload
+                    // entity_stagnation, and occupancy_cap all reuse
+                    // the entity-judgment field (the same workload
                     // doctrine; the field doc names the rules).
                     // Pairwise counts PAIRS, its own field below.
-                    let stats = pw_dtc_fr_stag_stats(pw_book, dtc_book, fr_book, stag_book, inv);
+                    let stats =
+                        episode_tier_stats(pw_book, dtc_book, fr_book, stag_book, occ_book, inv);
                     let entities = matches!(
                         inv.rule,
                         InvariantRule::DerivedTransformConsistency
                             | InvariantRule::ForbiddenRegion
                             | InvariantRule::EntityStagnation
+                            | InvariantRule::OccupancyCap
                     )
                     .then(|| stats.map(|s| s.entity_judgments).unwrap_or(0));
                     (entities, None, None, None, None)
@@ -838,7 +858,8 @@ impl HeldBookkeeping {
                 pair_judgments,
                 entries_clean,
             ) = if is_episode_tier {
-                let stats = pw_dtc_fr_stag_stats(pw_book, dtc_book, fr_book, stag_book, inv);
+                let stats =
+                    episode_tier_stats(pw_book, dtc_book, fr_book, stag_book, occ_book, inv);
                 let episodes = stats.map(|s| s.episodes_observed);
                 let (span, span_frame) = stats.and_then(|s| s.worst_span).unzip();
                 let pairs = (inv.rule == InvariantRule::PairwiseSeparation)
@@ -888,11 +909,12 @@ impl HeldBookkeeping {
 /// The episode-tier held statistics for `inv`, from whichever
 /// book owns its rule. `None` when the rule never folded anything
 /// (the record's absence is itself the exclusion evidence).
-fn pw_dtc_fr_stag_stats<'a>(
+fn episode_tier_stats<'a>(
     pw_book: &'a crate::invariant_eval::PairwiseBookkeeping,
     dtc_book: &'a crate::invariant_eval::ConsistencyBookkeeping,
     fr_book: &'a crate::invariant_eval::ForbiddenRegionBookkeeping,
     stag_book: &'a crate::invariant_eval::StagnationBookkeeping,
+    occ_book: &'a crate::invariant_eval::OccupancyBookkeeping,
     inv: &Invariant,
 ) -> Option<&'a EpisodeHeldStats> {
     if inv.rule == InvariantRule::PairwiseSeparation {
@@ -901,6 +923,8 @@ fn pw_dtc_fr_stag_stats<'a>(
         fr_book.episode_stats.get(&inv.name)
     } else if inv.rule == InvariantRule::EntityStagnation {
         stag_book.episode_stats.get(&inv.name)
+    } else if inv.rule == InvariantRule::OccupancyCap {
+        occ_book.episode_stats.get(&inv.name)
     } else {
         dtc_book.episode_stats.get(&inv.name)
     }
@@ -936,6 +960,7 @@ fn leaf_target(inv: &Invariant) -> String {
         || inv.rule == InvariantRule::ForbiddenRegion
         || inv.rule == InvariantRule::SpawnSafety
         || inv.rule == InvariantRule::EntityStagnation
+        || inv.rule == InvariantRule::OccupancyCap
     {
         return match inv.target_selector.as_ref() {
             Some(crate::enums::TargetSelector::WithComponent { name }) => name.clone(),

@@ -3255,6 +3255,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             fr_book: &forbidden_book,
             ss_book: &spawn_safety_book,
             stag_book: &stagnation_book,
+            occ_book: &occupancy_book,
         },
         tps,
         &|name| snap.iter().any(|v| v.target == name),
