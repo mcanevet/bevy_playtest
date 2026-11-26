@@ -894,3 +894,63 @@ Two distinct error classes, at different stages:
   `min_distance`/`region`/`tolerance` and the bounds fields
   are rejected at load; `watch_path`/`leaf_where`/`sampling_s`
   on other rules are rejected too (foreign fields).
+- `occupancy_cap`: the local-density crowd oracle — the rule for
+  the congestion incident class, and the first WARN-ONLY
+  invariant (see the proposal §1/§8 ship-gate honesty: the
+  round-1–round-4 record contains no measured crowding
+  litmus, so the vocabulary ships WITHOUT fail-power; the
+  park sim's queued-at-entrance crowds are the natural first
+  owner). `target_selector` is REQUIRED (`with_component`
+  only; an explicit `all` rejects at load) and names the
+  counted crowd — marker plus `Transform` (a marked entity
+  without a `Transform` is not checkable, the family
+  doctrine). `radius` is required, finite and > 0; `cap` is
+  required, an INTEGER ≥ 1 (`cap: 0` rejects — self-inclusive
+  counting means the count is always ≥ 1, so a zero cap
+  degenerates to "fire whenever any entity is selected").
+  The QUESTION is per-entity density: at most `cap` selected
+  entities (SELF-INCLUSIVE — everyone counts themselves) within
+  `radius` of a selected entity's position, INCLUSIVE on the
+  boundary (distance exactly radius counts as within, the
+  squared-distance compare `d² ≤ r²` with no sqrt).
+  Enumeration is ENTITY-WITNESSED, not point-sampled: the
+  count runs over entities (a spatial hash buckets positions
+  for counting only), so a wide-spaced ring around an empty
+  center — adjacent members within radius, diagonals outside —
+  is a documented NON-FIRING case when each member's
+  self-inclusive count stays at cap. `window_s` is REQUIRED
+  and is the SOAK: a crowd — a maximal connected stretch of
+  over-cap witnesses, UNION TIMELINE (witness-set changes
+  never close an episode; only a frame with no witnesses, a
+  non-finite driver sample, or a driver gap does) — only
+  becomes a finding when its span soaks past `window_s`;
+  sub-soak gatherings are discarded as transients. `driver`
+  picks the clock the soak is measured against: the frame
+  clock (default) or a game leaf via `driver_resource` +
+  `driver_path` + optional `driver_units_per_second`, the
+  same both-halves-or-neither grammar and fit checks as
+  `pairwise_separation` (rate without a declared leaf, a
+  window exceeding the run, sub-frame budgets). Evaluation
+  is EVERY FRAME (no sampling cadence — density reads are
+  the cost being paid). The finding is WARN-ONLY: it renders
+  as an ordinary `violations[]` entry on a status `"Pass"`
+  report (there is no informational section), with
+  `_meta.unpromoted_rule: true` marking the posture, the
+  detail sentence carrying the warn-only disclosure, and an
+  `occupancy_episode` block (`sampled_entities`, `radius`,
+  `cap`, roster of distinct WITNESSING entities — index AND
+  generation, first/worst frames, worst self-inclusive count,
+  violating frames — worst-first, capped at 32 with
+  `roster_truncated` disclosed). NOTHING about the rule can
+  flip run status: `strict_warnings` does not touch it, and
+  the rule is excluded from every gating path by
+  construction. Vacuity is split: a selector that never
+  offered a checkable entity over the whole run emits a
+  never-a-crowd NOTE under `occupancy_cap`'s own
+  (informational) name — NEVER `vacuous_invariant`, which
+  gates — while a within-cap population is simply silent.
+  `check`/`value`/`eventually_s`/`path`/`resource`/
+  `min_distance`/`region`/`tolerance`/`watch_path`/
+  `sampling_s`/`spawn_only` and the bounds fields are
+  rejected at load; `radius`/`cap`/`window_s` on other rules
+  are rejected too (foreign fields, both directions).
