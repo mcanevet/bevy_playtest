@@ -749,3 +749,135 @@ fn missing_window_fit_check_uses_duration() {
         "{errs:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Held trace: the census a passing run keeps (veto point 1e)
+// ---------------------------------------------------------------------------
+
+/// Held-trace admission: a within-cap population that was judged
+/// every frame still earns a held entry — the census RAN, and the
+/// trace must say so. Two members (each count 2 ≤ cap 3) over the
+/// full 6.0s run: every frame populated, so `frames_matched` is
+/// the full frame count (360 — the 6.0s run at 60 tps) and
+/// `entity_judgments` is the per-frame checkable count summed
+/// over those frames (2 members × 360 frames). The near-miss
+/// fields stay empty: with nobody ever over cap, no episode ever
+/// held a witness, so nothing was observed, no span banked.
+#[test]
+fn within_cap_population_earns_a_held_entry() {
+    let _slot = common::run_slot();
+    let mut app = base_app();
+    app.world_mut()
+        .spawn((CrowdMember, Transform::from_xyz(0.0, 0.0, 0.0)));
+    app.world_mut()
+        .spawn((CrowdMember, Transform::from_xyz(0.1, 0.0, 0.0)));
+    let report = run_scenario(&mut app, &scenario_with_invariant(CROWD_INV)).unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    let held = report
+        .held_invariants
+        .iter()
+        .find(|h| h.name == "no_more_than_three_in_a_room")
+        .expect("a judged, passing occupancy census earns a held entry");
+    assert_eq!(held.rule, "occupancy_cap");
+    assert_eq!(held.target, "CrowdMember");
+    assert_eq!(held.predicate.as_deref(), Some("count le 3"));
+    assert_eq!(held.window_s, Some(3.0));
+    assert_eq!(held.frames_matched, 360);
+    assert_eq!(held.entity_judgments, Some(2 * 360));
+    assert_eq!(held.episodes_observed, Some(0));
+    assert!(held.worst_episode_span.is_none());
+    assert!(held.pair_judgments.is_none());
+}
+
+/// The near-miss story: a gathering DISSOLVED below the soak
+/// (the transient the judgment discards) is exactly what the
+/// held trace exists to keep. The dissolve-at-frame-100 fixture:
+/// the episode opens at the first frame, closes when the
+/// positions jump apart, and its banked span rides the entry
+/// while the run still passes.
+#[test]
+fn sub_soak_gathering_banks_its_span_in_the_held_trace() {
+    let _slot = common::run_slot();
+    let mut app = base_app();
+    spawn_standing_crowd(app.world_mut());
+    app.add_systems(
+        Update,
+        |mut q: Query<&mut Transform, With<CrowdMember>>, mut clock: Local<f32>| {
+            *clock += 1.0;
+            if *clock > 100.0 {
+                for (i, mut t) in q.iter_mut().enumerate() {
+                    t.translation.x = 50.0 * (i as f32 + 1.0);
+                    t.translation.y = 0.0;
+                }
+            }
+        },
+    );
+    let report = run_scenario(&mut app, &scenario_with_invariant(CROWD_INV)).unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    let held = report
+        .held_invariants
+        .iter()
+        .find(|h| h.name == "no_more_than_three_in_a_room")
+        .expect("the near-miss run keeps its held entry");
+    assert_eq!(held.episodes_observed, Some(1));
+    let (span, start_frame) = held
+        .worst_episode_span
+        .zip(held.worst_episode_frame)
+        .expect("the sub-soak span and its start frame are witnessed");
+    assert_eq!(start_frame, 0, "the gathering began with the run");
+    // Frame clock driver: the span is seconds. The gathering ran
+    // from frame 0 to the dissolve at ~101 — just under 1.7s,
+    // well under the 3.0s soak.
+    assert!(
+        (1.0..3.0).contains(&span),
+        "the banked sub-soak span: {span}"
+    );
+}
+
+/// Fired-interplay exclusion (veto point 1e): the SOAKED crowd —
+/// the headline's own fixture — produced a violations[] warning,
+/// so it must NOT also appear as held evidence. The two sections
+/// partition by verdict even for a warn-only rule: the warning
+/// entry owns the story; a held twin would double-count it.
+#[test]
+fn fired_occupancy_gets_no_held_entry() {
+    let _slot = common::run_slot();
+    let mut app = base_app();
+    spawn_standing_crowd(app.world_mut());
+    let report = run_scenario(&mut app, &scenario_with_invariant(CROWD_INV)).unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    assert!(
+        report.violations.iter().any(|v| v.rule == "occupancy_cap"),
+        "the soaked crowd warned"
+    );
+    assert!(
+        !report
+            .held_invariants
+            .iter()
+            .any(|h| h.name == "no_more_than_three_in_a_room"),
+        "a fired occupancy must not also be held"
+    );
+}
+
+/// Never-a-crowd exclusion: a selector with no matching entities
+/// emitted the rule's own informational note — it never judged a
+/// crowd, so no held entry may claim a census workload. The note
+/// and the empty held trace tell the same honest story.
+#[test]
+fn never_a_crowd_census_gets_no_held_entry() {
+    let _slot = common::run_slot();
+    let mut app = base_app();
+    let report = run_scenario(&mut app, &scenario_with_invariant(CROWD_INV)).unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    assert!(
+        report.violations.iter().any(|v| v.rule == "occupancy_cap"),
+        "the never-a-crowd note fired under the rule's own name"
+    );
+    assert!(
+        !report
+            .held_invariants
+            .iter()
+            .any(|h| h.name == "no_more_than_three_in_a_room"),
+        "a census that never had a crowd must not claim held evidence"
+    );
+}
