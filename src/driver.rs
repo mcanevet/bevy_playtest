@@ -1652,6 +1652,8 @@ fn frozen_world_oracle_system(
                         consistency_episode: None,
                         forbidden_episode: None,
                         stagnation_episode: None,
+                        occupancy_episode: None,
+                        unpromoted_rule: None,
                     });
                 }
             }
@@ -2173,6 +2175,18 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         // and the run-end drain + selector-vacuity audit read it.
         app.init_resource::<crate::invariant_eval::StagnationBookkeeping>();
     }
+    if scenario
+        .invariants
+        .iter()
+        .any(|i| i.rule == crate::enums::InvariantRule::OccupancyCap)
+    {
+        // Episode-fold bookkeeping for occupancy_cap: the
+        // every-frame density recorder folds into this, and the
+        // run-end drain + never-a-crowd audit read it. The rule
+        // is WARN-ONLY (Rule::is_informational), so nothing the
+        // recorder emits can gate status.
+        app.init_resource::<crate::invariant_eval::OccupancyBookkeeping>();
+    }
     if scenario.verify_replay {
         app.insert_resource(crate::replay::ReplaySeries::default());
     }
@@ -2535,6 +2549,12 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
             // `with_step` folder whose stride generalizes
             // consecutiveness.
             crate::invariant_eval::record_entity_stagnation(app.world_mut(), i, tps);
+            // occupancy_cap: same driver-loop recorder doctrine —
+            // post-update observation of the settled frame;
+            // entity-witnessed density counting folds crowd
+            // frames into union-timeline episodes judged against
+            // the window_s soak. WARN-ONLY: findings never gate.
+            crate::invariant_eval::record_occupancy_cap(app.world_mut(), i, tps);
             // Progress-surface sampling: same driver-loop recorder
             // doctrine as the digest above.
             crate::progress::record_progress_sample(app.world_mut(), i);
@@ -2612,6 +2632,9 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     // (despawn-acquittal doctrine: turnover never refunds the
     // span, so the drain must judge before the bookkeeping dies).
     crate::invariant_eval::close_stagnation_episodes(app.world_mut());
+    // Same drain for the occupancy recorder (the family doctrine:
+    // an open episode is a complete stretch on its own span).
+    crate::invariant_eval::close_occupancy_episodes(app.world_mut());
     let violations = app
         .world_mut()
         .remove_resource::<RunViolations>()
@@ -2869,6 +2892,30 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     for entry in crate::invariant_eval::audit_entity_stagnation(
         &scenario.invariants,
         &stagnation_book,
+        state.frame,
+    ) {
+        // Same dedupe doctrine as the audits above.
+        if !snap
+            .iter()
+            .any(|v| v.rule == entry.rule && v.target == entry.target)
+        {
+            snap.push(entry);
+        }
+    }
+    // occupancy_cap never-a-crowd audit: a selector that never
+    // had a checkable entity never had a crowd to bound. The
+    // note emits under the rule's OWN (informational) name —
+    // NEVER vacuous_invariant, which gates and would smuggle
+    // fail-power through the audit path. Being informational,
+    // occupancy findings cannot flip run status at either audit
+    // site above either.
+    let occupancy_book = app
+        .world_mut()
+        .remove_resource::<crate::invariant_eval::OccupancyBookkeeping>()
+        .unwrap_or_default();
+    for entry in crate::invariant_eval::audit_occupancy_cap(
+        &scenario.invariants,
+        &occupancy_book,
         state.frame,
     ) {
         // Same dedupe doctrine as the audits above.

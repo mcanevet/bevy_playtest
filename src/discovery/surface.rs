@@ -322,8 +322,28 @@ pub struct ViolationMeta {
     /// `roster_truncated`). Roster entries carry BOTH the entity
     /// index and its GENERATION (slot recycling must never weld
     /// a successor to its predecessor's stint).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stagnation_episode: Option<StagnationEpisodeMeta>,
+    /// `occupancy_cap` only: the crowd episode's evidence — the
+    /// distinct WITNESSING entities (those whose self-inclusive
+    /// neighborhood count exceeded cap; first/worst frames and a
+    /// frame count per entity, index + generation, capped,
+    /// truncation disclosed via `roster_truncated`), plus the
+    /// episode's radius and cap echoed for self-describing
+    /// evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occupancy_episode: Option<OccupancyEpisodeMeta>,
+    /// Unpromoted-rule posture mark (generic by design — future
+    /// §2 postures reuse it): `Some(true)` marks a finding whose
+    /// rule carries no fail-power claim on record (see the
+    /// proposal §8 acceptance table). `occupancy_cap` sets it on
+    /// every finding; all other rules leave it absent. The mark
+    /// is the honesty device: the finding renders as an ordinary
+    /// `violations[]` entry on a status:"Pass" report, and the
+    /// juxtaposition plus this flag tells the reader the rule is
+    /// warn-only pending promotion evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unpromoted_rule: Option<bool>,
 }
 
 /// The `pairwise_separation` episode evidence block (`_meta`).
@@ -495,6 +515,62 @@ pub struct StagnationRosterEntry {
     pub stuck_frames: u64,
 }
 
+/// The `occupancy_cap` episode evidence block (`_meta`). Roster
+/// entries are the WITNESSING entities only (those whose
+/// self-inclusive neighborhood count exceeded cap), per-entity
+/// with index + generation, ordered worst first (maximum
+/// witnessed count, then earliest frame). `PartialEq` only —
+/// the block carries `f32` radii, which have no total `Eq`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct OccupancyEpisodeMeta {
+    /// How many DISTINCT witnessing entities the episode saw in
+    /// total — `roster.len()` plus the witnesses the cap
+    /// dropped. Disclosed so `_meta` never lies by omission when
+    /// a crowd exceeds the roster cap (`roster_truncated`).
+    pub sampled_entities: u64,
+    /// The crowd radius the episode was judged within (echoed so
+    /// the evidence is self-describing without the scenario at
+    /// hand).
+    pub radius: f32,
+    /// The cap the witnessed counts were compared against
+    /// (self-inclusive counting).
+    pub cap: u32,
+    /// Distinct witnessing entities with first/worst/count
+    /// evidence, worst-first (highest witnessed crowd count).
+    /// Capped at the roster cap; `roster_truncated` discloses
+    /// when the episode had more.
+    pub roster: Vec<OccupancyRosterEntry>,
+    /// True when the episode saw more distinct witnesses than the
+    /// roster cap admits — disclosed truncation, never silent
+    /// subsampling.
+    pub roster_truncated: bool,
+}
+
+/// One roster entry: the evidence for one distinct WITNESSING
+/// entity inside an episode — an entity whose self-inclusive
+/// neighborhood count exceeded cap. Serialized field names are
+/// wire-stable (`entity`, `generation`, `first_frame`,
+/// `worst_frame`, `worst_count`, `violating_frames`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OccupancyRosterEntry {
+    /// The witnessing entity's index.
+    pub entity: u32,
+    /// The entity's generation — slot recycling must never weld
+    /// a successor to its predecessor's stint.
+    pub generation: u32,
+    /// First violating frame this entity witnessed a crowd.
+    pub first_frame: u64,
+    /// The maximum self-inclusive neighborhood count observed
+    /// for this entity within the episode (the worst crowd it
+    /// witnessed; larger is worse).
+    pub worst_count: u32,
+    /// The frame the worst (maximum) count was seen at.
+    pub worst_frame: u64,
+    /// How many frames this entity witnessed an over-cap crowd
+    /// within the episode.
+    pub violating_frames: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -517,6 +593,8 @@ mod tests {
                 consistency_episode: None,
                 forbidden_episode: None,
                 stagnation_episode: None,
+                occupancy_episode: None,
+                unpromoted_rule: None,
             }),
         };
         let json = serde_json::to_string(&entry).unwrap();

@@ -625,6 +625,10 @@ fn lint_probe_wanted(scenario: &crate::scenario::Scenario) -> bool {
             // purpose (a variant typo would otherwise
             // masquerade as "never true" for the entire run).
             InvariantRule::EntityStagnation => true,
+            // occupancy_cap resolves its selector via the same
+            // registry machinery at probe time (radius/cap are
+            // literals — no reflect paths to confirm).
+            InvariantRule::OccupancyCap => true,
         }
     });
     invariant_probe || progress_surface_probe_wanted(scenario)
@@ -727,6 +731,7 @@ fn lint_registry_probe(
                 InvariantRule::ForbiddenRegion => "forbidden region selector probes",
                 InvariantRule::SpawnSafety => "spawn safety selector probes",
                 InvariantRule::EntityStagnation => "entity stagnation selector probes",
+                InvariantRule::OccupancyCap => "occupancy cap selector probes",
             };
             findings.push(ScenarioError::Rejected(format!(
                 "invariant '{}': {}",
@@ -961,6 +966,38 @@ fn lint_registry_probe(
                             inv.driver_path.as_deref().expect("stage-1 guaranteed"),
                             "resource",
                         ) {
+                            findings.push(ScenarioError::Rejected(inv_name(&why)));
+                        }
+                    }
+                }
+            }
+            InvariantRule::OccupancyCap => {
+                // Same probe doctrine as pairwise: the selector
+                // names a component TYPE that must resolve at run
+                // time. radius/cap are literals — no reflect
+                // paths to confirm. A declared driver leaf
+                // (pairwise's grammar) resolves like
+                // pairwise's would; the probe front-loads the
+                // definite resolution error.
+                if let Some(crate::enums::TargetSelector::WithComponent { name }) =
+                    inv.target_selector.as_ref()
+                {
+                    if let Err(why) =
+                        crate::invariant_eval::resolve_registration(&registry, name, "component")
+                    {
+                        findings.push(ScenarioError::Rejected(inv_name(&why)));
+                    }
+                }
+                if let (Some(res_name), Some(path)) =
+                    (inv.driver_resource.as_deref(), inv.driver_path.as_deref())
+                {
+                    let view = crate::invariant_eval::reflect_resource(world, &registry, res_name);
+                    if let Err(why) = &view {
+                        findings.push(ScenarioError::Rejected(inv_name(why)));
+                    } else if let Ok(crate::invariant_eval::ResourceView::Value(value)) = &view {
+                        if let Err(why) =
+                            crate::invariant_eval::reflect_numeric_path(*value, path, "resource")
+                        {
                             findings.push(ScenarioError::Rejected(inv_name(&why)));
                         }
                     }
