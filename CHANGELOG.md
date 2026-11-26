@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.22.0](https://github.com/mcanevet/bevy_playtest/compare/v0.21.0...v0.22.0) - 2026-11-26
+
+### Other
+
+- review follow-ups — two wording nits
+- docs — schema entry, report coverage, proposal AS-BUILT
+- held-trace participation
+- behavioral battery
+- authoring grammar, density recorder, and warn-only wiring
+
 ## [0.21.0](https://github.com/mcanevet/bevy_playtest/compare/v0.20.0...v0.21.0) - 2026-11-26
 
 ### Added
