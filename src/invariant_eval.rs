@@ -2530,6 +2530,8 @@ fn judge_closed_episode(
                 consistency_episode: None,
                 forbidden_episode: None,
                 stagnation_episode: None,
+                occupancy_episode: None,
+                unpromoted_rule: None,
             });
         }
     }
@@ -3062,6 +3064,8 @@ fn judge_fr_episode(
                 consistency_episode: None,
                 forbidden_episode: Some(forbidden_meta_of(ep)),
                 stagnation_episode: None,
+                occupancy_episode: None,
+                unpromoted_rule: None,
             });
         }
     }
@@ -3704,6 +3708,8 @@ fn judge_dtc_episode(
                 consistency_episode: Some(consistency_meta_of(ep)),
                 forbidden_episode: None,
                 stagnation_episode: None,
+                occupancy_episode: None,
+                unpromoted_rule: None,
             });
         }
     }
@@ -4395,6 +4401,8 @@ fn judge_stag_episode(
                 consistency_episode: None,
                 forbidden_episode: None,
                 stagnation_episode: Some(stagnation_meta_of(ep)),
+                occupancy_episode: None,
+                unpromoted_rule: None,
             });
         }
     }
@@ -4984,6 +4992,574 @@ pub fn audit_spawn_safety(
                     inv.name
                 ),
                 meta: None,
+            });
+        }
+    }
+    entries
+}
+
+// ---------------------------------------------------------------------
+// occupancy_cap: the local-density crowd recorder (judgement layer,
+// spatial family, WARN-ONLY).
+//
+// Doctrine: more than `cap` selected entities within `radius` of a
+// SELECTED ENTITY'S POSITION (self-inclusive counting — the entity
+// itself is within its own radius, so the count is always >= 1).
+// The enumeration is ENTITY-WITNESSED by design: the ring of
+// entities spaced just past radius around an empty center is a
+// documented NON-FIRING case (settlement — exact "any point"
+// counting is a float-flake factory and can ship at promotion time
+// if a real litmus shows the ring case matters). Crowd frames fold
+// into a union-timeline episode per invariant keyed by composite
+// (index, generation) — StagKey reused verbatim, no third key type
+// — and only an episode soaking past window_s (driver-leaf units)
+// becomes a finding, roster = WITNESSING entities only.
+//
+// WARN-ONLY BY CONSTRUCTION: Rule::OccupancyCap sits in
+// Rule::is_informational(), so every finding this recorder emits —
+// crowd episodes AND the never-a-crowd vacuity note — renders as an
+// ordinary violations[] entry that STRUCTURALLY CANNOT gate run
+// status (driver.rs filters informational rules out of every
+// status flip; sweep fingerprints skip them). This is the first
+// warn-only INVARIANT rule, so the vacuity audit deliberately does
+// NOT emit `vacuous_invariant` (a gating rule) for a never-populated
+// selector: the no-crowd note emits under occupancy_cap's own name.
+//
+// Enumeration determinism (settlement Q6): entities are collected
+// BY ARCHETYPE ORDER into an index-ordered list, a uniform-grid
+// spatial hash (cell size = radius, so any entity within radius of
+// a point lies in the surrounding 3x3 cell block) answers counts,
+// and observations are emitted by walking the SAME index-ordered
+// list — NEVER by iterating hash buckets (insertion order there is
+// not part of the contract).
+// ---------------------------------------------------------------------
+
+/// Bookkeeping for `occupancy_cap` invariants across frames (the
+/// pairwise bookkeeping doctrine, one shape per rule):
+/// observability for the never-a-crowd audit, once-per-error-class
+/// dedup, the fold engines, and the pass-side held statistics.
+#[derive(Resource, Default)]
+pub struct OccupancyBookkeeping {
+    /// Invariant name → the selector resolved AND at least one
+    /// checkable entity (marker + Transform) existed in some
+    /// observed frame. Otherwise never-a-crowd — an occupancy rule
+    /// with nothing to select proves nothing (reported under the
+    /// rule's own informational name, never vacuous_invariant).
+    pub matched: std::collections::HashSet<String>,
+    /// Invariant name → a resolution/config failure was seen
+    /// during the run (already reported as `oracle_error`); the
+    /// audit suppresses its vacuity entry (N-B/N-C doctrine).
+    pub config_errored: std::collections::HashSet<String>,
+    /// (invariant name, error class) pairs already reported as
+    /// `oracle_error` this run — the once-per-distinct-error dedup.
+    pub oracle_error_seen: std::collections::HashSet<String>,
+    /// Invariant name → the fold engine (composite keys; one
+    /// folder per invariant — folder identity IS invariant
+    /// identity, the forbidden_region doctrine).
+    pub folders:
+        std::collections::HashMap<String, crate::episode::EpisodeFolder<crate::episode::StagKey>>,
+    /// Invariant name → the pass-side held statistics, folding
+    /// alongside the engine so sub-soak episodes survive the soak
+    /// judgment.
+    pub episode_stats: std::collections::HashMap<String, crate::held::EpisodeHeldStats>,
+}
+
+/// One frame's occupancy outcome for one invariant (owned-data
+/// phase-split doctrine: computed under `&World`, applied after
+/// the borrow ends).
+struct OccOutcome {
+    /// The frame's witnessing entities (self-inclusive
+    /// neighborhood count > cap) with their counts. Index-ordered
+    /// (the enumeration order), never bucket-ordered.
+    witnesses: Vec<crate::episode::Observation<crate::episode::StagKey>>,
+    /// The driver-leaf sample in the driver's own unit; `None` on
+    /// a gap (driver resource absent / leaf non-finite).
+    driver: Option<f64>,
+    /// First config error this frame, if any.
+    config_error: Option<String>,
+    /// The selector resolved AND >= 1 checkable entity existed
+    /// this frame.
+    populated: bool,
+    /// How many checkable (marker + Transform) entities the
+    /// enumeration walked this frame — the held-trace workload
+    /// figure.
+    checkable_count: usize,
+}
+
+/// Driver-loop recorder for `occupancy_cap` invariants: the
+/// local-density crowd oracle, WARN-ONLY (see the block comment for
+/// the no-fail-power construction). Every-frame evaluation, the
+/// same post-update observation doctrine as the rest of the family.
+pub fn record_occupancy_cap(world: &mut World, frame: u64, tps: u64) {
+    let invariants: Vec<Invariant> = world
+        .get_resource::<ScenarioInvariants>()
+        .map(|invariants| {
+            invariants
+                .0
+                .iter()
+                .filter(|i| i.rule == InvariantRule::OccupancyCap)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if invariants.is_empty() {
+        return;
+    }
+    let Some(atr) = world.get_resource::<AppTypeRegistry>().cloned() else {
+        world.resource_scope(|world, mut book: Mut<OccupancyBookkeeping>| {
+            let mut violations = world.resource_mut::<RunViolations>();
+            for inv in &invariants {
+                book.config_errored.insert(inv.name.clone());
+                let why = &no_atr_message("occupancy cap checks");
+                report_config_error_once(
+                    &mut violations.0,
+                    &mut book.oracle_error_seen,
+                    &inv.name,
+                    why,
+                    frame,
+                );
+            }
+        });
+        return;
+    };
+    let registry = atr.read();
+
+    // Read phase: every invariant evaluates every frame (no
+    // sampling — density reads are the cost being paid; a
+    // sampled cadence stays TBD by the cost model).
+    let mut outcomes: Vec<(Invariant, OccOutcome)> = Vec::with_capacity(invariants.len());
+    for inv in &invariants {
+        outcomes.push((
+            inv.clone(),
+            eval_occupancy(world, &registry, inv, frame, tps),
+        ));
+    }
+    drop(registry);
+
+    // Write phase: fold, judge soak, report.
+    world.resource_scope(|world, mut book: Mut<OccupancyBookkeeping>| {
+        let mut violations = world.resource_mut::<RunViolations>();
+        for (inv, outcome) in outcomes {
+            apply_occ_outcome(&inv, &outcome, frame, &mut book, &mut violations.0);
+        }
+    });
+}
+
+/// Read phase: one invariant's frame outcome. Determinism
+/// contract: the entity list is collected in archetype iteration
+/// order and observation emission walks that SAME list — the
+/// spatial hash is queried only for counts, never iterated.
+fn eval_occupancy(
+    world: &World,
+    registry: &TypeRegistry,
+    inv: &Invariant,
+    frame: u64,
+    tps: u64,
+) -> OccOutcome {
+    let err = |why: String| OccOutcome {
+        witnesses: vec![],
+        driver: None,
+        config_error: Some(why),
+        populated: false,
+        checkable_count: 0,
+    };
+    // Validation guarantees these; the Options are defensive only.
+    let Some(crate::enums::TargetSelector::WithComponent { name }) = inv.target_selector.as_ref()
+    else {
+        return err("occupancy_cap requires a with_component selector (validated)".into());
+    };
+    let Some(radius) = inv.radius else {
+        return err("occupancy_cap requires 'radius' (validated)".into());
+    };
+    let Some(cap) = inv.cap else {
+        return err("occupancy_cap requires 'cap' (validated)".into());
+    };
+    let type_reg = match resolve_registration(registry, name, "component") {
+        Ok(t) => t,
+        Err(why) => return err(why),
+    };
+    // Marker membership is decided by archetype (the component_id
+    // contains-check below); the ReflectComponent data check is
+    // defensive-only (same shape as the family).
+    if type_reg
+        .data::<bevy_ecs::reflect::ReflectComponent>()
+        .is_none()
+    {
+        return err(not_a_reflected_component_message(name));
+    }
+    // Collect (key, position) for every marker+Transform entity,
+    // archetype order — the family's enumeration doctrine
+    // ("carries the marker but no Transform: not checkable").
+    let mut nodes: Vec<(crate::episode::StagKey, [f32; 3])> = Vec::new();
+    if let Some(component_id) = world.components().get_valid_id(type_reg.type_id()) {
+        for archetype in world.archetypes().iter() {
+            if !archetype.components().contains(&component_id) {
+                continue;
+            }
+            for entry in archetype.entities() {
+                let Ok(entity_ref) = world.get_entity(entry.id()) else {
+                    continue;
+                };
+                let Some(transform) = entity_ref.get::<Transform>() else {
+                    continue;
+                };
+                let t = transform.translation;
+                // NaN translations are never witnesses (NaN
+                // comparisons are false) — finite_transforms owns
+                // NaN findings, this recorder must not fold a NaN
+                // observation into an episode.
+                if !t.x.is_finite() || !t.y.is_finite() || !t.z.is_finite() {
+                    continue;
+                }
+                nodes.push((
+                    crate::episode::StagKey::new(
+                        entity_ref.id().index().index(),
+                        entity_ref.id().generation().to_bits(),
+                    ),
+                    [t.x, t.y, t.z],
+                ));
+            }
+        }
+    }
+    let checkable_count = nodes.len();
+    if nodes.is_empty() {
+        // Registered but never instantiated: no crowd to judge —
+        // the never-a-crowd audit's call, frames are clean.
+        return OccOutcome {
+            witnesses: vec![],
+            driver: frame_clock(frame, tps),
+            config_error: None,
+            populated: false,
+            checkable_count: 0,
+        };
+    }
+    // Spatial hash: cell size = radius guarantees any entity
+    // within radius of a point lies in the 3x3 block around the
+    // point's cell. Counts only — never iterated for emission.
+    let cell = radius;
+    let floor_cell = |v: f32| (v / cell).floor() as i64;
+    let mut hash: std::collections::HashMap<(i64, i64, i64), Vec<usize>> =
+        std::collections::HashMap::with_capacity(nodes.len());
+    for (i, (_, pos)) in nodes.iter().enumerate() {
+        hash.entry((floor_cell(pos[0]), floor_cell(pos[1]), floor_cell(pos[2])))
+            .or_default()
+            .push(i);
+    }
+    // Witness emission: walk the index-ordered node list (the
+    // deterministic stream), count neighbors in the 3x3 block
+    // within radius (INCLUSIVE `<=` boundary — pinned by the
+    // battery), self-inclusive (distance 0 <= radius always).
+    let radius_sq = radius * radius;
+    let mut witnesses: Vec<crate::episode::Observation<crate::episode::StagKey>> = Vec::new();
+    for (key, pos) in nodes.iter() {
+        let mut count: u32 = 0;
+        let (cx, cy, cz) = (floor_cell(pos[0]), floor_cell(pos[1]), floor_cell(pos[2]));
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    let Some(bucket) = hash.get(&(cx + dx, cy + dy, cz + dz)) else {
+                        continue;
+                    };
+                    for &j in bucket {
+                        let (opos, _) = (nodes[j].1, nodes[j].0);
+                        let ddx = pos[0] - opos[0];
+                        let ddy = pos[1] - opos[1];
+                        let ddz = pos[2] - opos[2];
+                        // Squared-distance compare: within radius
+                        // iff d2 <= radius_sq. f32 squaring is
+                        // monotonic for non-negative magnitudes,
+                        // so the INCLUSIVE boundary pin (distance
+                        // exactly radius counts as within) holds
+                        // without a sqrt.
+                        if ddx * ddx + ddy * ddy + ddz * ddz <= radius_sq {
+                            count += 1;
+                        }
+                    }
+                }
+            }
+        }
+        if count > cap {
+            witnesses.push(crate::episode::Observation {
+                key: *key,
+                value: count as f32,
+            });
+        }
+    }
+    // Driver sample: declared leaf, or the frame clock (seconds) —
+    // pairwise's grammar (both halves or neither).
+    let driver = match (inv.driver_resource.as_deref(), inv.driver_path.as_deref()) {
+        (Some(res_name), Some(path)) => {
+            match sample_declared_driver(world, registry, res_name, path) {
+                Ok(Some(v)) => Some(v),
+                // Absent resource: a gap, not an error.
+                Ok(None) => None,
+                Err(why) => return err(why),
+            }
+        }
+        (None, None) => frame_clock(frame, tps),
+        // Lint guarantees both halves or neither; defensive only.
+        _ => return err("occupancy_cap's driver needs both halves (validated)".into()),
+    };
+    OccOutcome {
+        witnesses,
+        driver,
+        config_error: None,
+        populated: true,
+        checkable_count,
+    }
+}
+
+/// Write-phase fold of one frame's occupancy outcome: feed the
+/// engine, judge any closed episode against the soak, report ONE
+/// WARN-ONLY finding with the episode's evidence.
+fn apply_occ_outcome(
+    inv: &Invariant,
+    outcome: &OccOutcome,
+    frame: u64,
+    book: &mut OccupancyBookkeeping,
+    violations: &mut crate::state::Violations,
+) {
+    if let Some(why) = &outcome.config_error {
+        book.config_errored.insert(inv.name.clone());
+        report_config_error_once(
+            violations,
+            &mut book.oracle_error_seen,
+            &inv.name,
+            &format!("invariant '{}': {why}", inv.name),
+            frame,
+        );
+        return;
+    }
+    if outcome.populated {
+        book.matched.insert(inv.name.clone());
+    }
+    // Held-trace workload fold: judged frames and entity-judgments
+    // (the entity_count slot — a density rule judges entities, not
+    // pairs; NEVER pair_judgments).
+    if outcome.populated {
+        book.episode_stats
+            .entry(inv.name.clone())
+            .or_default()
+            .observe_frame(None, Some(outcome.checkable_count as u64));
+    }
+    let folder = book.folders.entry(inv.name.clone()).or_insert_with(|| {
+        // Composite keys, LargerIsWorse (a bigger witnessed
+        // crowd is worse), every-frame cadence (step 1) — the
+        // family default.
+        crate::episode::EpisodeFolder::new(
+            crate::episode::DEFAULT_ROSTER_CAP,
+            crate::episode::WorstDirection::LargerIsWorse,
+        )
+    });
+    let closed = folder.push(frame, outcome.driver, &outcome.witnesses);
+    if let Some(closed) = closed {
+        book.episode_stats
+            .entry(inv.name.clone())
+            .or_default()
+            .observe_episode_span(closed.driver_span, closed.start_frame);
+        judge_occ_episode(inv, &closed, violations);
+    }
+}
+
+/// Soak judgment and finding emission for one closed crowd
+/// episode: sub-soak gatherings are transient, discarded; a
+/// soaked episode is ONE WARN-ONLY finding naming the worst
+/// witness, with the roster carrying every witness and the
+/// `unpromoted_rule` mark set — the finding says "this fired, but
+/// the rule carries no fail-power claim" (proposal §8).
+fn judge_occ_episode(
+    inv: &Invariant,
+    ep: &crate::episode::ClosedEpisode<crate::episode::StagKey>,
+    violations: &mut crate::state::Violations,
+) {
+    let Some(window_s) = inv.window_s else {
+        return; // Validated required; defensive only.
+    };
+    if ep.driver_span < window_s as f64 {
+        // Sub-soak: a transient gathering the window doctrine
+        // discards.
+        return;
+    }
+    let worst = &ep.worst;
+    let cap = inv.cap.unwrap_or(0);
+    let radius = inv.radius.unwrap_or(0.0);
+    // The soak span is in the DRIVER LEAF'S OWN UNIT — seconds
+    // only for the frame-clock default (pairwise's suffix
+    // doctrine).
+    let (span, span_unit) = match inv.driver_path.as_deref() {
+        Some(_) => (ep.driver_span, " driver units"),
+        None => (ep.driver_span, "s of frame clock"),
+    };
+    violations.report(
+        crate::rules::Rule::OccupancyCap.name(),
+        &inv.name,
+        format!(
+            "entity #{} (gen {}) saw {} entities (including itself) within \
+             radius {:.3} (cap {}), sustained for {:.3}{} across frames {}–{} \
+             ({} witnessing entit{}, worst count {}); a crowd this dense this \
+             long is congestion, not a gathering — \
+             UNPROMOTED RULE: occupancy_cap is warn-only, this finding carries \
+             no fail-power claim and does not affect run status (see the \
+             acceptance table)",
+            worst.key.index,
+            worst.key.generation,
+            worst.value,
+            radius,
+            cap,
+            span,
+            span_unit,
+            ep.start_frame,
+            ep.end_frame,
+            ep.distinct_keys,
+            if ep.distinct_keys == 1 { "y" } else { "ies" },
+            worst.value,
+        ),
+        ep.start_frame,
+    );
+    // Attach the roster evidence (`_meta`) to the just-reported
+    // entry — one finding, full story; first-write-wins (the
+    // pairwise doctrine: a second soaked episode extends
+    // last_frame but never swaps the evidence).
+    if let Some(entry) = violations.entries.get_mut(&(
+        crate::rules::Rule::OccupancyCap.name().to_string(),
+        inv.name.clone(),
+    )) {
+        entry.last_frame = entry.last_frame.max(ep.end_frame);
+        if entry.meta.is_none() {
+            entry.meta = Some(crate::discovery::surface::ViolationMeta {
+                stepping: None,
+                pairwise_episode: None,
+                consistency_episode: None,
+                forbidden_episode: None,
+                stagnation_episode: None,
+                occupancy_episode: Some(occupancy_meta_of(inv, ep)),
+                unpromoted_rule: Some(true),
+            });
+        }
+    }
+}
+
+/// Convert a closed crowd episode into its `_meta` evidence block:
+/// witnessing entities only (never synthesized participants), with
+/// the episode's radius and cap echoed so the evidence reads
+/// standalone.
+fn occupancy_meta_of(
+    inv: &Invariant,
+    ep: &crate::episode::ClosedEpisode<crate::episode::StagKey>,
+) -> crate::discovery::surface::OccupancyEpisodeMeta {
+    crate::discovery::surface::OccupancyEpisodeMeta {
+        sampled_entities: ep.distinct_keys,
+        radius: inv.radius.unwrap_or(0.0),
+        cap: inv.cap.unwrap_or(0),
+        roster: ep
+            .roster
+            .iter()
+            .map(|r| crate::discovery::surface::OccupancyRosterEntry {
+                entity: r.key.index,
+                generation: r.key.generation,
+                first_frame: r.first_frame,
+                worst_count: r.worst_value as u32,
+                worst_frame: r.worst_frame,
+                violating_frames: r.violating_frames,
+            })
+            .collect(),
+        roster_truncated: ep.roster_truncated,
+    }
+}
+
+/// Run-end drain: an episode still open at the last frame is a
+/// complete stretch on its own — fold it out and judge it (the
+/// family doctrine verbatim).
+pub fn close_occupancy_episodes(world: &mut World) {
+    let invariants: Vec<Invariant> = world
+        .get_resource::<ScenarioInvariants>()
+        .map(|invariants| {
+            invariants
+                .0
+                .iter()
+                .filter(|i| i.rule == InvariantRule::OccupancyCap)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if invariants.is_empty() {
+        return;
+    }
+    world.resource_scope(|world, mut book: Mut<OccupancyBookkeeping>| {
+        let mut violations = world.resource_mut::<RunViolations>();
+        for inv in &invariants {
+            let closed = book
+                .folders
+                .get_mut(&inv.name)
+                .and_then(|folder| folder.close_run());
+            if let Some(closed) = closed {
+                book.episode_stats
+                    .entry(inv.name.clone())
+                    .or_default()
+                    .observe_episode_span(closed.driver_span, closed.start_frame);
+                judge_occ_episode(inv, &closed, &mut violations.0);
+            }
+        }
+    });
+}
+
+/// Post-run audit for `occupancy_cap` invariants: a selector that
+/// never had a checkable entity over the whole run never had a
+/// crowd to bound — the note emits under the rule's OWN name (an
+/// informational rule), never `vacuous_invariant` (a GATING rule:
+/// emitting it would smuggle fail-power through the audit path —
+/// the sole reason occupancy is the first warn-only invariant and
+/// this audit departs from pairwise's shape). A population always
+/// within cap is the healthy case; the note is an honesty device,
+/// not a blame.
+pub fn audit_occupancy_cap(
+    invariants: &[Invariant],
+    book: &OccupancyBookkeeping,
+    last_frame: u64,
+) -> Vec<crate::state::ViolationEntry> {
+    let mut entries = Vec::new();
+    for inv in invariants
+        .iter()
+        .filter(|i| i.rule == InvariantRule::OccupancyCap)
+    {
+        if book.config_errored.contains(&inv.name) {
+            continue;
+        }
+        if !book.matched.contains(&inv.name) {
+            let component = match inv.target_selector.as_ref() {
+                Some(crate::enums::TargetSelector::WithComponent { name }) => name.clone(),
+                _ => "component".to_string(),
+            };
+            let cap = inv.cap.unwrap_or(0);
+            entries.push(crate::state::ViolationEntry {
+                rule: crate::rules::Rule::OccupancyCap.name().to_string(),
+                target: inv.name.clone(),
+                first_frame: 0,
+                last_frame,
+                count: 1,
+                detail: format!(
+                    "invariant '{}' never had a crowd to judge over the whole run \
+                     (no frame offered cap+1 coexisting '{}' entities); a population \
+                     always within cap ({cap}, self-inclusive) is the healthy case — \
+                     the census simply never had a bigger crowd to bound. \
+                     UNPROMOTED RULE: occupancy_cap is warn-only and this note does \
+                     not affect run status (see the acceptance table)",
+                    inv.name, component
+                ),
+                last_detail: format!(
+                    "invariant '{}' never had a crowd to judge (population always \
+                     within cap {cap})",
+                    inv.name
+                ),
+                meta: Some(crate::discovery::surface::ViolationMeta {
+                    stepping: None,
+                    pairwise_episode: None,
+                    consistency_episode: None,
+                    forbidden_episode: None,
+                    stagnation_episode: None,
+                    occupancy_episode: None,
+                    unpromoted_rule: Some(true),
+                }),
             });
         }
     }

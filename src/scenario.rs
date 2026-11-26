@@ -618,6 +618,27 @@ pub struct Invariant {
     /// samples and is never stuck at all).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sampling_s: Option<f32>,
+    /// Crowd radius (`occupancy_cap` only): the neighborhood
+    /// size a crowd judgment counts within. Counting is
+    /// entity-witnessed (settlement §1): more than `cap`
+    /// selected entities within `radius` of a SELECTED ENTITY'S
+    /// POSITION (the entity itself included — the count is
+    /// self-inclusive, so it is always ≥ 1) sustains a violation;
+    /// this is a deliberate approximation of the spec's exact
+    /// "any point" — near-collinear circumcenters make exact
+    /// counting a float-flake factory, so the ring of entities
+    /// spaced just past radius around an empty center is a
+    /// documented NON-FIRING case. Must be finite and > 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radius: Option<f32>,
+    /// Crowd cap (`occupancy_cap` only): the maximum number of
+    /// selected entities allowed within `radius` of a selected
+    /// entity's position (self-inclusive). An INTEGER ≥ 1 —
+    /// `cap: 0` is rejected (self-inclusive counting means the
+    /// count is always ≥ 1, so a zero cap degenerates to "fire
+    /// whenever any entity is selected", a nonsense oracle).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cap: Option<u32>,
 }
 
 /// An author-declared axis-aligned box region
@@ -1413,6 +1434,35 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                 errors.push(ScenarioError::Rejected(format!(
                     "invariant '{}': {} {} not supported by {} — {} \
                      entity_stagnation only",
+                    rule.name,
+                    foreign.join(", "),
+                    if foreign.len() == 1 { "is" } else { "are" },
+                    rule.rule,
+                    if foreign.len() == 1 {
+                        "this field is"
+                    } else {
+                        "these fields are"
+                    }
+                )));
+            }
+        }
+    }
+    for rule in &scenario.invariants {
+        // Single-owner optional fields (occupancy_cap only):
+        // same reserved-field doctrine — the author writes a
+        // knob, the harness parses it, no rule ever reads it.
+        if rule.rule != InvariantRule::OccupancyCap {
+            let mut foreign: Vec<&str> = Vec::new();
+            if rule.radius.is_some() {
+                foreign.push("'radius'");
+            }
+            if rule.cap.is_some() {
+                foreign.push("'cap'");
+            }
+            if !foreign.is_empty() {
+                errors.push(ScenarioError::Rejected(format!(
+                    "invariant '{}': {} {} not supported by {} — {} \
+                     occupancy_cap only",
                     rule.name,
                     foreign.join(", "),
                     if foreign.len() == 1 { "is" } else { "are" },
@@ -2968,6 +3018,225 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                          digest-compares the leaf at watch_path across \
                          samples and folds the still-stuck set into \
                          episodes within window_s",
+                        rule.name
+                    )));
+                }
+            }
+            InvariantRule::OccupancyCap => {
+                // Local-density rule (judgement layer, spatial
+                // family): more than `cap` selected entities
+                // within `radius` of a selected entity's
+                // position, folded into a union-timeline episode
+                // and judged against the window_s soak. The
+                // enumeration is ENTITY-WITNESSED (settlement):
+                // the ring of entities spaced just past radius
+                // around an empty center is a documented
+                // NON-FIRING case — approximate counting is the
+                // warn-phase doctrine, revisitable at promotion.
+                //
+                // WARN-ONLY by construction: the rule sits in
+                // Rule::is_informational(), so its findings
+                // (including this arm's recorder output) never
+                // gate run status.
+                //
+                // Selector: required with_component, `all`
+                // rejected (the same argument as pairwise — an
+                // unbounded entity set makes a density claim
+                // meaningless).
+                let Some(crate::enums::TargetSelector::WithComponent { name }) =
+                    rule.target_selector.as_ref()
+                else {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': occupancy_cap requires \
+                         'target_selector: {{\"with_component\": {{\"name\": ...}}}}' \
+                         — the rule counts a named component's entities; 'all' \
+                         would density-judge every Transform in the world \
+                         (walls, cameras) that legitimately cluster",
+                        rule.name
+                    )));
+                    continue;
+                };
+                if name.trim().is_empty() {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': with_component name must be non-empty",
+                        rule.name
+                    )));
+                }
+                // radius: required, finite > 0 (min_distance's
+                // arithmetic and phrasing — the neighborhood size
+                // below which crowd counting degenerates).
+                match rule.radius {
+                    Some(r) if !r.is_finite() || r <= 0.0 => {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': radius must be a finite \
+                             number > 0 (got {r}) — the neighborhood size \
+                             a crowd judgment counts within",
+                            rule.name
+                        )));
+                    }
+                    None => {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': occupancy_cap requires 'radius' \
+                             — the neighborhood size within which the \
+                             selected entities are counted against cap",
+                            rule.name
+                        )));
+                    }
+                    _ => {}
+                }
+                // cap: required integer >= 1. The parse-time
+                // INTEGER is the point (serde rejects 3.5/3.0
+                // for Option<u32> free — never a float floor);
+                // a zero cap is nonsense under self-inclusive
+                // counting (the count is always >= 1, so cap 0
+                // fires whenever any entity is selected).
+                match rule.cap {
+                    Some(0) => {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': cap must be >= 1 (got 0) — \
+                             the count is self-inclusive (a selected entity \
+                             is within its own radius), so a zero cap fires \
+                             on every populated frame; if the intent is \
+                             \"no entities at all\", that is a different rule",
+                            rule.name
+                        )));
+                    }
+                    None => {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': occupancy_cap requires 'cap' \
+                             — the maximum number of selected entities \
+                             allowed within radius (self-inclusive) before \
+                             the crowd becomes a finding",
+                            rule.name
+                        )));
+                    }
+                    _ => {}
+                }
+                // window_s: REQUIRED (the soak), finite > 0,
+                // with the pairwise fit check verbatim — the
+                // window is consumed in driver units (default:
+                // frame-clock seconds), so an unelidable soak is
+                // rejected at load rather than silently proving
+                // nothing.
+                let Some(window_s) = rule.window_s else {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': occupancy_cap requires 'window_s' \
+                         — the soak in driver-leaf units (default driver: \
+                         the frame clock, so seconds); crowd episodes shorter \
+                         than the soak are discarded as transient gatherings",
+                        rule.name
+                    )));
+                    continue;
+                };
+                if !window_s.is_finite() || window_s <= 0.0 {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': window_s must be a finite number > 0 \
+                         (got {window_s})",
+                        rule.name
+                    )));
+                    continue;
+                }
+                {
+                    let effective_wall_s = match rule.driver_units_per_second {
+                        Some(rate) => {
+                            if !rate.is_finite() || rate <= 0.0 {
+                                errors.push(ScenarioError::Rejected(format!(
+                                    "invariant '{}': driver_units_per_second must be a \
+                                     finite number > 0 (got {rate})",
+                                    rule.name
+                                )));
+                                None
+                            } else {
+                                Some((window_s / rate) as f64)
+                            }
+                        }
+                        None => Some(window_s as f64),
+                    };
+                    if let Some(effective_wall_s) = effective_wall_s {
+                        if effective_wall_s > scenario.duration_s as f64 {
+                            errors.push(ScenarioError::Rejected(format!(
+                                "invariant '{}': soak window ({window_s} driver units, \
+                                 {effective_wall_s:.1}s effective) exceeds the run \
+                                 duration ({duration}s) — a soak the run can never \
+                                 elapse is unjudgeable; shorten window_s, or adjust \
+                                 driver_units_per_second",
+                                rule.name,
+                                duration = scenario.duration_s
+                            )));
+                        }
+                    }
+                }
+                // Driver fields: pairwise's grammar exactly —
+                // both halves or neither (occupancy has no
+                // `resource` to default the host to), and a
+                // declared rate without a declared driver is a
+                // contradiction (the implicit driver is the frame
+                // clock at 1 unit/s by definition).
+                let has_dr = rule.driver_resource.is_some();
+                let has_dp = rule.driver_path.is_some();
+                if has_dr != has_dp {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': occupancy_cap's driver needs \
+                         both 'driver_resource' and 'driver_path' — like \
+                         pairwise_separation there is no 'resource' to \
+                         default the host to; omit both to soak against the \
+                         frame clock in seconds",
+                        rule.name
+                    )));
+                }
+                if rule.driver_units_per_second.is_some() && !(has_dr && has_dp) {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': driver_units_per_second needs the \
+                         driver declared ('driver_resource' + 'driver_path') — \
+                         the default frame-clock driver is seconds by \
+                         definition and has no declarable rate",
+                        rule.name
+                    )));
+                }
+                if let Some(dp) = rule.driver_path.as_deref() {
+                    if dp.trim().is_empty() {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': 'driver_path' must be non-empty — \
+                             a blank reflect path resolves the resource root, \
+                             never a numeric leaf",
+                            rule.name
+                        )));
+                    }
+                }
+                if let Some(dr) = rule.driver_resource.as_deref() {
+                    if dr.trim().is_empty() {
+                        errors.push(ScenarioError::Rejected(format!(
+                            "invariant '{}': 'driver_resource' must be non-empty",
+                            rule.name
+                        )));
+                    }
+                }
+                // Foreign fields: the reserved-field doctrine.
+                // eventually_s is left to the generic check so
+                // one defect yields one error; tolerance/
+                // grace_frames/exclude_components belong to the
+                // DTC-only block; watch_path/leaf_where/driver/
+                // sampling_s to the stagnation-only block;
+                // region/allow_if to the forbidden-only check;
+                // min_distance_from/spawn_only to the
+                // spawn-safety-only loop.
+                if rule.check.is_some()
+                    || rule.value.is_some()
+                    || rule.path.is_some()
+                    || rule.resource.is_some()
+                    || rule.min_distance.is_some()
+                    || rule.min_x.is_some()
+                    || rule.max_x.is_some()
+                    || rule.min_y.is_some()
+                    || rule.max_y.is_some()
+                    || rule.min_z.is_some()
+                    || rule.max_z.is_some()
+                {
+                    errors.push(ScenarioError::Rejected(format!(
+                        "invariant '{}': occupancy_cap does not use \
+                         check/value/path/resource/min_distance/bounds — it \
+                         counts selected entities within radius against cap \
+                         and folds crowd frames into episodes within window_s",
                         rule.name
                     )));
                 }

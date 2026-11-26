@@ -62,6 +62,7 @@ impl Rule {
             Self::DerivedTransformConsistency => "Compositional identity over Bevy's derived Transform relationship: every parented entity's GlobalTransform must equal the parent's GlobalTransform composed with its own Transform, both read at the same settled frame — stale or foreign-written globals (sprites frozen at identity under a moving parent) are state bugs, folded into episodes that must persist past a window_s soak. Promoted to gating (fail-power) on flip-test evidence: the multi-child pile-up fixture comes out RED with the defect present and GREEN with it absent, and the rotating/scaling hierarchy stays coherent — the rule earned trust by demonstrating the discrimination, not by optimism (proposal §2).",
             Self::EntityStagnation => "Per-entity rate-form liveness (judgement layer, second vocabulary): each selected entity's watched reflect path must not stay digest-constant while the driver leaf advances — entity-scoped livelocks (a guest queued forever at a demolished ride, `waited` frozen while the park clock runs) are invisible to every flat oracle. Entities leave the stuck set on any scoped change or on despawn (turnover is acquittal, never a refund); the still-stuck set is sampled every sampling_s of driver advance, folded into a shared-timeline episode per invariant, and only an episode soaking past window_s (driver-leaf units) becomes a finding with a capped per-guest _meta roster.",
             Self::HierarchyAbsent => "A derived_transform_consistency rule found no parented entities over the whole run: no hierarchy, no identity to check. Informational, not vacuous — a flat world is a coherent scene the rule simply cannot judge.",
+            Self::OccupancyCap => "Local-density spatial oracle (unpromoted, warn-only): more than `cap` selected entities within `radius` of a selected entity's position (count self-inclusive), sustained past a window_s soak — crowds are evidence, never yet a verdict. Findings carry the `unpromoted_rule` mark: the rule has no fail-power claim on record (proposal §8 acceptance table); promotion is a future evidence-gated harness event.",
             Self::SpawnSafety => "Archetype-entry spatial oracle: every entity entering the selected archetype — a newborn or a pre-existing entity first acquiring the target component — must be at least min_distance from every anchor selected by min_distance_from, judged once at the entry frame against same-frame anchors (snapshotted post-update); the respawn-ring shape — bodies appearing inside the danger zone — is a state bug at the transition frame, not a transient.",
             Self::FiniteTransforms => "Every entity's Transform holds finite values (no NaN/inf).",
             #[cfg(feature = "render-liveness")]
@@ -92,6 +93,7 @@ impl Rule {
             | Self::ProgressSurfaceEmpty
             | Self::WindowUnelapsed
             | Self::HierarchyAbsent => true,
+            Self::OccupancyCap => true,
             #[cfg(feature = "render-liveness")]
             Self::RenderLiveness => true,
             #[cfg(feature = "screen-liveness")]
@@ -137,6 +139,16 @@ declare_rules! {
     // driver advance; scoped digests, leaf_where
     // preconditioning, sampled cadence, despawn = acquittal.
     EntityStagnation => "entity_stagnation",
+
+    // Local-density spatial oracle (judgement layer, spatial
+    // family): more than `cap` selected entities within `radius`
+    // of a SELECTED ENTITY'S position, folded into a union-timeline
+    // episode that must soak past window_s. WARN-ONLY by
+    // construction — occupancy_cap is the first informational
+    // INVARIANT rule: its findings carry the `unpromoted_rule`
+    // mark in `_meta` and never flip run status (promotion is a
+    // future §2 evidence-gated event, see the acceptance table).
+    OccupancyCap => "occupancy_cap",
 
     // A derived_transform_consistency rule with zero parented
     // entities over the whole run (judgement layer, slice 2).

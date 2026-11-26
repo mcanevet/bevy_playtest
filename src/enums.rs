@@ -36,6 +36,7 @@ pub enum InvariantRule {
     ForbiddenRegion,
     SpawnSafety,
     EntityStagnation,
+    OccupancyCap,
 }
 
 impl std::fmt::Display for InvariantRule {
@@ -50,6 +51,7 @@ impl std::fmt::Display for InvariantRule {
             Self::ForbiddenRegion => f.write_str("forbidden_region"),
             Self::SpawnSafety => f.write_str("spawn_safety"),
             Self::EntityStagnation => f.write_str("entity_stagnation"),
+            Self::OccupancyCap => f.write_str("occupancy_cap"),
         }
     }
 }
