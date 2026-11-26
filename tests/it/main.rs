@@ -40,6 +40,7 @@ mod input_delivery;
 mod isolation;
 mod lint;
 mod negative_validation;
+mod occupancy_cap;
 mod pairwise_separation;
 mod probe_pool;
 mod progress_liveness;
