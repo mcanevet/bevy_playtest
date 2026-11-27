@@ -3035,28 +3035,47 @@ fn apply_fr_outcome(
     }
 }
 
-/// Soak judgment and finding emission for one closed incursion
-/// episode: discard sub-soak episodes as transient fly-bys; report
-/// one finding with the worst observation and the roster
-/// evidence.
+/// Judgment and finding emission for one closed incursion
+/// episode: with `window_s` declared, discard sub-soak episodes
+/// as transient fly-bys; with it omitted (the instant-fire
+/// form), every closed episode is a finding — no minimum dwell.
+/// Either way, report one finding with the worst observation and
+/// the roster evidence.
 fn judge_fr_episode(
     inv: &Invariant,
     ep: &crate::episode::ClosedEpisode<u32>,
     violations: &mut crate::state::Violations,
 ) {
-    let Some(window_s) = inv.window_s else {
-        return; // Validated required; defensive only.
-    };
-    if ep.driver_span < window_s as f64 {
-        // Sub-soak: a transient brush the ε doctrine discards.
-        return;
-    }
     let Some(region) = inv.region else {
         return; // Validated required; defensive only.
     };
-    let (span, span_unit) = match inv.driver_path.as_deref() {
-        Some(_) => (ep.driver_span, " driver units"),
-        None => (ep.driver_span, "s of frame clock"),
+    let (sustain, tail) = match inv.window_s {
+        // The fly-by soak: episodes shorter than the declared
+        // window are transient brushes the ε doctrine discards.
+        Some(window_s) => {
+            if ep.driver_span < window_s as f64 {
+                return;
+            }
+            let (span, span_unit) = match inv.driver_path.as_deref() {
+                Some(_) => (ep.driver_span, " driver units"),
+                None => (ep.driver_span, "s of frame clock"),
+            };
+            (
+                format!("sustained for {span:.3}{span_unit} "),
+                "lingering inside a no-go zone is a state bug, not a fly-by",
+            )
+        }
+        // The instant-fire form (window_s omitted): every closed
+        // incursion episode is a finding — the one-frame clip
+        // counts exactly as much as a full dwell. No soak, no
+        // discard, no sustain clause and no driver-unit dressing
+        // (driver fields require window_s at validation;
+        // defensively absent here).
+        None => (
+            String::new(),
+            "entering a no-go zone at all is a state bug — \
+             the instant form has no minimum dwell",
+        ),
     };
     let worst_depth_frame = ep.worst.frame;
     violations.report(
@@ -3065,20 +3084,19 @@ fn judge_fr_episode(
         format!(
             "entity #{} entered the forbidden region (center {:?}, \
              half_extents {:?}), reaching a penetration depth of {:.3} \
-             (worst at frame {}), sustained for {:.3}{} across frames \
-             {}–{} ({} incursive entit{}); lingering inside a no-go \
-             zone is a state bug, not a fly-by",
+             (worst at frame {}), {}across frames \
+             {}–{} ({} incursive entit{}); {}",
             ep.worst.key,
             region.center,
             region.half_extents,
             ep.worst.value,
             worst_depth_frame,
-            span,
-            span_unit,
+            sustain,
             ep.start_frame,
             ep.end_frame,
             ep.distinct_keys,
             if ep.distinct_keys == 1 { "y" } else { "ies" },
+            tail,
         ),
         ep.start_frame,
     );

@@ -471,7 +471,13 @@ pub struct Invariant {
     /// +1 per FixedUpdate tick consumes the window in ticks; a
     /// 300-unit window at 20 ticks/s elapses in 15 wall seconds).
     /// The budget is consumed in the driver's own unit; the author's
-    /// mental unit is the driver's unit.
+    /// mental unit is the driver's unit. On `forbidden_region`
+    /// (and the other soak-family rules) it is the fly-by soak:
+    /// episodes shorter than the window are discarded as
+    /// transients. OMITTING it on `forbidden_region` selects the
+    /// instant-fire form — every closed incursion episode is a
+    /// finding, no minimum dwell (the driver fields then reject:
+    /// they measure a soak that does not exist).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_s: Option<f32>,
     /// Rate-form (`stagnant_resource` only): optional declaration of
@@ -2205,14 +2211,18 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                 // walls, camera, UI — from a region, never what an
                 // author means; same O(cost) rationale as
                 // pairwise's rejection), region required and
-                // validated finite, window_s REQUIRED as the
-                // fly-by soak (an incursion must LINGER to count —
-                // the episode/window doctrine is this rule's
-                // reason to exist), driver fields allowed with the
-                // same both-halves-or-neither grammar as pairwise
-                // (no `resource` to default the host to), allow_if
-                // optional (a single registered component name —
-                // the legitimate-presence exemption, flip-test
+                // validated finite, window_s OPTIONAL (present =
+                // the fly-by soak: an incursion must LINGER to
+                // count, the episode/window doctrine; absent = the
+                // instant-fire form: every closed incursion
+                // episode is a finding, the one-frame clip counts),
+                // driver fields follow window_s (all-or-none: they
+                // measure the soak; with none there is nothing to
+                // measure) with the same both-halves-or-neither
+                // grammar as pairwise (no `resource` to default
+                // the host to), allow_if optional (a single
+                // registered component name — the
+                // legitimate-presence exemption, flip-test
                 // discipline mandatory per the proposal).
                 let Some(crate::enums::TargetSelector::WithComponent { name }) =
                     rule.target_selector.as_ref()
@@ -2271,20 +2281,32 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                         )));
                     }
                 }
-                // The soak: required, finite, positive, with the
-                // same declared-rate fit arithmetic as pairwise
-                // (the window is consumed in driver units; default
-                // driver: the frame clock in seconds).
+                // The soak: OPTIONAL. Present = the fly-by soak
+                // (incursion episodes shorter than the soak are
+                // discarded as transient fly-bys), finite and
+                // positive, with the same declared-rate fit
+                // arithmetic as pairwise (the window is consumed
+                // in driver units; default driver: the frame clock
+                // in seconds). ABSENT = the instant-fire form:
+                // every closed incursion episode is a finding,
+                // with no minimum dwell — the one-frame clip counts
+                // exactly as much as a full soak. The driver fields
+                // measure a soak, so they require window_s
+                // (all-or-none below).
                 match rule.window_s {
                     None => {
-                        errors.push(ScenarioError::Rejected(format!(
-                            "invariant '{}': forbidden_region requires \
-                             'window_s' — the soak in driver-leaf units \
-                             (default driver: the frame clock, so seconds); \
-                             incursion episodes shorter than the soak are \
-                             discarded as transient fly-bys",
-                            rule.name
-                        )));
+                        if rule.driver_resource.is_some()
+                            || rule.driver_path.is_some()
+                            || rule.driver_units_per_second.is_some()
+                        {
+                            errors.push(ScenarioError::Rejected(format!(
+                                "invariant '{}': forbidden_region driver fields \
+                                 need 'window_s' — they measure the soak, and \
+                                 without a window there is nothing to measure; \
+                                 omit them for the instant-fire form",
+                                rule.name
+                            )));
+                        }
                     }
                     Some(window_s) => {
                         if !window_s.is_finite() || window_s <= 0.0 {

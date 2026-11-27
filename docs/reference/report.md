@@ -102,7 +102,8 @@
     the rule's threshold rendered the same way — `ge <min_distance>`
     for pairwise, `le <tolerance>` for DTC with the documented
     default when the author omitted it, `inside at most <window_s>
-    driver units` for forbidden_region, `window <window_s>` for
+    driver units` for forbidden_region (`never inside` in the
+    instant-fire form — window_s omitted), `window <window_s>` for
     entity_stagnation (the soak threshold the episode judge
     compares against); `occupancy_cap` renders
     `count le <cap>` (the neighborhood bound, self-inclusive);
