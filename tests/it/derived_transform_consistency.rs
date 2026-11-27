@@ -716,6 +716,18 @@ fn unregistered_selector_reports_config_error() {
             .any(|v| v.rule == "vacuous_invariant" && v.target == "globals_follow_parents"),
         "config-errored invariant must not double-report vacuity"
     );
+    // Suppression covers the vocabulary notes too: the oracle_error
+    // already told the story — neither `hierarchy_absent` nor
+    // `unjudgeable_parent` may ride a config-errored invariant
+    // (audit suppression).
+    assert!(
+        !report
+            .violations
+            .iter()
+            .any(|v| v.target == "globals_follow_parents"
+                && (v.rule == "hierarchy_absent" || v.rule == "unjudgeable_parent")),
+        "config-errored invariant must emit no vocabulary note"
+    );
 }
 
 // ---------------------------------------------------------------------------
