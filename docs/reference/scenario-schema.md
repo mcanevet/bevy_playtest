@@ -969,3 +969,86 @@ Two distinct error classes, at different stages:
   `sampling_s`/`spawn_only` and the bounds fields are
   rejected at load; `radius`/`cap`/`window_s` on other rules
   are rejected too (foreign fields, both directions).
+
+### What a `with_component` selector requires of the target type
+
+Every `with_component` selector (and `allow_if` exemptions,
+`min_distance_from` anchors) resolves the SAME way: full
+registered type path, or an unambiguous final path segment
+(with a did-you-mean for close typos). Resolution succeeds
+once the type carries `#[derive(Reflect)]` and has been passed
+to `App::register_type` — but what the RULE then does with
+the resolved type differs, and that difference decides the
+second prerequisite:
+
+| Rule | Membership decided by | `#[reflect(Component)]` needed? |
+|---|---|---|
+| `pairwise_separation` | archetype (`ComponentId` contains-check) | **No** — registration alone |
+| `forbidden_region` (selector and `allow_if`) | archetype / `TypeId` | **No** — registration alone |
+| `derived_transform_consistency` | archetype (child pairs, parents) | **No** — registration alone |
+| `nodes_in_bounds` | archetype | **No** — registration alone |
+| `spawn_safety` (member and anchor) | archetype | **No** — registration alone |
+| `occupancy_cap` | archetype | **In practice, yes** — membership is archetype-decided, but the walker additionally rejects a registration carrying no ReflectComponent data (added by the attribute), so the attribute is effectively required |
+| `component_check` | archetype | **Yes — required**: the rule READS component values through reflected-data access; a registered type without ReflectComponent data is an `oracle_error` naming `#[reflect(Component)]` |
+| `entity_stagnation` | archetype | **Yes — required**: the digest reads reflected field values the same way |
+| `resource_check` / `stagnant_resource` | n/a (`resource` field) | n/a — resources need `#[derive(Reflect)]` + `#[reflect(Resource)]`; the same `ReflectComponent` data is additionally required for the read itself (Bevy 0.20 reads reflected resources through the component registration) |
+
+Consequences worth knowing before the first run:
+
+- A marker component (e.g. `#[derive(Component, Reflect)]` with
+  `#[reflect(Component)]`) satisfies EVERY row: derive +
+  attribute + `App::register_type` is the universally safe
+  form. The registration-without-attribute corner exists only
+  for types derived and registered without the component role.
+- A type that is registered but is a RESOURCE (or plain data
+  carrying no component role at all) passes NONE of the rows'
+  membership step — `resolve_registration` resolves it, but no
+  entity ever bears it, and the outcome is vacuity (or, for
+  the value-reading rules, a specific
+  not-a-reflected-component config error naming the exact
+  attribute to add).
+- Selector resolution runs at load AND at every frame — a
+  type registered late (after `App::register_type` was called
+  mid-run) is picked up on the frames after its registration.
+
+### Scripted-input coordinates and authoring notes
+
+The cursor the bots and scripts move is the harness-owned
+`CursorInputResource` position, expressed in **window-space
+pixels with the origin at the top-left, +y down** — the winit
+convention, not bevy's world-space +y up. Two different
+coordinate stories share this space, and conflating them is the
+classic first-run mistake:
+
+- `mouse_clicks`/`mouse_motion` coordinates are used **verbatim**
+  as window-space positions and deltas — no scaling against
+  the window, no headless fallback extent. Authored (x, y) lands
+  at exactly that window position (off-window values go where
+  they say and picking will ignore them, exactly as a real
+  click past the screen edge would). They are **window pixels,
+  never world units**: the harness does not own your camera, so
+  it cannot convert pixels to your world plane — pin where a
+  widget actually renders on screen (a screenshot probe is the
+  reliable way) before scripting a click at it.
+- The CHAOS bot's random cursor draws are quantized and scaled
+  into the real window's logical size when one exists, else a
+  theoretical 1280×1280 viewport — so chaos clicks stay
+  plausible-on-screen headless or not.
+
+Two timing facts worth encoding in the first scenario draft:
+
+- **Frame-0 parking**: the cursor sits at the window origin
+  `(0, 0)` — the top-left corner, not a centered position —
+  until the first click or motion script applies, and
+  `mouse_motion` deltas accumulate from that origin when no
+  click teleported first. Any UI depending on hover state sees
+  "no hover" at frame 0; script an explicit first-frame click
+  or motion if a centered or moved starting point matters (a
+  game camera that pans toward the cursor at the window corner
+  from frame 0 will drift diagonally — observed in practice,
+  and worth a stabilizing first-frame input when authoring).
+- **Held-click interplay**: scripted `hold_frames` is a minimum
+  of 1, and scripted holds refcount against the chaos bot's on
+  the same button — `Released` fires only when the last holder
+  lets go, so a scripted press overlapping a chaos hold
+  releases at the later of the two expiry frames.

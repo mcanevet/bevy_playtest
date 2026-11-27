@@ -1240,12 +1240,19 @@ pub(crate) fn no_atr_message(tier: &str) -> String {
 }
 
 /// The message for a type that IS registered but lacks component
-/// reflection data. Shared by the component oracle and lint's
-/// registry probe so the wording cannot drift.
+/// reflection data. Shared by the component oracle, the stagnation
+/// walker, occupancy's defensive gate and lint's registry probe so
+/// the wording cannot drift.
 pub(crate) fn not_a_reflected_component_message(name: &str) -> String {
     format!(
         "type '{name}' is registered in the game's TypeRegistry but is not a \
-         reflected component (missing ReflectComponent data — is it a Resource?)"
+         reflected component (missing ReflectComponent data — add \
+         #[reflect(Component)] alongside #[derive(Reflect)], then \
+         App::register_type. The value-reading rules (component_check, \
+         entity_stagnation) and occupancy_cap's defensive gate need this \
+         attribute; the marker-membership rules (pairwise_separation, \
+         forbidden_region, nodes_in_bounds, spawn_safety, \
+         derived_transform_consistency) accept the registration alone)"
     )
 }
 
