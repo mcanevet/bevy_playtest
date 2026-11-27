@@ -45,7 +45,7 @@ scripted-input families, and every class of load-time rejection.
   "single_threaded": boolean,      // default true
   "strict_warnings": boolean,     // default false
   "duration_s": number,           // default 15.0; max 3600
-  "verify_replay": boolean,       // default false; needs single_threaded. In-process runs two passes in one process; under the takeover a fresh subprocess is pass B
+  "verify_replay": boolean,       // default false; needs single_threaded. In-process runs two passes in one process; under the takeover a fresh subprocess is pass B. The report discloses whether it actually ran: see `replay_verified` in the report reference
   "record_digest": boolean,       // default false; record per-frame broadened state digest
   "invariants": [
     {

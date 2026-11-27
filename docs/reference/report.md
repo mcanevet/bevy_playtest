@@ -299,13 +299,16 @@
   (plus the opt-in state-digest series) were compared — it attests
   PERFORMANCE, not a clean result: a `replay_divergence` finding in
   the report means verification ran and found the divergence; the
-  outcome lives in `status`/`violations`. `false` = the scenario
+  outcome lives in `status`/`violations`. (When a pass crashed, the
+  series comparison is skipped by the crash exemption — a Crash
+  report is never a determinism certificate.) `false` = the scenario
   REQUESTED verification but the producing path performed only a
   single pass (an in-process `run_scenario` call outside the
   verify_replay mechanisms) — the determinism claim the author
   wanted was never checked, and the reader must not silently trust
   it away. Absent = verification was not requested, or the report
-  is a stub that never ran one.
+  is a stub that never ran one (including a lint-mode stub, which
+  runs zero game passes, not one).
 - `source_derived_keys` / `source_derived_notes` (present exactly
   when the battery's source scan replaced the default chaos keys):
   the poison-filtered key set that replaced WASD+arrows, plus
