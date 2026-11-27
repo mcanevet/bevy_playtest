@@ -257,6 +257,42 @@ fn passive_synthetic_keyboard_with_raw_surface_rejects() {
     }
 }
 
+/// Hoist inversion guard: the honesty guards fire ONLY on passive
+/// scenarios — a NON-passive chaos bot declaring scripted mouse
+/// clicks is a legal combination (the scripted mouse system
+/// serves any bot type) and must keep loading. Pins the hoisted
+/// guard's polarity against a future over-broad condition that
+/// would push the rejection into legal territory, where only
+/// slow runtime fixtures would notice.
+#[test]
+fn non_passive_chaos_with_mouse_clicks_loads() {
+    let mut json = minimal_scenario("chaos");
+    json["bot"]["mouse_clicks"] =
+        serde_json::json!([{ "frame": 0, "button": "left", "x": 10.0, "y": 10.0 }]);
+    let s = parse(json);
+    assert!(
+        validate_scenario(&s).is_ok(),
+        "non-passive chaos + mouse_clicks must load: {:?}",
+        validate_scenario(&s)
+    );
+}
+
+/// Hoist inversion guard, surface side: a NON-passive
+/// synthetic_keyboard bot declaring an (empty) raw_surface loads —
+/// only the passive+surface contradiction rejects.
+#[test]
+fn non_passive_synthetic_keyboard_with_empty_surface_loads() {
+    let mut json = minimal_scenario("synthetic_keyboard");
+    json["bot"]["key_presses"] = serde_json::json!([{ "frame": 0, "key": "w", "hold_frames": 1 }]);
+    json["bot"]["raw_surface"] = serde_json::json!({ "keys": [], "mouse_buttons": [] });
+    let s = parse(json);
+    assert!(
+        validate_scenario(&s).is_ok(),
+        "non-passive synthetic + empty surface must load: {:?}",
+        validate_scenario(&s)
+    );
+}
+
 /// `"oracles": []` parses to "run all" — the same meaning as `None`. A
 /// user writing `[]` almost certainly intends "none", which is not
 /// implemented. Until it is, the empty list must reject.

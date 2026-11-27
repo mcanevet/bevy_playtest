@@ -28,7 +28,9 @@ scripted-input families, and every class of load-time rejection.
       { "frame": number, "dx": number, "dy": number,
         "repeat_frames": number } // default 1; net deltas per frame
     ],
-    "raw_surface": {              // optional, chaos only
+    "raw_surface": {              // optional; read by chaos (ignored for
+                                  // synthetic_keyboard — declaring it there
+                                  // is a contradiction "passive" would catch)
       "keys": ["KeyW", "ArrowLeft"],
       "mouse_buttons": ["Left", "Right"]   // default: all three primary buttons
     },
