@@ -255,6 +255,10 @@ fn held_section_round_trips_through_serde() {
         worst_episode_span: None,
         worst_episode_frame: None,
         pair_judgments: None,
+        closest_approach: None,
+        closest_approach_frame: None,
+        peak_witness_count: None,
+        peak_witness_frame: None,
         entries_clean: None,
     };
     let json = serde_json::to_string(&entry).unwrap();
@@ -299,6 +303,10 @@ fn held_section_round_trips_through_serde() {
         worst_episode_span: None,
         worst_episode_frame: None,
         pair_judgments: None,
+        closest_approach: None,
+        closest_approach_frame: None,
+        peak_witness_count: None,
+        peak_witness_frame: None,
         entries_clean: None,
     };
     let json = serde_json::to_string(&component_entry).unwrap();
@@ -338,6 +346,10 @@ fn held_section_round_trips_through_serde() {
         worst_episode_span: Some(0.317),
         worst_episode_frame: Some(10),
         pair_judgments: Some(282_015),
+        closest_approach: Some(0.05),
+        closest_approach_frame: Some(14),
+        peak_witness_count: None,
+        peak_witness_frame: None,
         entries_clean: None,
     };
     let json = serde_json::to_string(&episode_entry).unwrap();
@@ -346,6 +358,8 @@ fn held_section_round_trips_through_serde() {
     assert_eq!(back.worst_episode_span, Some(0.317));
     assert_eq!(back.worst_episode_frame, Some(10));
     assert_eq!(back.pair_judgments, Some(282_015));
+    assert_eq!(back.closest_approach, Some(0.05));
+    assert_eq!(back.closest_approach_frame, Some(14));
     assert_eq!(back.window_s, Some(1.0));
     assert_eq!(back.predicate.as_deref(), Some("ge 0.5"));
 }
@@ -718,6 +732,10 @@ fn twenty_held_invariants_serialize_under_4kb() {
             worst_episode_span: None,
             worst_episode_frame: None,
             pair_judgments: None,
+            closest_approach: None,
+            closest_approach_frame: None,
+            peak_witness_count: None,
+            peak_witness_frame: None,
             entries_clean: None,
         });
     }
@@ -864,6 +882,25 @@ fn pairwise_clean_pass_reports_workload_without_span() {
     assert_eq!(held.episodes_observed, Some(0));
     assert!(held.worst_episode_span.is_none());
     assert!(held.worst_episode_frame.is_none());
+    // The headroom witness: the run's closest approach. The pair
+    // starts 4.0 apart and drifts apart monotonically, so the
+    // minimum is the first OBSERVED frame — post-update, at
+    // ±2.05 (distance ≈ 4.1), and every later frame is farther.
+    let (ca, ca_frame) = held
+        .closest_approach
+        .zip(held.closest_approach_frame)
+        .expect("a pairable run always carries a closest approach");
+    assert!(
+        (4.0..4.2).contains(&ca),
+        "clean-pass closest approach {ca} ≈ the frame-0 distance"
+    );
+    assert_eq!(
+        ca_frame, 0,
+        "monotonic drift: the first frame is the closest"
+    );
+    // Occupancy fields never ship for a pairwise rule.
+    assert!(held.peak_witness_count.is_none());
+    assert!(held.peak_witness_frame.is_none());
     // Pairwise never carries the entity fields.
     assert!(held.entity_judgments.is_none());
     assert!(held.nearest_margin.is_none());
@@ -902,6 +939,32 @@ fn pairwise_subsoak_nearmiss_gets_span_witness() {
     // of a crossing lasts > 0.
     assert!(span > 0.0);
     assert!(held.worst_episode_frame.is_some());
+    // The crossing's headroom witness: the approach is
+    // predicate-INDEPENDENT — it sweeps THROUGH the anchor
+    // (distance ≈ 0 near frame 100, when `x = 2 − 0.02·f` is
+    // at the origin), so the recorded closest approach is BELOW
+    // `min_distance` on a PASSING run. That is the disclosed
+    // transient: the episode fold handled it as a sub-soak
+    // near-miss, and the held trace names it numerically.
+    let ca = held
+        .closest_approach
+        .expect("a crossing run carries a closest approach");
+    assert!(
+        ca < 0.5,
+        "the sweep crosses the anchor: closest approach {ca} is below min_distance"
+    );
+    assert!(
+        ca <= 0.02,
+        "the sweep passes through the origin: closest approach {ca} ≈ 0"
+    );
+    let ca_frame = held.closest_approach_frame.expect("with its frame");
+    assert!(
+        (90..110).contains(&ca_frame),
+        "the closest approach lands near the crossing point: frame {ca_frame}"
+    );
+    // Occupancy fields never ship for a pairwise rule.
+    assert!(held.peak_witness_count.is_none());
+    assert!(held.peak_witness_frame.is_none());
 }
 
 /// A pairwise invariant with nothing to pair (a single marker) is

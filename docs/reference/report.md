@@ -191,6 +191,28 @@
     the never-exercised twin; a zero-entries run earns no held
     entry at all (an archetype that never gained a member proved
     nothing about entry safety)
+  - `closest_approach` / `closest_approach_frame`
+    (`pairwise_separation` only) — the smallest pair distance seen
+    over the whole run and the frame of that sample: the
+    HEADROOM story, predicate-independent. How close the closest
+    pair came — including distances BELOW `min_distance` (a
+    transient the episode fold handled as a sub-soak near-miss
+    while the run still passed). Compare against the entry's
+    predicate; a passing run can legally carry a value below it,
+    and that is precisely the disclosed near-miss. Only frames
+    where the selector resolved and ≥2 checkable entities
+    co-existed contribute, and finite distances only
+  - `peak_witness_count` / `peak_witness_frame` (`occupancy_cap`
+    only) — the largest self-inclusive neighborhood count any
+    entity presented over the run and the frame of that sample:
+    the CROWD story, predicate-independent (the witness predicate
+    is `count > cap`). How big the biggest neighborhood got —
+    including legal counts a hair under the cap, and ABOVE-cap
+    transients on a passing run whose soaked-away episodes show
+    alongside `episodes_observed`. Compare against the entry's
+    `cap` authoring; a soaked above-cap crowd fails the report's
+    held admission and shows in `violations[]` instead. Only
+    populated frames contribute
 - the held-trace ADMISSION split for `entity_stagnation`: an entry
   appears when the selector RESOLVED checkable entities OR the
   watch was watchable (its component registered with a resolvable

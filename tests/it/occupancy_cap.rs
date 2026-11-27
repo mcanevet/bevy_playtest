@@ -787,6 +787,19 @@ fn within_cap_population_earns_a_held_entry() {
     assert_eq!(held.episodes_observed, Some(0));
     assert!(held.worst_episode_span.is_none());
     assert!(held.pair_judgments.is_none());
+    // The crowd witness: every entity's self-inclusive
+    // neighborhood count, predicate-independent. The two
+    // members sit 0.1 apart with radius 1.0, so each counts the
+    // other — count 2, ≤ cap 3, stable across the run.
+    let (pwc, pwc_frame) = held
+        .peak_witness_count
+        .zip(held.peak_witness_frame)
+        .expect("a populated run always carries a peak witness count");
+    assert_eq!(pwc, 2);
+    assert_eq!(pwc_frame, 0, "the crowd is stable: frame 0 sets the peak");
+    // Pairwise fields never ship for an occupancy rule.
+    assert!(held.closest_approach.is_none());
+    assert!(held.closest_approach_frame.is_none());
 }
 
 /// The near-miss story: a gathering DISSOLVED below the soak
@@ -832,6 +845,18 @@ fn sub_soak_gathering_banks_its_span_in_the_held_trace() {
         (1.0..3.0).contains(&span),
         "the banked sub-soak span: {span}"
     );
+    // The crowd witness on a near-miss run: the standing crowd
+    // of FOUR sits within radius of every member, so the peak
+    // self-inclusive count is 4 — ABOVE cap 3 — recorded on a
+    // PASSING run. The above-cap transient rode the episode
+    // fold (discarded sub-soak); the held trace names it
+    // numerically alongside `episodes_observed`.
+    let (pwc, pwc_frame) = held
+        .peak_witness_count
+        .zip(held.peak_witness_frame)
+        .expect("the gathering run carries a peak witness count");
+    assert_eq!(pwc, 4, "the standing crowd: every member sees all four");
+    assert_eq!(pwc_frame, 0, "the gathering began with the run");
 }
 
 /// Fired-interplay exclusion (veto point 1e): the SOAKED crowd —
