@@ -362,6 +362,45 @@ fn held_section_round_trips_through_serde() {
     assert_eq!(back.closest_approach_frame, Some(14));
     assert_eq!(back.window_s, Some(1.0));
     assert_eq!(back.predicate.as_deref(), Some("ge 0.5"));
+
+    // The occupancy wire pair: peak_witness_count/_frame with
+    // Some values (the pairwise pair above covers its family;
+    // the derive alone should not carry these wire names).
+    let occ_entry = HeldInvariant {
+        name: "crowd".to_string(),
+        rule: "occupancy_cap".to_string(),
+        target: "CrowdMember".to_string(),
+        predicate: Some("count le 3".to_string()),
+        frames_matched: 360,
+        observed_min: None,
+        observed_max: None,
+        worst_frame: None,
+        met_at_frame: None,
+        deadline_frame: None,
+        episodes_fired: None,
+        driver_advanced: None,
+        driver: None,
+        eventually_s: None,
+        window_s: Some(3.0),
+        entity_judgments: Some(720),
+        peak_entities: None,
+        peak_entities_frame: None,
+        nearest_margin: None,
+        nearest_margin_frame: None,
+        episodes_observed: Some(1),
+        worst_episode_span: Some(1.68),
+        worst_episode_frame: Some(0),
+        pair_judgments: None,
+        closest_approach: None,
+        closest_approach_frame: None,
+        peak_witness_count: Some(4),
+        peak_witness_frame: Some(0),
+        entries_clean: None,
+    };
+    let json = serde_json::to_string(&occ_entry).unwrap();
+    let back: HeldInvariant = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.peak_witness_count, Some(4));
+    assert_eq!(back.peak_witness_frame, Some(0));
 }
 
 // ---------------------------------------------------------------------------
