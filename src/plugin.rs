@@ -1280,6 +1280,19 @@ fn verify_replay_subprocess(
     // Asserts performance, not a clean result: a divergence finding
     // means verification ran and found it.
     report.replay_verified = Some(true);
+
+    // Recompute the finding summary LAST: the divergence append
+    // above (and the status flip it carries) landed AFTER the
+    // driver computed it inside run_scenario, so a divergence-only
+    // report would otherwise ship status: Fail with
+    // finding_summary.gating: 0 — exactly the summary/status
+    // disagreement the block exists to prevent. Same escalation
+    // context the driver used, so the counts cannot disagree
+    // with the status line.
+    report.compute_finding_summary(
+        scenario.strict_warnings,
+        scenario.liveness.progress.require_surface,
+    );
     Ok(report)
 }
 

@@ -240,6 +240,19 @@ pub fn run_scenario_verified(
     // and found it.
     report.replay_verified = Some(true);
 
+    // Recompute the finding summary LAST: the appends above
+    // (divergence and/or status-split findings) landed AFTER the
+    // driver computed it inside run_scenario, so a divergence-only
+    // report would otherwise ship status: Fail with
+    // finding_summary.gating: 0 — exactly the summary/status
+    // disagreement the block exists to prevent. Same escalation
+    // context the driver used, so the counts cannot disagree
+    // with the status line.
+    report.compute_finding_summary(
+        scenario.strict_warnings,
+        scenario.liveness.progress.require_surface,
+    );
+
     Ok(report)
 }
 
