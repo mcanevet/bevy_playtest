@@ -1148,6 +1148,40 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
             )));
         }
     }
+    // Passive runs promise no inputs — the OBSERVE-ONLY contract.
+    // Both honesty guards are HOISTED out of the per-bot-type
+    // blocks below: the promise is bot-independent, and the
+    // per-bot split left silent holes in the matrix (a passive
+    // chaos scenario declaring scripted mouse inputs loaded
+    // fine — and the unconditional scripted mouse system fired
+    // those clicks while the report claimed observation-only).
+    // Whether the declared inputs would FIRE (scheduled
+    // unconditionally) or be DISCARDED (per-bot scheduling) is
+    // an implementation detail; declaring them at all contradicts
+    // the flag, so the loader must reject either way. Either
+    // side can give: remove the inputs or drop "passive".
+    if scenario.bot.passive
+        && (!scenario.bot.key_presses.is_empty()
+            || !scenario.bot.mouse_clicks.is_empty()
+            || !scenario.bot.mouse_motion.is_empty())
+    {
+        errors.push(ScenarioError::Rejected(
+            "passive bot declares scripted inputs (key_presses, \
+             mouse_clicks or mouse_motion) — passive runs emit no \
+             inputs; remove the inputs or drop \"passive\""
+                .into(),
+        ));
+    }
+    if let Some(surface) = &scenario.bot.raw_surface {
+        if scenario.bot.passive && (!surface.keys.is_empty() || !surface.mouse_buttons.is_empty()) {
+            errors.push(ScenarioError::Rejected(
+                "passive bot declares an input surface (raw_surface with \
+                 keys or mouse_buttons) — passive runs emit no inputs; \
+                 remove the surface or drop \"passive\""
+                    .into(),
+            ));
+        }
+    }
     // Bot-specific requirements.
     if scenario.bot.bot_type == BotType::SyntheticKeyboard {
         // `key_presses` OR `mouse_clicks` must be non-empty: a
@@ -1165,23 +1199,6 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
                 "synthetic_keyboard bot requires a non-empty key_presses, \
                  mouse_clicks or mouse_motion list (or \"passive\": true for \
                  an intentional observe-only run)"
-                    .into(),
-            ));
-        }
-        // Reserved-surface honesty: `passive` promises no inputs, so
-        // declaring scripted inputs alongside it is a contradiction
-        // the loader must not silently swallow (the inputs would be
-        // skipped, or worse, honored while the flag claims
-        // observation-only).
-        if scenario.bot.passive
-            && (!scenario.bot.key_presses.is_empty()
-                || !scenario.bot.mouse_clicks.is_empty()
-                || !scenario.bot.mouse_motion.is_empty())
-        {
-            errors.push(ScenarioError::Rejected(
-                "passive bot declares scripted inputs (key_presses, \
-                 mouse_clicks or mouse_motion) — passive runs emit no \
-                 inputs; remove the inputs or drop \"passive\""
                     .into(),
             ));
         }
@@ -1249,19 +1266,6 @@ pub fn lint_scenario(scenario: &Scenario) -> Vec<ScenarioError> {
     // surface yields a bot that silently does nothing.
     if scenario.bot.bot_type == BotType::Chaos {
         if let Some(surface) = &scenario.bot.raw_surface {
-            // Reserved-surface honesty (synthetic twin below): passive
-            // promises no inputs, and a chaos bot with a non-empty
-            // surface would press them — the flag would be a lie.
-            if scenario.bot.passive
-                && (!surface.keys.is_empty() || !surface.mouse_buttons.is_empty())
-            {
-                errors.push(ScenarioError::Rejected(
-                    "passive bot declares an input surface (raw_surface with \
-                     keys or mouse_buttons) — passive runs emit no inputs; \
-                     remove the surface or drop \"passive\""
-                        .into(),
-                ));
-            }
             for key in &surface.keys {
                 if normalize_key_name(key).is_none() {
                     errors.push(ScenarioError::Rejected(unknown_key_error(key, None)));
