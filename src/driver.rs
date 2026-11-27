@@ -3304,6 +3304,20 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         scenario_source: None,
         log_capture_available: Some(log_capture_available),
         log_bridge_available: Some(sinks::bridge_won()),
+        // The driver only ever performs a SINGLE pass — the two-pass
+        // replay verification lives in the verify_replay mechanisms
+        // (replay.rs in-process, plugin.rs subprocess), which flip this
+        // stamp to Some(true) after their compares. A report coming
+        // straight out of run_scenario on a verify_replay scenario
+        // therefore honestly declares: requested, NOT performed by
+        // this path. The loud Some(false) disclosure is the point — a
+        // reader must never mistake a single-pass report for a
+        // verified one. No request means Nothing to disclose: None.
+        replay_verified: if scenario.verify_replay {
+            Some(false)
+        } else {
+            None
+        },
         // The report-writing code runs in the game's own binary
         // (in-process here, takeover child elsewhere), so the
         // reporting process's profile IS the game's profile.
@@ -3479,9 +3493,9 @@ mod passive_backstop_tests {
 
     /// The invalid-by-validation shape: `passive: true` WITH scripted
     /// inputs — the exact object the loader would reject. Building it
-    /// directly (struct literal) sidesteps the loader entirely, which
-    /// is the point: the backstops must hold for ANY scenario value,
-    /// not only validated ones.
+    /// by deserializing and then re-asserting the flag sidesteps the
+    /// loader's gate, which is the point: the backstops must hold for
+    /// ANY scenario value, not only validated ones.
     fn passive_with_scripted() -> Scenario {
         let mut s: Scenario = serde_json::from_str(
             r#"{"bot":{"type":"synthetic_keyboard","passive":true,
