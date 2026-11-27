@@ -589,6 +589,14 @@ fn synthetic_keyboard_bot_system(
     primary_window: Query<Entity, With<bevy_window::PrimaryWindow>>,
     mut keyboard: BotKeyboardWriters,
 ) {
+    // Passive defense-in-depth: validation (hoisted in the scenario
+    // loader) already rejects any scripted key declared alongside
+    // "passive", so these entries are empty here. Guard anyway:
+    // the promise is "emit no inputs", and a future validation gap
+    // must not turn into a silent input leak.
+    if scenario.0.bot.passive {
+        return;
+    }
     // Release any keys whose hold duration expired.
     hold_state.held.retain(|(code, release_at)| {
         if state.frame >= *release_at {
@@ -1379,6 +1387,15 @@ fn scripted_motion_system(
     mut writers: BotMouseWriters,
 ) {
     let window = primary_window.single().ok();
+    // Passive defense-in-depth: validation (hoisted in the scenario
+    // loader) already rejects any scripted motion declared alongside
+    // "passive", so this loop is empty here. Guard anyway: the
+    // promise is "emit no inputs", and a future validation gap must
+    // not turn into a silent input leak. (Nothing held can leak
+    // either: with no scripted entry ever applied, no hold started.)
+    if scenario.0.bot.passive {
+        return;
+    }
     for motion in &scenario.0.bot.mouse_motion {
         // Window [frame, frame + repeat_frames): strict bounds so a
         // zero-repeat entry (rejected by validation, but defensive)
@@ -1415,6 +1432,16 @@ fn scripted_mouse_system(
     mut writers: BotMouseWriters,
 ) {
     let window = primary_window.single().ok();
+    // Passive defense-in-depth: validation (hoisted in the scenario
+    // loader) already rejects any scripted click declared alongside
+    // "passive", so no scripted hold was ever pressed and this
+    // release loop finds nothing. Guard before both halves anyway:
+    // the promise is "emit no inputs" — including Released tails —
+    // and a future validation gap must not turn into a silent
+    // input leak.
+    if scenario.0.bot.passive {
+        return;
+    }
     // Release scripted holds whose duration expired. Only the last
     // outstanding hold on a button emits `Released`.
     let mut i = 0;
@@ -3431,5 +3458,124 @@ mod chaos_hold_tests {
         st.press(KeyCode::KeyS, 40);
         assert_eq!(st.held[0].1, 30);
         assert_eq!(st.held[1].1, 40);
+    }
+}
+
+/// Runtime backstop proof for the `passive` promise: the scenario
+/// validator rejects any scripted input declared alongside
+/// `"passive": true` (negative_validation.rs pins that), so these
+/// scenarios never reach a real run — but the scripted systems run
+/// against the RAW scenario resource, and the promise "a passive
+/// bot emits NO inputs" must hold even if a future validation gap
+/// lets one through. Each test drives the system directly with the
+/// invalid-by-validation scenario and asserts total silence: no key
+/// events, no cursor movement, no click presses, and — the subtle
+/// half — no hold bookkeeping that a later frame could turn into a
+/// `Released` tail.
+#[cfg(test)]
+mod passive_backstop_tests {
+    use super::*;
+    use crate::scenario::Scenario;
+
+    /// The invalid-by-validation shape: `passive: true` WITH scripted
+    /// inputs — the exact object the loader would reject. Building it
+    /// directly (struct literal) sidesteps the loader entirely, which
+    /// is the point: the backstops must hold for ANY scenario value,
+    /// not only validated ones.
+    fn passive_with_scripted() -> Scenario {
+        let mut s: Scenario = serde_json::from_str(
+            r#"{"bot":{"type":"synthetic_keyboard","passive":true,
+            "key_presses":[{"frame":0,"key":"KeyW"}],
+            "mouse_clicks":[{"frame":0,"x":10.0,"y":10.0,"button":"Left"}],
+            "mouse_motion":[{"frame":0,"dx":5.0,"dy":5.0}]}}"#,
+        )
+        .unwrap();
+        s.bot.passive = true;
+        s
+    }
+
+    fn app_with_bots() -> App {
+        // Bare App (house pattern: no plugins — the systems under
+        // test only need their resources, and every system param
+        // resolves with an empty world plus the inserts below).
+        let mut app = App::new();
+        // Message flows the writer params declare (a bare App has
+        // none): initialize them so the systems' params validate.
+        app.add_message::<KeyboardInput>();
+        app.add_message::<KeyboardFocusLost>();
+        app.add_message::<bevy_input::mouse::MouseButtonInput>();
+        app.add_message::<bevy_input::mouse::MouseMotion>();
+        app.add_message::<bevy_window::WindowEvent>();
+        app.init_resource::<KeyboardModifierState>();
+        app.insert_resource(RunState::default());
+        app.insert_resource(ScenarioResource(std::sync::Arc::new(
+            passive_with_scripted(),
+        )));
+        app.init_resource::<ScheduledHoldState>();
+        app.init_resource::<MouseHoldState>();
+        app.init_resource::<CursorInputResource>();
+        app
+    }
+
+    #[test]
+    fn passive_backstop_blocks_synth_keys() {
+        let mut app = app_with_bots();
+        app.add_systems(Update, synthetic_keyboard_bot_system);
+        app.update();
+        // No hold bookkeeping: an unguarded frame-0 KeyW press would
+        // land in `held` for its hold_frames duration.
+        assert!(
+            app.world().resource::<ScheduledHoldState>().held.is_empty(),
+            "passive backstop: no scheduled hold may linger"
+        );
+        // And no input was counted: the press arm increments
+        // input_count, so zero means the loop never fired.
+        assert_eq!(
+            app.world().resource::<RunState>().metrics.input_count,
+            0,
+            "passive backstop: no scripted key may count as an input"
+        );
+    }
+
+    #[test]
+    fn passive_backstop_blocks_scripted_clicks() {
+        let mut app = app_with_bots();
+        app.add_systems(Update, scripted_mouse_system);
+        app.update();
+        // No cursor teleport: position stays None (parking never ran).
+        assert!(
+            app.world()
+                .resource::<CursorInputResource>()
+                .position()
+                .is_none(),
+            "passive backstop: cursor must stay parked (position None)"
+        );
+        // No hold bookkeeping: a pressed-but-never-released pair
+        // would leak a Released tail on a later frame.
+        assert!(
+            app.world().resource::<MouseHoldState>().counts.is_empty(),
+            "passive backstop: no scripted hold may start"
+        );
+        assert!(
+            app.world()
+                .resource::<MouseHoldState>()
+                .scripted_pending
+                .is_empty(),
+            "passive backstop: no scripted release may be pending"
+        );
+    }
+
+    #[test]
+    fn passive_backstop_blocks_scripted_motion() {
+        let mut app = app_with_bots();
+        app.add_systems(Update, scripted_motion_system);
+        app.update();
+        assert!(
+            app.world()
+                .resource::<CursorInputResource>()
+                .position()
+                .is_none(),
+            "passive backstop: no scripted motion may move the cursor"
+        );
     }
 }
