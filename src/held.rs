@@ -492,10 +492,12 @@ impl HeldBookkeeping {
     ///   and gets no entry;
     /// - episode tier — `!pw_book.matched` (pairwise: never had a
     ///   pair) fails the run as vacuous anyway; DTC's
-    ///   `hierarchy_absent` audit is informational (a flat world can
+    ///   `hierarchy_absent`/`unjudgeable_parent` audits are
+    ///   informational (a flat or partially-unreadable world can
     ///   still PASS), so the collector adds its own zero-judged-
-    ///   frames guard: a flat world's rule was never exercised,
-    ///   and a held entry would claim evidence it does not have.
+    ///   frames guard: a rule that judged nothing was never
+    ///   exercised, and a held entry would claim evidence it
+    ///   does not have.
     ///
     /// Entries are built from the SCENARIO invariants (authoritative
     /// names, rule, authored fields) cross-referenced with the

@@ -757,3 +757,151 @@ fn episode_meta_serializes_stably() {
         assert!(entry.get(key).is_some(), "roster entry key {key}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Note vocabulary: flat world vs unjudgeable parent (anti-false-confidence)
+// ---------------------------------------------------------------------------
+
+/// THE incident shape: a parented child holds the full readable
+/// triple, but its parent exposes NO GlobalTransform over the whole
+/// run — the walk can neither confirm nor deny the identity, and
+/// the old vocabulary folded this world into the flattering
+/// `hierarchy_absent`. The audit must now say
+/// `unjudgeable_parent` instead.
+#[test]
+fn unjudgeable_parent_world_is_not_reported_flat() {
+    let _slot = common::run_slot();
+    let mut app = base_app();
+    app.add_systems(Update, move_roots);
+    // Parent WITHOUT GlobalTransform: removed after spawn so the
+    // required-components machinery cannot re-add it.
+    let parent = app
+        .world_mut()
+        .spawn(Transform::from_xyz(0.0, 0.0, 0.0))
+        .id();
+    app.world_mut()
+        .entity_mut(parent)
+        .remove::<GlobalTransform>();
+    app.world_mut()
+        .spawn((Cabin, Transform::from_xyz(0.0, 0.0, 0.0), ChildOf(parent)));
+    let scen = scenario_with_invariant(
+        r#"
+    "name": "globals_follow_parents",
+    "rule": "derived_transform_consistency",
+    "window_s": 1.0"#,
+    );
+    let report = run_scenario(&mut app, &scen).unwrap();
+    // The RED assertion: the world is NOT flat — the note vocabulary
+    // must distinguish it from a coherent flat scene.
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|v| v.rule == "unjudgeable_parent" && v.target == "globals_follow_parents"),
+        "an unjudgeable parent must never read as `hierarchy_absent`: {:?}",
+        report.violations
+    );
+    assert!(
+        !report
+            .violations
+            .iter()
+            .any(|v| v.rule == "hierarchy_absent"),
+        "the unjudgeable-parent world is not a flat world: {:?}",
+        report.violations
+    );
+    // Informational: the run itself must PASS.
+    assert_eq!(
+        report.status,
+        bevy_playtest::enums::PlaytestStatus::Pass,
+        "unjudgeable_parent is informational: {:?}",
+        report.violations
+    );
+}
+
+/// The partial-blindness shape: the identity was judged for a
+/// readable subtree AND at least one in-scope parent stayed
+/// unreadable — the audit discloses both facts, once, instead of
+/// letting the unchecked subtree vanish into the green.
+#[test]
+fn partial_blindness_is_disclosed_when_some_subtrees_judged() {
+    let _slot = common::run_slot();
+    let mut app = base_app();
+    app.add_systems(Update, move_roots);
+    // A healthy, fully readable pair.
+    let readable_parent = app
+        .world_mut()
+        .spawn(Transform::from_xyz(0.0, 0.0, 0.0))
+        .id();
+    app.world_mut().spawn((
+        Cabin,
+        Transform::from_xyz(0.0, 0.0, 0.0),
+        ChildOf(readable_parent),
+    ));
+    // An unreadable-parent pair: parent stripped of GlobalTransform
+    // after spawn (required components would otherwise re-add it).
+    let unreadable_parent = app
+        .world_mut()
+        .spawn(Transform::from_xyz(1.0, 0.0, 0.0))
+        .id();
+    app.world_mut()
+        .entity_mut(unreadable_parent)
+        .remove::<GlobalTransform>();
+    app.world_mut().spawn((
+        Cabin,
+        Transform::from_xyz(0.0, 0.0, 0.0),
+        ChildOf(unreadable_parent),
+    ));
+    let scen = scenario_with_invariant(
+        r#"
+    "name": "globals_follow_parents",
+    "rule": "derived_transform_consistency",
+    "window_s": 1.0"#,
+    );
+    let report = run_scenario(&mut app, &scen).unwrap();
+    // Both facts disclosed: the readable pair was judged (so no
+    // hierarchy_absent, no vacuous anything) and the unreadable
+    // subtree is named once, informationally.
+    assert!(
+        !report
+            .violations
+            .iter()
+            .any(|v| v.rule == "hierarchy_absent"),
+        "a judged subtree exists: {:?}",
+        report.violations
+    );
+    let notes = report
+        .violations
+        .iter()
+        .filter(|v| v.rule == "unjudgeable_parent")
+        .count();
+    assert_eq!(
+        notes, 1,
+        "exactly one disclosure, not per-frame spam: {:?}",
+        report.violations
+    );
+    assert_eq!(
+        report.status,
+        bevy_playtest::enums::PlaytestStatus::Pass,
+        "partial blindness is informational: {:?}",
+        report.violations
+    );
+}
+
+/// The GREEN control for the vocabulary: a coherent, fully
+/// readable hierarchy produces NEITHER note — a world judged
+/// everywhere must read as fully judged, not partially blind.
+#[test]
+fn coherent_hierarchy_yields_no_vocabulary_notes() {
+    let _slot = common::run_slot();
+    let mut app = healthy_hierarchy_fixture();
+    let report = run_scenario(&mut app, &scenario_with_invariant(CONSISTENCY_INV)).unwrap();
+    assert!(
+        !report
+            .violations
+            .iter()
+            .any(|v| v.rule == "hierarchy_absent" || v.rule == "unjudgeable_parent"),
+        "a fully judged coherent hierarchy carries no vocabulary notes: {:?}",
+        report.violations
+    );
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+}

@@ -2816,8 +2816,9 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
     }
     // derived_transform_consistency vacuity audit: a rule that
     // never found a parented entity reports the INFORMATIONAL
-    // `hierarchy_absent` — a flat world is a coherent scene the
-    // rule cannot judge, so it never gates as vacuous_invariant.
+    // `hierarchy_absent` (truly flat) or `unjudgeable_parent`
+    // (hierarchy in scope, parent never observable) — neither
+    // gates as vacuous_invariant.
     let consistency_book = app
         .world_mut()
         .remove_resource::<crate::invariant_eval::ConsistencyBookkeeping>()

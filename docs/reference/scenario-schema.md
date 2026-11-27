@@ -726,6 +726,19 @@ Two distinct error classes, at different stages:
   `check`/`value`/`eventually_s`/`path`/
   `resource`/`min_distance` and the bounds fields are rejected
   at load.
+- `derived_transform_consistency` note vocabulary (both
+  INFORMATIONAL, never gating): a rule that never found a
+  parented entity reports `hierarchy_absent` — a flat world is a
+  coherent scene, and the note certifies it as TRULY flat. A
+  rule that found a parented entity in scope whose parent was
+  never observable with a `GlobalTransform` reports
+  `unjudgeable_parent` instead — a hierarchy the rule could not
+  read is not a flat world, and the note says so rather than
+  letting a broken-but-unreadable subtree read as coherence.
+  The same note also fires once when SOME subtrees were judged
+  and at least one stayed unreadable (partial blindness: the
+  verdict covers what was checked, and the unchecked subtree is
+  disclosed, never silently dropped).
 - `forbidden_region`: the declarative no-go-zone oracle — the
   author draws an axis-aligned box an entity's translation must
   not LINGER inside (the rail-tunneling incident class, made
