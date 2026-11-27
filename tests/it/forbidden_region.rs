@@ -1,9 +1,12 @@
 //! Behavioral battery for the `forbidden_region` rule: the
-//! declarative no-go-zone oracle. Selected entities must not
-//! linger inside an author-declared box region; incursion frames
-//! fold into episodes and only an episode soaking past `window_s`
-//! (in driver units) becomes a finding — sub-soak incursions are
-//! transient fly-bys, discarded.
+//! declarative no-go-zone oracle. Selected entities must not be
+//! inside an author-declared box region; incursion frames fold
+//! into episodes. With `window_s` declared (the soak form), only
+//! an episode soaking past the window (in driver units) becomes
+//! a finding — sub-soak incursions are transient fly-bys,
+//! discarded. With `window_s` omitted (the instant-fire form),
+//! every closed incursion episode is a finding — no minimum
+//! dwell, the one-frame clip counts.
 //!
 //! The central scenario mirrors the rail-tunneling incident
 //! shape: a marked walker that wanders into the forbidden box and
@@ -277,6 +280,100 @@ fn quick_crossing_is_discarded() {
             .map(|v| (v.rule.clone(), v.target.clone()))
             .collect::<Vec<_>>()
     );
+}
+
+// ---------------------------------------------------------------------------
+// The instant-fire form (window_s omitted)
+// ---------------------------------------------------------------------------
+
+/// Omission flips the rule's form: the quick crossing that the
+/// SOAK form discards (sub-1.0s, a transient fly-by) becomes a
+/// FINDING when window_s is absent — every closed incursion
+/// episode counts, no minimum dwell. The same app, the same
+/// crossing, only the soak removed: instant catches what soak
+/// forgives.
+#[test]
+fn windowless_crossing_fires_instead_of_discarding() {
+    let _slot = common::run_slot();
+    let mut app = App::new();
+    app.register_type::<Wanderer>();
+    app.register_type::<Transform>();
+    app.add_systems(Update, |mut q: Query<&mut Transform, With<Wanderer>>| {
+        for mut t in q.iter_mut() {
+            t.translation.x += 0.2;
+        }
+    });
+    app.world_mut()
+        .spawn((Wanderer, Transform::from_xyz(-5.0, 0.5, 0.0)));
+    let scenario = scenario_with_invariant(
+        r#"
+    "name": "no_rail_tunneling",
+    "rule": "forbidden_region",
+    "target_selector": {"with_component": {"name": "Wanderer"}},
+    "region": {"center": [0.0, 0.5, 0.0], "half_extents": [0.5, 1.0, 0.5]}"#,
+    );
+    let report = run_scenario(&mut app, &scenario).unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
+    let v = report
+        .violations
+        .iter()
+        .find(|v| v.rule == "forbidden_region")
+        .expect("instant form: the one-frame clip must count");
+    // The instant tail: the finding says entering at all is the
+    // bug — no soak language, no driver units.
+    assert!(v.detail.contains("no minimum dwell"), "{}", v.detail);
+}
+
+/// The one-frame CLIP: a single incursion frame — the shortest
+/// episode the folder can close — still fires in the instant
+/// form. Planted outside; the walker jumps inside on the first
+/// Update and out again on the second, so the closed episode
+/// spans exactly one incursion frame.
+#[test]
+fn one_frame_clip_fires_in_the_instant_form() {
+    let _slot = common::run_slot();
+    let mut app = App::new();
+    app.register_type::<Wanderer>();
+    app.register_type::<Transform>();
+    // Enter on the first Update, exit on the second: the span
+    // inside is exactly one frame.
+    app.add_systems(
+        Update,
+        |mut q: Query<&mut Transform, With<Wanderer>>, mut frame: Local<u32>| {
+            *frame += 1;
+            for mut t in q.iter_mut() {
+                if *frame == 1 {
+                    t.translation.x = 0.0; // inside (planted outside)
+                } else {
+                    t.translation.x = 10.0; // outside, for good
+                }
+            }
+        },
+    );
+    app.world_mut()
+        .spawn((Wanderer, Transform::from_xyz(-5.0, 0.5, 0.0)));
+    let scenario = scenario_with_invariant(
+        r#"
+    "name": "no_rail_tunneling",
+    "rule": "forbidden_region",
+    "target_selector": {"with_component": {"name": "Wanderer"}},
+    "region": {"center": [0.0, 0.5, 0.0], "half_extents": [0.5, 1.0, 0.5]}"#,
+    );
+    let report = run_scenario(&mut app, &scenario).unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
+    let v = report
+        .violations
+        .iter()
+        .find(|v| v.rule == "forbidden_region")
+        .expect("instant form: the one-frame clip must count");
+    // Evidence shape: one entity, one violating frame.
+    let meta = v.meta.as_ref().expect("episode finding carries _meta");
+    let fr = meta
+        .forbidden_episode
+        .as_ref()
+        .expect("_meta carries the forbidden episode block");
+    assert_eq!(fr.sampled_entities, 1);
+    assert_eq!(fr.roster[0].violating_frames, 1);
 }
 
 // ---------------------------------------------------------------------------

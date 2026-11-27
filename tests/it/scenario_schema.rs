@@ -458,17 +458,43 @@ fn forbidden_region_requires_finite_positive_extents() {
 }
 
 #[test]
-fn forbidden_region_requires_window_s() {
-    // window_s is the episode soak: without it there is no
-    // judgment — a region could never fire regardless of how long
-    // entities tunnel through it.
+fn forbidden_region_window_s_is_optional_instant_form() {
+    // Omitted window_s = the instant-fire form: every closed
+    // incursion episode is a finding, no minimum dwell. The
+    // grammar must accept it (parse + lint + validate clean).
     let mut json = forbidden_json(Some("Wanderer"), good_region(), serde_json::json!(null));
     json["invariants"][0]
         .as_object_mut()
         .unwrap()
         .remove("window_s");
+    let s = parse(json.clone());
+    let errs = lint_errors(json.clone());
+    assert!(
+        errs.is_empty(),
+        "windowless forbidden_region is the instant form and must lint clean: {errs:?}"
+    );
+    validate_scenario(&s).expect("windowless forbidden_region (instant form) validates");
+    assert!(s.invariants[0].window_s.is_none());
+}
+
+#[test]
+fn forbidden_region_rejects_driver_fields_without_window_s() {
+    // The driver fields measure a soak; without window_s there is
+    // nothing to measure — the all-or-none grammar rejects them on
+    // the instant form.
+    let mut json = forbidden_json(Some("Wanderer"), good_region(), serde_json::json!(null));
+    json["invariants"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("window_s");
+    json["invariants"][0]["driver_resource"] = serde_json::json!("FrMatchClock");
+    json["invariants"][0]["driver_path"] = serde_json::json!("minutes");
     let errs = lint_errors(json);
-    assert!(errs.iter().any(|e| e.contains("window_s")), "{errs:?}");
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("driver fields") && e.contains("window_s")),
+        "driver fields must require window_s: {errs:?}"
+    );
 }
 
 #[test]

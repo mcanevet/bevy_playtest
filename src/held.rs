@@ -803,9 +803,12 @@ impl HeldBookkeeping {
                     InvariantRule::PairwiseSeparation | InvariantRule::SpawnSafety => {
                         inv.min_distance.map(|d| format!("ge {d}"))
                     }
-                    InvariantRule::ForbiddenRegion => inv
-                        .window_s
-                        .map(|w| format!("inside at most {w} driver units")),
+                    InvariantRule::ForbiddenRegion => match inv.window_s {
+                        Some(w) => Some(format!("inside at most {w} driver units")),
+                        // window_s omitted = the instant-fire form:
+                        // ANY closed incursion episode is a finding.
+                        None => Some("never inside".to_string()),
+                    },
                     InvariantRule::EntityStagnation => {
                         // The stagnation predicate is the WINDOW:
                         // "digest-constant for less than window_s

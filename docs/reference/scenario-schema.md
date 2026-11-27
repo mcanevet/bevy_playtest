@@ -282,8 +282,9 @@ to the full run stays accepted — fly-by controls pin this shape:
 a judged episode approaches but, by the grace and frame budget,
 never exactly reaches a full-run span) rejects at load for the
 soak-family rules (`pairwise_separation`,
-`derived_transform_consistency`, `forbidden_region`,
-`entity_stagnation`). Otherwise the recorder would
+`derived_transform_consistency`, `forbidden_region` (when
+`window_s` is declared — the instant-fire form has no soak to
+fit), `entity_stagnation`). Otherwise the recorder would
 silently discard every episode as sub-soak — a run that proves
 nothing, reported as Pass. For `derived_transform_consistency`
 the check compounds with `grace_frames`: episodes accrue span
@@ -676,8 +677,10 @@ Two distinct error classes, at different stages:
   `_meta`, a bounded roster of distinct pairs (first + worst +
   frame count per pair, capped, truncation-disclosed) so a
   handoff A–B → A–C cannot hide the persistent offender A.
-  `window_s` is required (the instant-fire form is rejected at
-  load) and is measured in DRIVER UNITS like
+  `window_s` is required on `pairwise_separation` (a windowless
+  form is rejected at load — unlike
+  `forbidden_region`, pairwise has no instant-fire variant) and
+  is measured in DRIVER UNITS like
   `stagnant_resource`'s window: declare
   `driver_path`/`driver_resource` for a game-clock soak (both
   halves or neither — there is no `resource` to default the
@@ -773,12 +776,21 @@ Two distinct error classes, at different stages:
   identity; two zones means two named invariants), with the
   every-frame-push discipline: frames with zero incursions still
   push, so an excursion out and back cannot weld two visits into
-  one long stretch. An episode only becomes a finding when its
-  `window_s` soak elapses (REQUIRED; the same
-  both-halves-or-neither driver grammar, frame-clock default in
-  seconds, declared-rate fit at load — a window the run can
-  never elapse rejects). Sub-soak incursions are transient
-  fly-bys, discarded. The observation value is PENETRATION DEPTH
+  one long stretch. `window_s` is OPTIONAL and picks the form:
+  PRESENT = the soak — an episode only becomes a finding when
+  its soak elapses (the same both-halves-or-neither driver
+  grammar, frame-clock default in seconds, declared-rate fit at
+  load — a window the run can never elapse rejects; sub-soak
+  incursions are transient fly-bys, discarded); ABSENT = the
+  INSTANT-FIRE form — every closed incursion episode is a
+  finding, no minimum dwell, the one-frame clip counts exactly
+  as much as a full soak (a tunnel-through caught in the act of
+  crossing, not only when it lingers; for "no presence is ever
+  legitimate" zones — pits that are supposed to be sealed —
+  instant is the designed default, since any presence is the
+  bug). Because the driver fields measure a soak, they REQUIRE
+  `window_s` — driver fields on a windowless forbidden_region
+  reject at load. The observation value is PENETRATION DEPTH
   (distance to the nearest face; deeper is worse), so the worst
   evidence names the most-embedded frame, and the finding's
   `_meta` carries a capped roster of distinct incursive entities
