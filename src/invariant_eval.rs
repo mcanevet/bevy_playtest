@@ -3886,15 +3886,16 @@ pub fn audit_derived_transform_consistency(
                 count: 1,
                 detail: format!(
                     "invariant '{}' judged some parented entities, but at least \
-                     one in-scope parented entity's parent was never observable \
-                     with a GlobalTransform; its compositional identity went \
-                     unchecked for the whole run — a partial verdict, not a full \
-                     one",
+                     one in-scope parented entity's parent was unobservable with \
+                     a GlobalTransform in at least one judged frame; the \
+                     compositional identity went unchecked whenever that parent \
+                     was unreadable — a partial verdict, not a full one",
                     inv.name
                 ),
                 last_detail: format!(
                     "invariant '{}' has an unchecked subtree: an in-scope \
-                     parent was never observable with a GlobalTransform",
+                     parent was unobservable with a GlobalTransform in at \
+                     least one judged frame",
                     inv.name
                 ),
                 meta: None,
