@@ -240,11 +240,18 @@ the grammar and unknown keys fail `deny_unknown_fields` — and its
 half-extents must be finite and strictly positive, with containment
 INCLUSIVE on every face (a translation exactly on a face is inside;
 NaN translations are never inside, `finite_transforms` keeps owning
-NaN findings). `window_s` is REQUIRED and is a SOAK in the driver
-leaf's own units — the same both-halves-or-neither driver grammar as
+NaN findings). `window_s` is OPTIONAL and picks the rule's
+form: PRESENT, it is a SOAK in the driver leaf's own units —
+the same both-halves-or-neither driver grammar as
 `pairwise_separation`, frame-clock default in seconds, with the
-declared-rate fit check at load — an incursion must LINGER, sub-soak
-incursions being transient fly-bys, discarded. The "fires one finding
+declared-rate fit check at load — an incursion must LINGER,
+sub-soak incursions being transient fly-bys, discarded; ABSENT,
+the rule is INSTANT-FIRE — every closed incursion episode is a
+finding, no minimum dwell (the one-frame clip counts; the form
+for zones where no presence is ever legitimate, sealed pits).
+Because the driver fields measure a soak, they REQUIRE
+`window_s`: declaring them on a windowless rule rejects at
+load. The "fires one finding
 per incursion episode" promise is delivered by the episode-fold
 machinery, not the literal sketch above, so the entry frame and
 position arrive as the episode's evidence: worst penetration depth +

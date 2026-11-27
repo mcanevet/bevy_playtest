@@ -36,7 +36,10 @@
   `invariant`, `rule`, `discarded_subsoak_episodes`, the worst
   discarded episode's `worst_span` / `worst_span_frame` against
   its authored `soak` (`window_s`, same driver units), and
-  `span_vs_soak` — how close this pass came to failing. Worst
+  `span_vs_soak` — how close this pass came to failing (instant-form
+  `forbidden_region` invariants never appear here: window_s omitted
+  means every closed episode fired, so a passing run discarded
+  nothing). Worst
   first, capped at 8 rows; the per-invariant detail stays in
   `held_invariants`. Guidance: pair any soak-family finding on a
   failing run with the passing side's `discarded_subsoak_episodes`
