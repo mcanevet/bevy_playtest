@@ -201,18 +201,24 @@
     predicate; a passing run can legally carry a value below it,
     and that is precisely the disclosed near-miss. Only frames
     where the selector resolved and ≥2 checkable entities
-    co-existed contribute, and finite distances only
+    co-existed contribute, and finite distances only — a judged
+    frame whose every pair distance came back non-finite
+    contributes nothing, so an entry can carry
+    `frames_matched > 0` with both fields absent. The earliest
+    frame wins ties
   - `peak_witness_count` / `peak_witness_frame` (`occupancy_cap`
     only) — the largest self-inclusive neighborhood count any
     entity presented over the run and the frame of that sample:
     the CROWD story, predicate-independent (the witness predicate
     is `count > cap`). How big the biggest neighborhood got —
     including legal counts a hair under the cap, and ABOVE-cap
-    transients on a passing run whose soaked-away episodes show
-    alongside `episodes_observed`. Compare against the entry's
-    `cap` authoring; a soaked above-cap crowd fails the report's
-    held admission and shows in `violations[]` instead. Only
-    populated frames contribute
+    transients on a passing run whose discarded sub-soak episodes
+    show alongside `episodes_observed`. Compare against the
+    entry's `cap` authoring; a soaked above-cap crowd earns no
+    held entry — the rule is warn-only, so the run itself still
+    passes — and the warning shows in `violations[]` instead.
+    Only populated frames contribute; the earliest frame wins
+    ties
 - the held-trace ADMISSION split for `entity_stagnation`: an entry
   appears when the selector RESOLVED checkable entities OR the
   watch was watchable (its component registered with a resolvable

@@ -212,8 +212,9 @@ pub struct HeldInvariant {
     /// is `count > cap`): how big the biggest neighborhood got,
     /// including legal counts a hair under the cap. Compare
     /// against the entry's `cap` authoring. A soaked above-cap
-    /// crowd fails the run and earns no held entry; sub-soak
-    /// above-cap transients show here alongside
+    /// crowd earns no held entry — warn-only, the run itself
+    /// still passes — and shows in `violations[]` instead;
+    /// sub-soak above-cap transients show here alongside
     /// `episodes_observed`.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub peak_witness_count: Option<u32>,
@@ -289,10 +290,13 @@ pub struct EpisodeHeldStats {
     pub closest_approach: Option<(f64, u64)>,
     /// Occupancy only: the largest self-inclusive neighborhood
     /// count any single entity presented over judged frames, and
-    /// the frame of that sample — the crowd-vs-cap story
-    /// (`count > cap` is the witness predicate, so a passing run
-    /// holds this ≤ cap). Strictly larger replaces; ties keep
-    /// the earlier frame (the extrema doctrine).
+    /// the frame of that sample — the crowd-vs-cap story,
+    /// predicate-independent (the witness predicate is
+    /// `count > cap`, but a passing run can legally carry a
+    /// value ABOVE it: sub-soak above-cap transients ride the
+    /// episode fold instead of gating). Strictly larger
+    /// replaces; ties keep the earlier frame (the extrema
+    /// doctrine).
     pub peak_witness_count: Option<(u32, u64)>,
 }
 
