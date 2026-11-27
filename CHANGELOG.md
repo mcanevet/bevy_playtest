@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## [0.23.0](https://github.com/mcanevet/bevy_playtest/compare/v0.22.0...v0.23.0) - 2026-11-27
+
+### Other
+
+- ci Update Rust to v1.100.1
+- recompute finding_summary after divergence appends in both verify paths
+- rewrap instant-fire as-built sentence
+- forbidden_region as-built record + clip depth pin
+- optional window_s instant-fire form for forbidden_region
+- replay_verified edge disclosures from review
+- replay_verified attestation on PlaytestReport
+- passive backstops in all scripted-input emitters
+- correct the prerequisite matrix's resource-type consequences
+- with_component prerequisite matrix and scripted-input authoring notes
+- scope the shared span bullet's fails-the-run clause to gating rules
+- fix warn-only falsehoods in the peak-witness field docs
+- review follow-up: pin the passive-hoist polarity and fix the raw_surface doc label
+- hoist the passive input-honesty guards to bot-independent validation
+- pass-side peak/margin extremums for pairwise and occupancy
+- classify gating vs warn_only with the run's escalation context
+- review follow-ups — wording truthfulness, suppression pin
+- top-level finding_summary — the skim-guard block
+- split the vacuity note vocabulary
+- ci Update taiki-e/install-action action to v2.90.11
+
 ## [0.22.0](https://github.com/mcanevet/bevy_playtest/compare/v0.21.0...v0.22.0) - 2026-11-26
 
 ### Other
