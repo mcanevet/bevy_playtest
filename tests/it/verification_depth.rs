@@ -94,6 +94,57 @@ fn replay_divergence_fires_on_nondeterministic_app() {
     );
 }
 
+/// A divergence-only report must still summarize honestly: the
+/// divergence finding is GATING, so a Fail with gating: 0 — the
+/// summary contradicting the status line — means the replay
+/// verification appended its violation AFTER the driver stamped the
+/// finding_summary without recomputing it. Pins the recompute at
+/// run_scenario_verified's tail (the plugin's subprocess path is
+/// covered end-to-end by takeover_e2e's stock-game divergence test,
+/// which pins the same status/replay_verified wire fields).
+#[test]
+fn replay_divergence_report_summarizes_the_divergence() {
+    let _slot = common::run_slot();
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static CALLS: AtomicU64 = AtomicU64::new(0);
+    let scenario = scenario_json(r#","verify_replay":true"#);
+    let mk = || {
+        let mut a = moving_cube_app();
+        a.add_systems(
+            bevy_app::Update,
+            |mut q: bevy_ecs::prelude::Query<&mut Transform>| {
+                // Process-global shared counter: state that differs
+                // between the two passes — same negative control as
+                // replay_divergence_fires_on_nondeterministic_app.
+                let j = CALLS.fetch_add(1, Ordering::SeqCst) as f32;
+                for mut t in q.iter_mut() {
+                    t.translation.y = j;
+                }
+            },
+        );
+        a
+    };
+    let report = bevy_playtest::replay::run_scenario_verified(mk, &scenario).unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
+    assert!(
+        report
+            .violations
+            .iter()
+            .any(|v| v.rule == "replay_divergence"),
+        "negative control must diverge: {report:?}"
+    );
+    let summary = report.finding_summary.expect(
+        "verified run must stamp a finding_summary — the driver \
+         computes it for every report it returns",
+    );
+    assert!(
+        summary.gating >= 1,
+        "a divergence-only Fail must not ship gating: 0 — the \
+         summary would contradict the status line: {summary:?}"
+    );
+    assert_eq!(report.replay_verified, Some(true));
+}
+
 #[test]
 fn replay_fingerprint_is_stable_across_identical_constructions() {
     let _slot = common::run_slot();
