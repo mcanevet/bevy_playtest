@@ -167,7 +167,9 @@
     never converted through tps). The soak judgment discards
     strictly-sub-window spans only, so a held record's span is
     always strictly below `window_s`; an at-window episode fails
-    the run and earns no entry
+    the run and earns no entry (warn-only rules excepted: a
+    soaked occupancy crowd WARNs — the run still passes, the
+    fired rule earning no held entry either way)
   - `pair_judgments` (`pairwise_separation` only) — run-total
     pair-judgments: `n·(n−1)/2` per frame where the selector
     resolved and ≥2 checkable entities co-existed, summed over the
