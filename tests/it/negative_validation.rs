@@ -180,6 +180,83 @@ fn passive_with_scripted_inputs_rejects() {
     }
 }
 
+/// The HOISTED matrix corners: `passive` promises no inputs, and
+/// the promise is BOT-INDEPENDENT. Before the hoist the honesty
+/// guards were per-bot-type — synthetic_keyboard rejected
+/// passive+scripted-lists, chaos rejected passive+raw_surface —
+/// and the cross corners loaded silently:
+/// - passive CHAOS + mouse_clicks/mouse_motion: the scripted mouse
+///   system is scheduled unconditionally, so the clicks/moves
+///   STILL FIRED while the report claimed an observe-only run —
+///   the loud lie.
+/// - passive CHAOS + key_presses: the synthetic keyboard system
+///   runs only for the synthetic_keyboard bot, so the keys were
+///   silently discarded — a quieter lie, but the scenario still
+///   declared a contradiction the loader swallowed.
+/// - passive SYNTHETIC_KEYBOARD + raw_surface: the mirror corner —
+///   the chaos-side surface guard did not apply.
+#[test]
+fn passive_chaos_with_mouse_clicks_rejects() {
+    let mut json = minimal_scenario("chaos");
+    json["bot"]["passive"] = serde_json::json!(true);
+    json["bot"]["mouse_clicks"] =
+        serde_json::json!([{ "frame": 0, "button": "left", "x": 10.0, "y": 10.0 }]);
+    let s = parse(json);
+    match validate_scenario(&s) {
+        Err(ScenarioError::Rejected(msg)) => {
+            assert!(msg.contains("passive"), "{msg}");
+            assert!(msg.contains("scripted inputs"), "{msg}");
+        }
+        other => panic!("passive chaos + mouse_clicks must reject, got {other:?}"),
+    }
+}
+
+#[test]
+fn passive_chaos_with_key_presses_rejects() {
+    let mut json = minimal_scenario("chaos");
+    json["bot"]["passive"] = serde_json::json!(true);
+    json["bot"]["key_presses"] = serde_json::json!([{ "frame": 0, "key": "w", "hold_frames": 1 }]);
+    let s = parse(json);
+    match validate_scenario(&s) {
+        Err(ScenarioError::Rejected(msg)) => {
+            assert!(msg.contains("passive"), "{msg}");
+            assert!(msg.contains("scripted inputs"), "{msg}");
+        }
+        other => panic!("passive chaos + key_presses must reject, got {other:?}"),
+    }
+}
+
+#[test]
+fn passive_chaos_with_mouse_motion_rejects() {
+    let mut json = minimal_scenario("chaos");
+    json["bot"]["passive"] = serde_json::json!(true);
+    json["bot"]["mouse_motion"] =
+        serde_json::json!([{ "frame": 0, "dx": 1.0, "dy": 0.0, "repeat_frames": 10 }]);
+    let s = parse(json);
+    match validate_scenario(&s) {
+        Err(ScenarioError::Rejected(msg)) => {
+            assert!(msg.contains("passive"), "{msg}");
+            assert!(msg.contains("scripted inputs"), "{msg}");
+        }
+        other => panic!("passive chaos + mouse_motion must reject, got {other:?}"),
+    }
+}
+
+#[test]
+fn passive_synthetic_keyboard_with_raw_surface_rejects() {
+    let mut json = minimal_scenario("synthetic_keyboard");
+    json["bot"]["passive"] = serde_json::json!(true);
+    json["bot"]["raw_surface"] = serde_json::json!({ "keys": ["Space"], "mouse_buttons": [] });
+    let s = parse(json);
+    match validate_scenario(&s) {
+        Err(ScenarioError::Rejected(msg)) => {
+            assert!(msg.contains("passive"), "{msg}");
+            assert!(msg.contains("input surface"), "{msg}");
+        }
+        other => panic!("passive synthetic_keyboard + raw_surface must reject, got {other:?}"),
+    }
+}
+
 /// `"oracles": []` parses to "run all" — the same meaning as `None`. A
 /// user writing `[]` almost certainly intends "none", which is not
 /// implemented. Until it is, the empty list must reject.
