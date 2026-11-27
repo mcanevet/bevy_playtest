@@ -251,8 +251,8 @@ finding, no minimum dwell (the one-frame clip counts; the form
 for zones where no presence is ever legitimate, sealed pits).
 Because the driver fields measure a soak, they REQUIRE
 `window_s`: declaring them on a windowless rule rejects at
-load. The "fires one finding
-per incursion episode" promise is delivered by the episode-fold
+load. The "fires one finding per incursion episode" promise is
+delivered by the episode-fold
 machinery, not the literal sketch above, so the entry frame and
 position arrive as the episode's evidence: worst penetration depth +
 frame, per-distinct-entity capped roster with truncation disclosed,
