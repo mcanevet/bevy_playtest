@@ -165,8 +165,7 @@ name reads the same either way:
 
 ```
 unknown component 'Time' — not registered in this game's TypeRegistry
-(components need #[derive(Reflect)] WITH its ECS role attribute
-(#[reflect(Component)]) plus App::register_type, or the name must be
+(components need #[derive(Reflect)] and App::register_type, or the name must be
 the full registered type path)
 ```
 
@@ -975,7 +974,8 @@ Two distinct error classes, at different stages:
 Every `with_component` selector (and `allow_if` exemptions,
 `min_distance_from` anchors) resolves the SAME way: full
 registered type path, or an unambiguous final path segment
-(with a did-you-mean for close typos). Resolution succeeds
+(with a did-you-mean suggestion for close typos; an ambiguous
+short name instead rejects listing the candidates). Resolution succeeds
 once the type carries `#[derive(Reflect)]` and has been passed
 to `App::register_type` — but what the RULE then does with
 the resolved type differs, and that difference decides the
@@ -988,10 +988,10 @@ second prerequisite:
 | `derived_transform_consistency` | archetype (child pairs, parents) | **No** — registration alone |
 | `nodes_in_bounds` | archetype | **No** — registration alone |
 | `spawn_safety` (member and anchor) | archetype | **No** — registration alone |
-| `occupancy_cap` | archetype | **In practice, yes** — membership is archetype-decided, but the walker additionally rejects a registration carrying no ReflectComponent data (added by the attribute), so the attribute is effectively required |
+| `occupancy_cap` | archetype | **In practice, yes** — membership is archetype-decided, but the walker additionally rejects a registration carrying no ReflectComponent data (supplied by `#[reflect(Component)]` — or automatically for `#[reflect(Resource)]` types, which Bevy 0.20 registers the data for), so a plain component type is effectively required to carry the attribute |
 | `component_check` | archetype | **Yes — required**: the rule READS component values through reflected-data access; a registered type without ReflectComponent data is an `oracle_error` naming `#[reflect(Component)]` |
 | `entity_stagnation` | archetype | **Yes — required**: the digest reads reflected field values the same way |
-| `resource_check` / `stagnant_resource` | n/a (`resource` field) | n/a — resources need `#[derive(Reflect)]` + `#[reflect(Resource)]`; the same `ReflectComponent` data is additionally required for the read itself (Bevy 0.20 reads reflected resources through the component registration) |
+| `resource_check` / `stagnant_resource` | n/a (`resource` field) | n/a — resources need `#[derive(Reflect)]` + `#[reflect(Resource)]`, which auto-registers the ReflectComponent data the read goes through (Bevy 0.20 reads reflected resources via the component registration); the `#[reflect(Component)]` attribute itself is not the resource-side requirement |
 
 Consequences worth knowing before the first run:
 
@@ -1000,14 +1000,31 @@ Consequences worth knowing before the first run:
   attribute + `App::register_type` is the universally safe
   form. The registration-without-attribute corner exists only
   for types derived and registered without the component role.
-- A type that is registered but is a RESOURCE (or plain data
-  carrying no component role at all) passes NONE of the rows'
-  membership step — `resolve_registration` resolves it, but no
-  entity ever bears it, and the outcome is vacuity (or, for
-  the value-reading rules, a specific
-  not-a-reflected-component config error naming the exact
-  attribute to add).
-- Selector resolution runs at load AND at every frame — a
+- Naming the wrong KIND of type behaves differently by the
+  type's role, and neither path is what you might expect:
+  - Plain reflected data (no ECS role attribute) carries no
+    ReflectComponent data and no entity ever bears it: the
+    marker rules come out vacuous, and the value-reading
+    rules reject with the not-a-reflected-component config
+    error naming the attribute to add.
+  - A `#[reflect(Resource)]` type is a genuine trap: Bevy 0.20
+    auto-registers ReflectComponent data for it (reflected
+    resource reads go through the component registration),
+    and resources are entity-backed — exactly one entity
+    bears the type, visible to every archetype walk. The
+    spatial marker rules still end vacuous, but only because
+    the resource entity carries no `Transform` (no frame ever
+    offers a checkable entity). The value-reading rules are
+    worse: they READ and judge the resource's fields through
+    the auto-supplied data, so a `component_check` or
+    `entity_stagnation` pointing a `with_component` selector
+    at a resource silently judges it instead of erroring. To
+    check a resource, use the `resource` field
+    (`resource_check` / `stagnant_resource`), never a
+    `with_component` selector.
+- Selector resolution runs at first evaluation (frame 0 of a
+  run; lint mode resolves once up front and rejects unknown
+  names there) and again at every frame — a
   type registered late (after `App::register_type` was called
   mid-run) is picked up on the frames after its registration.
 
@@ -1028,8 +1045,8 @@ classic first-run mistake:
   click past the screen edge would). They are **window pixels,
   never world units**: the harness does not own your camera, so
   it cannot convert pixels to your world plane — pin where a
-  widget actually renders on screen (a screenshot probe is the
-  reliable way) before scripting a click at it.
+  widget actually renders on screen (capturing a screenshot of
+  the running game is the reliable way) before scripting a click at it.
 - The CHAOS bot's random cursor draws are quantized and scaled
   into the real window's logical size when one exists, else a
   theoretical 1280×1280 viewport — so chaos clicks stay
