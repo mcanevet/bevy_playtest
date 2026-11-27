@@ -3311,9 +3311,13 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         finding_summary: None,
     };
     // Top-level finding summary: computed LAST, after every row it
-    // summarizes (violations, held_invariants) is final. Pure
-    // function of the report's own rows.
-    report.compute_finding_summary();
+    // summarizes (violations, held_invariants) is final. Uses the
+    // SAME escalation context the verdict used, so the counts can
+    // never disagree with the status line.
+    report.compute_finding_summary(
+        scenario.strict_warnings,
+        scenario.liveness.progress.require_surface,
+    );
     Ok(report)
 }
 

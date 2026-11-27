@@ -567,9 +567,11 @@ fn run_lint(
         })
         .collect();
     // Same summary contract as a real run: pure function of the
-    // report's own rows (lint findings gate; a lint run has no held
-    // trace, so no near-miss rows).
-    report.compute_finding_summary();
+    // report's own rows plus escalation context (lint findings gate
+    // unconditionally — never informational, never escalated — so
+    // false/false is the accurate context here; a lint run has no
+    // held trace, so no near-miss rows).
+    report.compute_finding_summary(false, false);
     if let Err(err) = write_report(report_path, &report) {
         eprintln!("bevy_playtest: {err}");
         std::process::exit(exit_code::CONFIG_ERROR);
