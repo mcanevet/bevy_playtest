@@ -566,6 +566,10 @@ fn run_lint(
             meta: None,
         })
         .collect();
+    // Same summary contract as a real run: pure function of the
+    // report's own rows (lint findings gate; a lint run has no held
+    // trace, so no near-miss rows).
+    report.compute_finding_summary();
     if let Err(err) = write_report(report_path, &report) {
         eprintln!("bevy_playtest: {err}");
         std::process::exit(exit_code::CONFIG_ERROR);
