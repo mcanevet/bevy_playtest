@@ -33,6 +33,7 @@ mod engine_clock_drivers;
 mod entity_stagnation;
 mod explorer;
 mod fault_injection;
+mod finding_summary;
 mod forbidden_region;
 mod frozen_world_detail;
 mod held_invariants;

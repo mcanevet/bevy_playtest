@@ -266,6 +266,80 @@ pub struct PlaytestReport {
     #[cfg(feature = "screen-liveness")]
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub screen_liveness: Option<crate::discovery::screen_liveness::ScreenLivenessResult>,
+
+    /// Top-level finding summary (anti-false-confidence): the counts
+    /// a report skimmer reads first, joined over the report's own
+    /// rows instead of leaving the reader to reconstruct them from
+    /// `violations` (gating vs informational vs warn-only) and
+    /// `held_invariants` (the near-miss aggregates). Absent on
+    /// crash stubs and pre-field reports; additive — older readers
+    /// deserialize it as `None`, never as zero, so absence means
+    /// "not summarized", not "nothing happened".
+    ///
+    /// The near-miss row is the skim guard the soak doctrine owes
+    /// every passing run: a Pass with `discarded_subsoak_episodes:
+    /// 3, span_vs_soak: 0.8` says "three transient episodes came
+    /// within 80% of failing this run" — a far cry from "nothing
+    /// happened".
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub finding_summary: Option<FindingSummary>,
+}
+
+/// Near-miss rows cap: worst-first, bounded — a report is a skim
+/// surface, not a log (held_invariants keeps the per-invariant
+/// detail).
+const NEAR_MISS_ROW_CAP: usize = 8;
+
+/// The top-level finding-summary block: per-verdict-class entry
+/// counts plus the near-miss aggregates over passing episode-tier
+/// invariants. Constant size. `warn_only` counts entries the run
+/// did NOT gate on (informational notes and warn-only rules'
+/// findings — `occupancy_cap` today); they are DISTINCT from
+/// `gating` because a skim that merges them inflates confidence
+/// in exactly the wrong direction.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct FindingSummary {
+    /// Entries whose rule gates the run status (a nonzero count on
+    /// a Pass report is impossible; on a Fail report these are
+    /// the findings that failed it).
+    pub gating: u64,
+    /// Informational notes and warn-only-rule findings: reported,
+    /// never gating (see [`crate::rules::Rule::is_informational`]
+    /// and the warn-only doctrine — `occupancy_cap` today).
+    pub warn_only: u64,
+    /// Per-episode-invariant near-miss rows for PASSING invariants
+    /// that observed at least one discarded sub-soak episode — the
+    /// "how close did this pass come to failing" story. Sorted by
+    /// ratio descending (worst first), capped at 8 rows.
+    pub near_misses: Vec<NearMissRow>,
+}
+
+/// One near-miss row: a passing episode-tier invariant that
+/// discarded at least one sub-soak episode, with the worst
+/// discarded episode's span against the invariant's authored soak.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct NearMissRow {
+    /// The invariant's authored name (joined from the held trace).
+    pub invariant: String,
+    /// The rule's report name (joined from the held trace).
+    pub rule: String,
+    /// Sub-soak episodes the soak judgment discarded as transient
+    /// for this invariant over the whole run (a passing run by
+    /// definition discarded every episode it saw).
+    pub discarded_subsoak_episodes: u64,
+    /// The worst discarded episode's driver-unit span.
+    pub worst_span: f64,
+    /// The frame the worst discarded episode started at.
+    pub worst_span_frame: u64,
+    /// The authored soak (`window_s`) the worst episode fell short
+    /// of, in the same driver units as `worst_span` (the authored
+    /// f32 widened to the span's f64; seconds only for the
+    /// frame-clock driver default).
+    pub soak: f64,
+    /// `worst_span / soak`, clamped to < 1 by the pass-side
+    /// definition (a passing run's every episode was sub-soak).
+    /// 0.0 when the soak is 0 or non-finite (defensive).
+    pub span_vs_soak: f64,
 }
 
 impl PlaytestReport {
@@ -316,6 +390,9 @@ impl PlaytestReport {
             render_liveness: None,
             #[cfg(feature = "screen-liveness")]
             screen_liveness: None,
+            // Crash stub: the run never produced a summarizable
+            // finding set; absence never means "clean".
+            finding_summary: None,
         }
     }
 
@@ -327,6 +404,73 @@ impl PlaytestReport {
         rules.sort_unstable();
         rules.dedup();
         rules
+    }
+
+    /// Build the top-level [`Self::finding_summary`] from the
+    /// report's own rows — run once at report assembly. The counts
+    /// join `violations` against the rule registry's
+    /// informationality (gating vs informational/warn-only); the
+    /// near-miss rows join `held_invariants` for passing
+    /// episode-tier invariants that saw at least one discarded
+    /// sub-soak episode. Pure function of the report — no data
+    /// outside it, so the summary can never drift from the rows it
+    /// summarizes.
+    pub fn compute_finding_summary(&mut self) {
+        let mut gating = 0u64;
+        let mut warn_only = 0u64;
+        for v in &self.violations {
+            if crate::rules::Rule::from_name(&v.rule)
+                .map(|r| !r.is_informational())
+                .unwrap_or(true)
+            {
+                gating += 1;
+            } else {
+                warn_only += 1;
+            }
+        }
+        let mut near_misses: Vec<NearMissRow> = Vec::new();
+        for h in &self.held_invariants {
+            // Episode-tier held entries carry the near-miss fields;
+            // anything else (flat tiers, spawn_safety) has nothing
+            // to summarize here.
+            let (Some(episodes), Some((worst_span, worst_span_frame)), Some(soak)) = (
+                h.episodes_observed,
+                h.worst_episode_span.zip(h.worst_episode_frame),
+                h.window_s,
+            ) else {
+                continue;
+            };
+            if episodes == 0 {
+                continue;
+            }
+            let ratio = if soak.is_finite() && soak > 0.0 {
+                worst_span / (soak as f64)
+            } else {
+                0.0
+            };
+            near_misses.push(NearMissRow {
+                invariant: h.name.clone(),
+                rule: h.rule.clone(),
+                discarded_subsoak_episodes: episodes,
+                worst_span,
+                worst_span_frame,
+                soak: soak as f64,
+                span_vs_soak: ratio,
+            });
+        }
+        // Worst first: the invariant that came closest to failing
+        // leads the list; ties keep insertion order (stable sort).
+        near_misses.sort_by(|a, b| {
+            b.span_vs_soak
+                .partial_cmp(&a.span_vs_soak)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        near_misses.truncate(NEAR_MISS_ROW_CAP);
+        self.finding_summary = Some(FindingSummary {
+            gating,
+            warn_only,
+            near_misses,
+        });
     }
 
     /// Sorted, deduplicated list of `(rule, target)` pairs — for

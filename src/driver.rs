@@ -3261,7 +3261,7 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         tps,
         &|name| snap.iter().any(|v| v.target == name),
     );
-    Ok(PlaytestReport {
+    let mut report = PlaytestReport {
         schema_version: 1,
         status,
         violations: snap,
@@ -3306,7 +3306,15 @@ pub fn run_scenario(app: &mut App, scenario: &Scenario) -> Result<PlaytestReport
         render_liveness: render_liveness_tracker_result,
         #[cfg(feature = "screen-liveness")]
         screen_liveness: screen_liveness_result,
-    })
+        // Stamped by compute_finding_summary below — last, after
+        // every row it summarizes is final.
+        finding_summary: None,
+    };
+    // Top-level finding summary: computed LAST, after every row it
+    // summarizes (violations, held_invariants) is final. Pure
+    // function of the report's own rows.
+    report.compute_finding_summary();
+    Ok(report)
 }
 
 fn is_chaos_bot(scenario: Option<Res<ScenarioResource>>) -> bool {

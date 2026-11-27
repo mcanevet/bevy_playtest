@@ -19,6 +19,23 @@
   scope, parent never readable — full or partial blindness,
   disclosed) are informational `(rule, target)` entries on a
   passing report
+- `finding_summary`: top-level skim-guard block (absent on crash
+  stubs and pre-field reports; additive). `gating` /
+  `warn_only` split the `violations` rows by verdict class — a
+  skim that merges them inflates confidence in exactly the wrong
+  direction; `warn_only` covers informational notes and warn-only
+  rules' findings (`occupancy_cap` today). `near_misses` rows
+  carry the pass-side near-miss story for passing episode-tier
+  invariants that discarded at least one sub-soak episode:
+  `invariant`, `rule`, `discarded_subsoak_episodes`, the worst
+  discarded episode's `worst_span` / `worst_span_frame` against
+  its authored `soak` (`window_s`, same driver units), and
+  `span_vs_soak` — how close this pass came to failing. Worst
+  first, capped at 8 rows; the per-invariant detail stays in
+  `held_invariants`. Guidance: pair any soak-family finding on a
+  failing run with the passing side's `discarded_subsoak_episodes`
+  check — episodes that ALMOST soaked are the calibration signal,
+  never noise
 - `metrics`: `{ input_count, frame_count, worst_frame_ms, crash_detected }`
 - `schema_version`, `frame_count`, `tps`, `simulated_duration_s`,
   `wall_time_s`, `error`
