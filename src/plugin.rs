@@ -1273,6 +1273,13 @@ fn verify_replay_subprocess(
         });
         report.status = crate::enums::PlaytestStatus::Fail;
     }
+    // Attestation: the two-pass mechanism executed (this parent ran
+    // pass A in-process, re-ran the game as a subprocess for pass B,
+    // and compared the series — crash-exempt skips still compared
+    // what could be compared, outcome visible in status/violations).
+    // Asserts performance, not a clean result: a divergence finding
+    // means verification ran and found it.
+    report.replay_verified = Some(true);
     Ok(report)
 }
 

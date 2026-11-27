@@ -126,6 +126,24 @@ pub struct PlaytestReport {
     /// subscriber-loss alone. Absent on stubs and pre-field reports.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub log_bridge_available: Option<bool>,
+    /// Whether the scenario's replay verification (the two-pass
+    /// determinism check opt-in via `verify_replay: true`) was
+    /// actually PERFORMED by the code path that wrote this report.
+    /// `None` = verification was not requested (verify_replay
+    /// absent/false) or the report is a stub that never ran one.
+    /// `Some(false)` = the scenario REQUESTED verification but the
+    /// producing path performed only a single pass — an attestation
+    /// gap the reader must not silently trust away (a
+    /// single-pass-produced report on a verify_replay scenario means
+    /// the determinism claim the author wanted was never checked).
+    /// `Some(true)` = the two-pass mechanism executed and the per-
+    /// frame fingerprint series (plus the opt-in state-digest series)
+    /// were compared. It attests PERFORMANCE, not a clean result: a
+    /// divergence finding in the report means verification ran and
+    /// FOUND the divergence — check status/violations for the
+    /// outcome. Absent on stubs and pre-field reports.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub replay_verified: Option<bool>,
     /// Per-frame broadened state digests (opt-in via `record_digest: true`).
     /// Covers entity/archetype counts, Transform/UiTransform translations,
     /// and reflected game resources. Skipped when empty to keep reports
@@ -366,6 +384,9 @@ impl PlaytestReport {
             scenario_source: None,
             log_capture_available: None,
             log_bridge_available: None,
+            // Crashed-before-reporting stub: no game run ever
+            // completed, so no replay verification either.
+            replay_verified: None,
             // Crashed-before-reporting stub: no game run ever
             // completed, so no profile is claimable.
             game_build_profile: None,

@@ -232,6 +232,14 @@ pub fn run_scenario_verified(
         report.status = crate::enums::PlaytestStatus::Fail;
     }
 
+    // Attestation: the two-pass mechanism executed and both series
+    // were compared (crash-exempt skips included — those still
+    // COMPARED what could be compared, and the outcome is visible
+    // in status/violations). This stamp asserts performance, not a
+    // clean result: a divergence finding means verification ran
+    // and found it.
+    report.replay_verified = Some(true);
+
     Ok(report)
 }
 

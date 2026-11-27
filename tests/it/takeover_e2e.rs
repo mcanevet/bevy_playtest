@@ -470,6 +470,9 @@ fn replay_verification_passes_on_deterministic_stock_game() {
     let report: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&report_path).unwrap()).unwrap();
     assert_eq!(report["status"], "pass", "{report}");
+    // Wire pin: the subprocess two-pass mechanism attests performance
+    // through the takeover path too.
+    assert_eq!(report["replay_verified"], true, "{report}");
 }
 
 #[test]
@@ -510,6 +513,9 @@ fn replay_divergence_fails_on_nondeterministic_stock_game() {
         rules.contains(&"replay_divergence"),
         "expected replay_divergence among {rules:?}"
     );
+    // Wire pin: a divergence finding means the mechanism RAN — the
+    // attestation stays true (performance, never outcome).
+    assert_eq!(report["replay_verified"], true, "{report}");
 }
 
 /// Takeover-mode digest handoff, end to end: a game whose only

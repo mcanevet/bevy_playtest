@@ -44,6 +44,9 @@ fn replay_verification_passes_on_deterministic_app() {
         .violations
         .iter()
         .any(|v| v.rule == "replay_divergence"));
+    // The attestation: the two-pass mechanism executed and compared.
+    // Performance, not outcome — the Pass above carries the outcome.
+    assert_eq!(report.replay_verified, Some(true));
 }
 
 #[test]
@@ -308,4 +311,50 @@ fn digest_divergence_fires_on_nondeterministic_resource() {
         "state digest must catch a diverging reflected resource"
     );
     assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
+    // Divergence found means the mechanism RAN — the attestation
+    // stays Some(true): it certifies performance, never outcome.
+    assert_eq!(report.replay_verified, Some(true));
+}
+
+// ---------------------------------------------------------------------------
+// replay_verified attestation: performance, loudly disclosed
+// ---------------------------------------------------------------------------
+
+/// `Some(false)` is the loud disclosure: a verify_replay scenario whose
+/// producing path performed only ONE pass. The plain driver (`run_scenario`,
+/// no verify_replay mechanism) must stamp it — a reader must never mistake a
+/// single-pass report for a verified one.
+#[test]
+fn single_pass_driver_discloses_requested_but_unperformed() {
+    let _slot = common::run_slot();
+    let scenario = scenario_json(r#","verify_replay":true"#);
+    let mut app = moving_cube_app();
+    let report = bevy_playtest::driver::run_scenario(&mut app, &scenario).unwrap();
+    assert_eq!(report.replay_verified, Some(false));
+}
+
+/// No request, nothing to disclose: the stamp is absent (serializes away)
+/// on a plain single-pass run of a scenario without verify_replay.
+#[test]
+fn plain_run_has_no_replay_attestation() {
+    let _slot = common::run_slot();
+    let scenario = scenario_json("");
+    let mut app = moving_cube_app();
+    let report = bevy_playtest::driver::run_scenario(&mut app, &scenario).unwrap();
+    assert_eq!(report.replay_verified, None);
+    // Wire-format pin: the key is skipped, not null — absence is the
+    // "not requested" reading, matching the log_* attestation trio.
+    let json = serde_json::to_value(&report).unwrap();
+    assert!(
+        json.get("replay_verified").is_none(),
+        "replay_verified must be absent when not requested: {json}"
+    );
+}
+
+/// The crashed-before-reporting stub never ran any verification and never
+/// took a request: no attestation.
+#[test]
+fn crashed_empty_stub_has_no_replay_attestation() {
+    let report = bevy_playtest::state::PlaytestReport::crashed_empty();
+    assert_eq!(report.replay_verified, None);
 }

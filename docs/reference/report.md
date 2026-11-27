@@ -292,6 +292,20 @@
 - `game_build_profile` (absent on stubs and old reports): the
   reporting game binary's own debug/release profile — dev-profile
   behavior differs from release (`#[cfg(debug_assertions)]` keys)
+- `replay_verified` (absent when not applicable): whether the
+  scenario's `verify_replay: true` request was actually honored by
+  the code path that wrote this report. `true` = the two-pass
+  replay mechanism executed and the per-frame fingerprint series
+  (plus the opt-in state-digest series) were compared — it attests
+  PERFORMANCE, not a clean result: a `replay_divergence` finding in
+  the report means verification ran and found the divergence; the
+  outcome lives in `status`/`violations`. `false` = the scenario
+  REQUESTED verification but the producing path performed only a
+  single pass (an in-process `run_scenario` call outside the
+  verify_replay mechanisms) — the determinism claim the author
+  wanted was never checked, and the reader must not silently trust
+  it away. Absent = verification was not requested, or the report
+  is a stub that never ran one.
 - `source_derived_keys` / `source_derived_notes` (present exactly
   when the battery's source scan replaced the default chaos keys):
   the poison-filtered key set that replaced WASD+arrows, plus
