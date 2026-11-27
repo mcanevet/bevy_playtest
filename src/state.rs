@@ -293,19 +293,23 @@ const NEAR_MISS_ROW_CAP: usize = 8;
 /// The top-level finding-summary block: per-verdict-class entry
 /// counts plus the near-miss aggregates over passing episode-tier
 /// invariants. Constant size. `warn_only` counts entries the run
-/// did NOT gate on (informational notes and warn-only rules'
-/// findings — `occupancy_cap` today); they are DISTINCT from
-/// `gating` because a skim that merges them inflates confidence
-/// in exactly the wrong direction.
+/// did NOT gate on under the SAME escalation context the verdict
+/// used (`strict_warnings` / `require_surface` escalate
+/// `log_warn` / `progress_surface_empty` — see
+/// [`crate::driver::is_progress_informational_public`]); they are
+/// DISTINCT from `gating` because a skim that merges them inflates
+/// confidence in exactly the wrong direction.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct FindingSummary {
-    /// Entries whose rule gates the run status (a nonzero count on
-    /// a Pass report is impossible; on a Fail report these are
-    /// the findings that failed it).
+    /// Entries whose rule gated the run status under the run's
+    /// escalation context. Zero on a Pass report by construction
+    /// (a gating entry would have flipped the status); on a
+    /// Fail/Crash report these are the findings that failed it.
     pub gating: u64,
-    /// Informational notes and warn-only-rule findings: reported,
-    /// never gating (see [`crate::rules::Rule::is_informational`]
-    /// and the warn-only doctrine — `occupancy_cap` today).
+    /// Entries the run did NOT gate on: informational notes and
+    /// warn-only rules' findings (`occupancy_cap` today), plus
+    /// `log_warn`/`progress_surface_empty` when the scenario did
+    /// NOT escalate them. Reported, never gating THIS run.
     pub warn_only: u64,
     /// Per-episode-invariant near-miss rows for PASSING invariants
     /// that observed at least one discarded sub-soak episode — the
@@ -336,9 +340,11 @@ pub struct NearMissRow {
     /// f32 widened to the span's f64; seconds only for the
     /// frame-clock driver default).
     pub soak: f64,
-    /// `worst_span / soak`, clamped to < 1 by the pass-side
-    /// definition (a passing run's every episode was sub-soak).
-    /// 0.0 when the soak is 0 or non-finite (defensive).
+    /// `worst_span / soak`, guaranteed < 1 by the pass-side soak
+    /// judgment (an at-or-above-window episode soaks and fails the
+    /// run, so it can never reach a passing held row). 0.0 when
+    /// the soak is 0 or non-finite (defensive only — a non-finite
+    /// span soaks and never reaches a held row either).
     pub span_vs_soak: f64,
 }
 
@@ -407,25 +413,31 @@ impl PlaytestReport {
     }
 
     /// Build the top-level [`Self::finding_summary`] from the
-    /// report's own rows — run once at report assembly. The counts
-    /// join `violations` against the rule registry's
-    /// informationality (gating vs informational/warn-only); the
-    /// near-miss rows join `held_invariants` for passing
-    /// episode-tier invariants that saw at least one discarded
-    /// sub-soak episode. Pure function of the report — no data
-    /// outside it, so the summary can never drift from the rows it
-    /// summarizes.
-    pub fn compute_finding_summary(&mut self) {
+    /// report's own rows and the scenario's escalation context —
+    /// run once at report assembly. The counts join `violations`
+    /// against the SAME contextual classifier the run verdict used
+    /// (`strict_warnings` escalates `log_warn` and
+    /// `progress_surface_empty`; `require_surface` escalates
+    /// `progress_surface_empty` — see
+    /// [`crate::driver::is_progress_informational_public`]), so the
+    /// summary's verdict-class split can never disagree with the
+    /// status line. The near-miss rows join `held_invariants` for
+    /// passing episode-tier invariants that saw at least one
+    /// discarded sub-soak episode. Pure function of the report's
+    /// own rows plus the escalation flags — no other data, so the
+    /// summary can never drift from the rows it summarizes.
+    pub fn compute_finding_summary(&mut self, strict_warnings: bool, require_surface: bool) {
         let mut gating = 0u64;
         let mut warn_only = 0u64;
         for v in &self.violations {
-            if crate::rules::Rule::from_name(&v.rule)
-                .map(|r| !r.is_informational())
-                .unwrap_or(true)
-            {
-                gating += 1;
-            } else {
+            if crate::driver::is_progress_informational_public(
+                &v.rule,
+                strict_warnings,
+                require_surface,
+            ) {
                 warn_only += 1;
+            } else {
+                gating += 1;
             }
         }
         let mut near_misses: Vec<NearMissRow> = Vec::new();
@@ -507,6 +519,10 @@ impl PlaytestReport {
             last_detail: msg.to_string(),
             meta: None,
         }];
+        // A scenario_error IS the gating finding of its report; the
+        // escalation flags never apply to it, so the honest summary
+        // is computable here without further context.
+        rep.compute_finding_summary(false, false);
         rep
     }
 }

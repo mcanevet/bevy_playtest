@@ -21,10 +21,16 @@
   passing report
 - `finding_summary`: top-level skim-guard block (absent on crash
   stubs and pre-field reports; additive). `gating` /
-  `warn_only` split the `violations` rows by verdict class — a
-  skim that merges them inflates confidence in exactly the wrong
-  direction; `warn_only` covers informational notes and warn-only
-  rules' findings (`occupancy_cap` today). `near_misses` rows
+  `warn_only` split the `violations` rows by verdict class under
+  the SAME escalation context the verdict used:
+  `strict_warnings` escalates `log_warn` /
+  `progress_surface_empty` to gating and
+  `liveness.progress.require_surface` escalates
+  `progress_surface_empty` — the summary can never disagree with
+  the status line. `warn_only` covers informational notes and
+  warn-only rules' findings (`occupancy_cap` today), plus
+  `log_warn`/`progress_surface_empty` on runs that did not
+  escalate them. `near_misses` rows
   carry the pass-side near-miss story for passing episode-tier
   invariants that discarded at least one sub-soak episode:
   `invariant`, `rule`, `discarded_subsoak_episodes`, the worst

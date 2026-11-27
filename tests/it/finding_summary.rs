@@ -182,13 +182,13 @@ fn clean_pass_carries_zero_summary() {
     assert_eq!(summary.gating, 0);
     assert_eq!(summary.warn_only, 0);
     // The invariant judged every frame but no episode ever formed:
-    // a clean zero, not a missing row.
+    // the held row carries `episodes_observed: Some(0)` with no
+    // worst-span pair, which the join excludes BEFORE the zero
+    // check — so the near-miss list is EMPTY, not a zero row.
     assert!(
-        summary
-            .near_misses
-            .iter()
-            .all(|r| r.discarded_subsoak_episodes == 0)
-            || summary.near_misses.is_empty()
+        summary.near_misses.is_empty(),
+        "a never-episodic invariant yields no near-miss row: {:?}",
+        summary.near_misses
     );
 }
 
@@ -230,4 +230,95 @@ fn summary_serializes_stably() {
 fn crash_stub_has_no_summary() {
     let report = bevy_playtest::state::PlaytestReport::crashed_empty();
     assert!(report.finding_summary.is_none());
+}
+
+/// A scenario_error report is its own gating finding: the summary
+/// counts it as gating even though the run never executed (the
+/// public-API contract — no escalation context applies).
+#[test]
+fn scenario_error_summary_counts_itself_gating() {
+    let report = bevy_playtest::state::PlaytestReport::scenario_error("bad scenario");
+    let summary = report
+        .finding_summary
+        .as_ref()
+        .expect("a scenario_error report summarizes its own row");
+    assert_eq!(summary.gating, 1);
+    assert_eq!(summary.warn_only, 0);
+}
+
+/// A moving entity: keeps the run observable for the oracles
+/// (vacuity guard, frozen-world) without asserting anything about
+/// it — same shape as the driver-smoke suite's fixture.
+fn observable_moving_entity(app: &mut App) {
+    app.add_systems(Update, |mut q: Query<&mut Transform>| {
+        for (i, mut t) in q.iter_mut().enumerate() {
+            t.translation.x = (i as f32) + 1.0;
+        }
+    });
+    app.world_mut().spawn(Transform::from_xyz(0.0, 0.0, 0.0));
+}
+
+/// THE ESCALATION CONTRACT: a `strict_warnings` run that fails on a
+/// `log_warn` entry must count that entry as GATING — the summary
+/// uses the same contextual classifier as the verdict, so it can
+/// never tell a skimmer "these didn't gate" about the very findings
+/// that failed the run. This is the exact blocker the adversarial
+/// review caught in the name-only join.
+#[test]
+fn strict_escalated_warn_counts_gating_on_fail_report() {
+    let _slot = common::run_slot();
+    let mut app = App::new();
+    app.add_plugins((bevy_app::TaskPoolPlugin::default(), TransformPlugin));
+    app.add_systems(Update, || tracing::warn!("deliberate warn"));
+    observable_moving_entity(&mut app);
+    let scen: bevy_playtest::scenario::Scenario = serde_json::from_str(
+        r#"{"bot":{"type":"chaos","seed":42},"duration_s":1.0,"tps":60,
+            "invariants":[],"strict_warnings":true}"#,
+    )
+    .unwrap();
+    let report = run_scenario(&mut app, &scen).unwrap();
+    assert!(
+        report.violations.iter().any(|v| v.rule == "log_warn"),
+        "the warn entry must be present for its escalation to be the story"
+    );
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Fail);
+    let summary = report
+        .finding_summary
+        .as_ref()
+        .expect("a failing run carries the summary");
+    assert!(
+        summary.gating >= 1,
+        "an escalated log_warn must count GATING (the findings that \
+         failed the run), got gating={} warn_only={}",
+        summary.gating,
+        summary.warn_only
+    );
+    assert_eq!(summary.warn_only, 0, "the warn entry is the gating one");
+    assert!(summary.near_misses.is_empty(), "no held trace on this run");
+}
+
+/// The context cuts the other way by default: the SAME warn-shaped
+/// entry on a NON-escalated run is informational — counted warn_only
+/// while the run still passes. The two tests together pin that the
+/// classifier is CONTEXTUAL, not name-only.
+#[test]
+fn non_escalated_warn_stays_warn_only_on_pass_report() {
+    let _slot = common::run_slot();
+    let mut app = App::new();
+    app.add_plugins((bevy_app::TaskPoolPlugin::default(), TransformPlugin));
+    app.add_systems(Update, || tracing::warn!("deliberate warn"));
+    observable_moving_entity(&mut app);
+    let scen: bevy_playtest::scenario::Scenario = serde_json::from_str(
+        r#"{"bot":{"type":"chaos","seed":42},"duration_s":1.0,"tps":60,
+            "invariants":[]}"#,
+    )
+    .unwrap();
+    let report = run_scenario(&mut app, &scen).unwrap();
+    assert_eq!(report.status, bevy_playtest::enums::PlaytestStatus::Pass);
+    let summary = report.finding_summary.as_ref().expect("summary present");
+    assert_eq!(summary.gating, 0);
+    assert!(
+        summary.warn_only >= 1,
+        "the non-escalated log_warn entry counts warn_only"
+    );
 }
