@@ -13,7 +13,12 @@
   ship-gate honesty) renders its findings as ordinary entries here
   on a status `"Pass"` report; there is no separate
   informational section, and `_meta.unpromoted_rule` plus the
-  detail's warn-only sentence mark the posture
+  detail's warn-only sentence mark the posture. Notes ride it
+  too: `derived_transform_consistency`'s `hierarchy_absent`
+  (truly flat world) and `unjudgeable_parent` (hierarchy in
+  scope, parent never readable — full or partial blindness,
+  disclosed) are informational `(rule, target)` entries on a
+  passing report
 - `metrics`: `{ input_count, frame_count, worst_frame_ms, crash_detected }`
 - `schema_version`, `frame_count`, `tps`, `simulated_duration_s`,
   `wall_time_s`, `error`

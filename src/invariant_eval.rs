@@ -3195,11 +3195,18 @@ pub fn audit_forbidden_region(
 #[derive(Resource, Default)]
 pub struct ConsistencyBookkeeping {
     /// Invariant name → at least one parented, checkable entity was
-    /// observed in at least one judged frame. Otherwise the world is
-    /// flat and the audit reports `hierarchy_absent`
+    /// observed in at least one judged frame. Otherwise the world
+    /// is flat and the audit reports `hierarchy_absent`
     /// (informational — a flat world is a coherent scene the rule
     /// cannot judge, not a misauthored invariant).
     pub matched: std::collections::HashSet<String>,
+    /// Invariant name → at least one in-scope parented entity was
+    /// seen whose parent was never observable with a
+    /// GlobalTransform. When `matched` is ALSO empty the world is
+    /// NOT flat — the audit reports `unjudgeable_parent` instead of
+    /// the flattering `hierarchy_absent`; when `matched` is set,
+    /// the audit still discloses the partial blindness once.
+    pub unjudgeable_parent: std::collections::HashSet<String>,
     /// Invariant name → a resolution/config failure was seen during
     /// the run (already reported as `oracle_error`); the audit
     /// suppresses its vacuity entry so the game is not blamed for
@@ -3248,6 +3255,11 @@ struct DtcOutcome {
     /// At least one parented, checkable entity was observed this
     /// frame (observability for the vacuity audit).
     parented_seen: bool,
+    /// At least one in-scope parented entity was seen this frame
+    /// whose PARENT was unobservable (no readable GlobalTransform)
+    /// — the anti-false-confidence signal that distinguishes a
+    /// broken-but-unreadable hierarchy from a flat world.
+    unjudgeable_parent: bool,
     /// How many parented, checkable entities the walk judged this
     /// frame — the workload figure behind `entity_judgments`. Zero
     /// when nothing was checkable.
@@ -3389,6 +3401,7 @@ fn eval_consistency(
         driver: None,
         config_error: Some(why),
         parented_seen: false,
+        unjudgeable_parent: false,
         checkable_count: 0,
     };
     // Driver sample: declared leaf, or the frame clock (seconds) —
@@ -3432,6 +3445,7 @@ fn eval_consistency(
                     driver,
                     config_error: None,
                     parented_seen: false,
+                    unjudgeable_parent: false,
                     checkable_count: 0,
                 };
             }
@@ -3479,6 +3493,7 @@ fn eval_consistency(
             driver,
             config_error: None,
             parented_seen: false,
+            unjudgeable_parent: false,
             checkable_count: 0,
         };
     };
@@ -3488,6 +3503,7 @@ fn eval_consistency(
     let tolerance = inv.tolerance.unwrap_or(DEFAULT_CONSISTENCY_TOLERANCE);
     let mut obs: Vec<crate::episode::Observation<u32>> = Vec::new();
     let mut parented_seen = false;
+    let mut unjudgeable_parent = false;
     // The per-frame judged-entity count — the workload figure for
     // the held record (entities re-walked each frame are
     // re-counted, the component tier's entity_judgments doctrine).
@@ -3532,6 +3548,8 @@ fn eval_consistency(
             let Some(child_of) = entity_ref.get::<bevy_ecs::hierarchy::ChildOf>() else {
                 continue;
             };
+            // The triple must be readable on the child; only then
+            // can the PARENT's observability decide judgeability.
             let Some(transform) = entity_ref.get::<bevy_transform::prelude::Transform>() else {
                 continue;
             };
@@ -3547,6 +3565,10 @@ fn eval_consistency(
             let Some(parent_global) =
                 world.get::<bevy_transform::prelude::GlobalTransform>(child_of.parent())
             else {
+                // Disclosed blindness, not a silent skip: an
+                // in-scope parented entity exists but the
+                // compositional identity cannot be judged for it.
+                unjudgeable_parent = true;
                 continue;
             };
             parented_seen = true;
@@ -3586,6 +3608,7 @@ fn eval_consistency(
         driver,
         config_error: None,
         parented_seen,
+        unjudgeable_parent,
         checkable_count,
     }
 }
@@ -3613,6 +3636,9 @@ fn apply_dtc_outcome(
     }
     if outcome.parented_seen {
         book.matched.insert(inv.name.clone());
+    }
+    if outcome.unjudgeable_parent {
+        book.unjudgeable_parent.insert(inv.name.clone());
     }
     // Held-trace workload fold: judged frames and entity-judgments.
     // Only frames that judged ≥1 checkable parented entity count
@@ -3797,21 +3823,78 @@ pub fn audit_derived_transform_consistency(
             continue;
         }
         if !book.matched.contains(&inv.name) {
+            // Vocabulary split (anti-false-confidence): a world with
+            // NO parented entity at all is flat — the coherent-
+            // scene `hierarchy_absent` note. A world that DID have
+            // an in-scope parented entity whose parent was never
+            // observable is NOT flat — the note must say so, or a
+            // broken-but-unreadable hierarchy reads as a coherent
+            // flat world.
+            if book.unjudgeable_parent.contains(&inv.name) {
+                entries.push(crate::state::ViolationEntry {
+                    rule: crate::rules::Rule::UnjudgeableParent.name().to_string(),
+                    target: inv.name.clone(),
+                    first_frame: 0,
+                    last_frame,
+                    count: 1,
+                    detail: format!(
+                        "invariant '{}' found a parented entity in scope but \
+                         its parent was never observable with a GlobalTransform \
+                         over the whole run; the compositional identity could not \
+                         be judged for that subtree — this is not a flat world. \
+                         Give the parent a readable GlobalTransform, or scope the \
+                         rule away from the unjudgeable subtree",
+                        inv.name
+                    ),
+                    last_detail: format!(
+                        "invariant '{}' never saw a readable parent GlobalTransform",
+                        inv.name
+                    ),
+                    meta: None,
+                });
+            } else {
+                entries.push(crate::state::ViolationEntry {
+                    rule: crate::rules::Rule::HierarchyAbsent.name().to_string(),
+                    target: inv.name.clone(),
+                    first_frame: 0,
+                    last_frame,
+                    count: 1,
+                    detail: format!(
+                        "invariant '{}' never found a parented entity to check over \
+                         the whole run; a flat world is a coherent scene this rule \
+                         cannot judge — scope the rule to a hierarchy-bearing \
+                         selector, or drop it from this scenario",
+                        inv.name
+                    ),
+                    last_detail: format!(
+                        "invariant '{}' never found a parented entity to check",
+                        inv.name
+                    ),
+                    meta: None,
+                });
+            }
+        } else if book.unjudgeable_parent.contains(&inv.name) {
+            // Partial blindness: some parented entities were judged
+            // but at least one in-scope subtree stayed unreadable —
+            // disclosed once, never allowed to silently vanish into
+            // a green run.
             entries.push(crate::state::ViolationEntry {
-                rule: crate::rules::Rule::HierarchyAbsent.name().to_string(),
+                rule: crate::rules::Rule::UnjudgeableParent.name().to_string(),
                 target: inv.name.clone(),
                 first_frame: 0,
                 last_frame,
                 count: 1,
                 detail: format!(
-                    "invariant '{}' never found a parented entity to check over \
-                     the whole run; a flat world is a coherent scene this rule \
-                     cannot judge — scope the rule to a hierarchy-bearing \
-                     selector, or drop it from this scenario",
+                    "invariant '{}' judged some parented entities, but at least \
+                     one in-scope parented entity's parent was never observable \
+                     with a GlobalTransform; its compositional identity went \
+                     unchecked for the whole run — a partial verdict, not a full \
+                     one",
                     inv.name
                 ),
                 last_detail: format!(
-                    "invariant '{}' never found a parented entity to check",
+                    "invariant '{}' has an unchecked subtree: an in-scope \
+                     parent was never observable with a GlobalTransform",
                     inv.name
                 ),
                 meta: None,

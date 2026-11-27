@@ -62,6 +62,7 @@ impl Rule {
             Self::DerivedTransformConsistency => "Compositional identity over Bevy's derived Transform relationship: every parented entity's GlobalTransform must equal the parent's GlobalTransform composed with its own Transform, both read at the same settled frame — stale or foreign-written globals (sprites frozen at identity under a moving parent) are state bugs, folded into episodes that must persist past a window_s soak. Promoted to gating (fail-power) on flip-test evidence: the multi-child pile-up fixture comes out RED with the defect present and GREEN with it absent, and the rotating/scaling hierarchy stays coherent — the rule earned trust by demonstrating the discrimination, not by optimism (proposal §2).",
             Self::EntityStagnation => "Per-entity rate-form liveness (judgement layer, second vocabulary): each selected entity's watched reflect path must not stay digest-constant while the driver leaf advances — entity-scoped livelocks (a guest queued forever at a demolished ride, `waited` frozen while the park clock runs) are invisible to every flat oracle. Entities leave the stuck set on any scoped change or on despawn (turnover is acquittal, never a refund); the still-stuck set is sampled every sampling_s of driver advance, folded into a shared-timeline episode per invariant, and only an episode soaking past window_s (driver-leaf units) becomes a finding with a capped per-guest _meta roster.",
             Self::HierarchyAbsent => "A derived_transform_consistency rule found no parented entities over the whole run: no hierarchy, no identity to check. Informational, not vacuous — a flat world is a coherent scene the rule simply cannot judge.",
+            Self::UnjudgeableParent => "A derived_transform_consistency rule found a parented entity in scope but its parent was never observable with a GlobalTransform: the compositional identity could not be judged for that subtree. Informational disclosure of an unjudgeable hierarchy, never a silent pass — a world that reads `hierarchy_absent` is truly flat, a world that reads this note has a parent chain the rule could not read.",
             Self::OccupancyCap => "Local-density spatial oracle (unpromoted, warn-only): more than `cap` selected entities within `radius` of a selected entity's position (count self-inclusive), sustained past a window_s soak — crowds are evidence, never yet a verdict. Findings carry the `unpromoted_rule` mark: the rule has no fail-power claim on record (proposal §8 acceptance table); promotion is a future evidence-gated harness event.",
             Self::SpawnSafety => "Archetype-entry spatial oracle: every entity entering the selected archetype — a newborn or a pre-existing entity first acquiring the target component — must be at least min_distance from every anchor selected by min_distance_from, judged once at the entry frame against same-frame anchors (snapshotted post-update); the respawn-ring shape — bodies appearing inside the danger zone — is a state bug at the transition frame, not a transient.",
             Self::FiniteTransforms => "Every entity's Transform holds finite values (no NaN/inf).",
@@ -92,7 +93,8 @@ impl Rule {
             | Self::LogLevelTampered
             | Self::ProgressSurfaceEmpty
             | Self::WindowUnelapsed
-            | Self::HierarchyAbsent => true,
+            | Self::HierarchyAbsent
+            | Self::UnjudgeableParent => true,
             Self::OccupancyCap => true,
             #[cfg(feature = "render-liveness")]
             Self::RenderLiveness => true,
@@ -157,6 +159,16 @@ declare_rules! {
     // misauthored invariant, and a gating vacuity would punish
     // every legitimately hierarchy-free game that scopes the rule.
     HierarchyAbsent => "hierarchy_absent",
+
+    // Anti-false-confidence companion to `hierarchy_absent`: the
+    // world DID contain a parented entity matching the invariant's
+    // scope, but its parent was never observable with a
+    // GlobalTransform over the whole run — the compositional
+    // identity could not be judged for that subtree, and the note
+    // says so instead of letting a broken hierarchy read as a
+    // coherent flat world. Informational: the unobservability is
+    // disclosed, never silently green.
+    UnjudgeableParent => "unjudgeable_parent",
 
     // Archetype-entry spatial oracle (judgement layer): entities
     // judged ONCE at the moment they enter the selected archetype
