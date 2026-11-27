@@ -2187,6 +2187,13 @@ struct PwOutcome {
     /// enumeration walked this frame — the workload figure behind
     /// `pair_judgments` (n·(n−1)/2 pairs). Zero when not pairable.
     checkable_count: usize,
+    /// The frame's smallest pair distance over ALL enumerated
+    /// pairs — the held trace's headroom extremum (closest
+    /// approach), independent of the `min_distance` predicate: a
+    /// distance below `min_distance` here names a transient the
+    /// episode fold handled, not a verdict. `None` only on the
+    /// non-pairable shapes (err / lone-entity early returns).
+    min_pair_distance: Option<f64>,
 }
 
 /// Driver-loop recorder for `pairwise_separation` invariants: the
@@ -2289,6 +2296,7 @@ fn eval_pairwise(
         config_error: Some(why),
         pairable: false,
         checkable_count: 0,
+        min_pair_distance: None,
     };
     // Validation guarantees these; the Options are defensive only.
     let Some(crate::enums::TargetSelector::WithComponent { name }) = inv.target_selector.as_ref()
@@ -2339,9 +2347,17 @@ fn eval_pairwise(
             config_error: None,
             pairable: false,
             checkable_count: nodes.len(),
+            min_pair_distance: None,
         };
     }
     let mut pairs: Vec<crate::episode::Observation<crate::episode::PairKey>> = Vec::new();
+    // Headroom extremum: the smallest distance over ALL pairs this
+    // frame, regardless of the min_distance predicate — the pass-
+    // side "how close did it get" witness for clean and transient
+    // frames alike. Finite only: NaN translations can reach the
+    // pair loop (finite_transforms owns the finding) and their
+    // NaN distances must not poison the extremum.
+    let mut min_pair_distance: Option<f64> = None;
     for i in 0..nodes.len() {
         for j in (i + 1)..nodes.len() {
             let (a_index, a_pos) = nodes[i];
@@ -2350,6 +2366,14 @@ fn eval_pairwise(
             let dy = a_pos[1] - b_pos[1];
             let dz = a_pos[2] - b_pos[2];
             let distance = (dx * dx + dy * dy + dz * dz).sqrt();
+            // Headroom extremum: widen the f32 distance once, at
+            // the fold boundary (the held stat is f64; the f32
+            // sqrt keeps the episode observations at native
+            // precision).
+            let distance64 = distance as f64;
+            if distance.is_finite() && min_pair_distance.is_none_or(|best| distance64 < best) {
+                min_pair_distance = Some(distance64);
+            }
             // NaN translations yield NaN distances — the
             // finite_transforms oracle owns NaN findings; this
             // recorder must not fold a NaN observation into an
@@ -2384,6 +2408,7 @@ fn eval_pairwise(
         config_error: None,
         pairable: true,
         checkable_count: nodes.len(),
+        min_pair_distance,
     }
 }
 
@@ -2445,10 +2470,15 @@ fn apply_pw_outcome(
     // "judged something" semantics).
     if outcome.pairable {
         let n = outcome.checkable_count as u64;
-        book.episode_stats
-            .entry(inv.name.clone())
-            .or_default()
-            .observe_frame(Some(n * (n - 1) / 2), None);
+        let stats = book.episode_stats.entry(inv.name.clone()).or_default();
+        stats.observe_frame(Some(n * (n - 1) / 2), None);
+        // Headroom extremum fold: closest approach over ALL judged
+        // frames (the frame's min pair distance, predicate-
+        // independent). Only pairable frames contribute — a frame
+        // without two entities has no pair distance at all.
+        if let Some(distance) = outcome.min_pair_distance {
+            stats.observe_closest_approach(distance, frame);
+        }
     }
     let folder = book.folders.entry(inv.name.clone()).or_default();
     // Frame order is guaranteed by the driver loop; push can close
@@ -5168,6 +5198,14 @@ struct OccOutcome {
     /// enumeration walked this frame — the held-trace workload
     /// figure.
     checkable_count: usize,
+    /// The frame's largest self-inclusive neighborhood count over
+    /// ALL checkable entities — the held trace's crowd extremum
+    /// (`peak_witness_count`), independent of the witness
+    /// predicate (`count > cap`): a passing frame can still
+    /// present high counts a hair under the cap, and the held
+    /// trace names them. `None` on the no-crowd shapes (err /
+    /// empty-node early returns).
+    max_neighbor_count: Option<u32>,
 }
 
 /// Driver-loop recorder for `occupancy_cap` invariants: the
@@ -5246,6 +5284,7 @@ fn eval_occupancy(
         config_error: Some(why),
         populated: false,
         checkable_count: 0,
+        max_neighbor_count: None,
     };
     // Validation guarantees these; the Options are defensive only.
     let Some(crate::enums::TargetSelector::WithComponent { name }) = inv.target_selector.as_ref()
@@ -5315,6 +5354,7 @@ fn eval_occupancy(
             config_error: None,
             populated: false,
             checkable_count: 0,
+            max_neighbor_count: None,
         };
     }
     // Spatial hash: cell size = radius guarantees any entity
@@ -5335,6 +5375,12 @@ fn eval_occupancy(
     // battery), self-inclusive (distance 0 <= radius always).
     let radius_sq = radius * radius;
     let mut witnesses: Vec<crate::episode::Observation<crate::episode::StagKey>> = Vec::new();
+    // Crowd extremum: the largest self-inclusive count over ALL
+    // checkable entities this frame, independent of the witness
+    // predicate — the pass-side "how big did the biggest
+    // neighborhood get" witness (typically ≤ cap on a passing
+    // frame; above-cap transients ride the episode fold instead).
+    let mut max_neighbor_count: Option<u32> = None;
     for (key, pos) in nodes.iter() {
         let mut count: u32 = 0;
         let (cx, cy, cz) = (floor_cell(pos[0]), floor_cell(pos[1]), floor_cell(pos[2]));
@@ -5361,6 +5407,9 @@ fn eval_occupancy(
                     }
                 }
             }
+        }
+        if max_neighbor_count.is_none_or(|best| count > best) {
+            max_neighbor_count = Some(count);
         }
         if count > cap {
             witnesses.push(crate::episode::Observation {
@@ -5390,6 +5439,7 @@ fn eval_occupancy(
         config_error: None,
         populated: true,
         checkable_count,
+        max_neighbor_count,
     }
 }
 
@@ -5421,10 +5471,14 @@ fn apply_occ_outcome(
     // (the entity_count slot — a density rule judges entities, not
     // pairs; NEVER pair_judgments).
     if outcome.populated {
-        book.episode_stats
-            .entry(inv.name.clone())
-            .or_default()
-            .observe_frame(None, Some(outcome.checkable_count as u64));
+        let stats = book.episode_stats.entry(inv.name.clone()).or_default();
+        stats.observe_frame(None, Some(outcome.checkable_count as u64));
+        // Crowd extremum fold: the biggest neighborhood any entity
+        // presented, predicate-independent. Only populated frames
+        // contribute — an empty frame presents no neighborhood.
+        if let Some(count) = outcome.max_neighbor_count {
+            stats.observe_peak_witness(count, frame);
+        }
     }
     let folder = book.folders.entry(inv.name.clone()).or_insert_with(|| {
         // Composite keys, LargerIsWorse (a bigger witnessed

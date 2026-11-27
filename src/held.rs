@@ -191,6 +191,36 @@ pub struct HeldInvariant {
     /// cap exists to prevent).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub pair_judgments: Option<u64>,
+    /// `pairwise_separation` only: the smallest pair distance seen
+    /// over the whole run and the frame of that sample — the
+    /// HEADROOM story, predicate-independent: how close the
+    /// closest pair came to `min_distance`, including distances
+    /// below it (transients the episode fold handled as sub-soak
+    /// near-misses). Compare against the entry's predicate. A
+    /// passing run can legally carry a value below
+    /// `min_distance` — that is precisely the disclosed near-miss.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub closest_approach: Option<f64>,
+    /// `pairwise_separation` only: the frame of the
+    /// closest-approach sample, earliest frame winning ties.
+    /// Absent with its distance.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub closest_approach_frame: Option<u64>,
+    /// `occupancy_cap` only: the largest self-inclusive
+    /// neighborhood count any entity presented over the run — the
+    /// CROWD story, predicate-independent (the witness predicate
+    /// is `count > cap`): how big the biggest neighborhood got,
+    /// including legal counts a hair under the cap. Compare
+    /// against the entry's `cap` authoring. A soaked above-cap
+    /// crowd fails the run and earns no held entry; sub-soak
+    /// above-cap transients show here alongside
+    /// `episodes_observed`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub peak_witness_count: Option<u32>,
+    /// `occupancy_cap` only: the frame of the peak-witness sample,
+    /// earliest frame winning ties. Absent with its count.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub peak_witness_frame: Option<u64>,
     /// `spawn_safety` only: run-total entries judged CLEAN (entered
     /// at least `min_distance` from every same-frame anchor) — the
     /// pass-side "matched newborns" count. Together with
@@ -249,6 +279,21 @@ pub struct EpisodeHeldStats {
     /// entities over judged frames — the component tier's
     /// `entity_judgments` doctrine verbatim.
     pub entity_judgments: u64,
+    /// Pairwise only: the smallest pair distance seen over every
+    /// judged frame, and the frame of that sample — the run's
+    /// true "how close did it get" story (headroom), independent
+    /// of episode formation: a distance below `min_distance` here
+    /// names a sub-soak transient the soak judgment discarded.
+    /// Strictly smaller replaces; ties keep the earlier frame
+    /// (the extrema doctrine). Finite distances only.
+    pub closest_approach: Option<(f64, u64)>,
+    /// Occupancy only: the largest self-inclusive neighborhood
+    /// count any single entity presented over judged frames, and
+    /// the frame of that sample — the crowd-vs-cap story
+    /// (`count > cap` is the witness predicate, so a passing run
+    /// holds this ≤ cap). Strictly larger replaces; ties keep
+    /// the earlier frame (the extrema doctrine).
+    pub peak_witness_count: Option<(u32, u64)>,
 }
 
 impl EpisodeHeldStats {
@@ -264,6 +309,35 @@ impl EpisodeHeldStats {
         }
         if let Some(entities) = entity_count {
             self.entity_judgments += entities;
+        }
+    }
+
+    /// Fold one judged frame's pairwise extremum: the smallest
+    /// pair distance seen this frame. Pairwise only — a misuse for
+    /// another rule cannot fake headroom evidence (the field never
+    /// ships for it). Finite distances only (NaN is the
+    /// finite_transforms oracle's finding, never folded here).
+    /// Strictly smaller replaces; ties keep the earlier frame
+    /// (the extrema doctrine).
+    pub fn observe_closest_approach(&mut self, distance: f64, frame: u64) {
+        if !distance.is_finite() {
+            return;
+        }
+        match self.closest_approach {
+            Some((best, _)) if distance >= best => {}
+            _ => self.closest_approach = Some((distance, frame)),
+        }
+    }
+
+    /// Fold one judged frame's occupancy extremum: the largest
+    /// self-inclusive neighborhood count presented this frame.
+    /// Occupancy only — a misuse cannot fake crowd evidence.
+    /// Strictly larger replaces; ties keep the earlier frame
+    /// (the extrema doctrine).
+    pub fn observe_peak_witness(&mut self, count: u32, frame: u64) {
+        match self.peak_witness_count {
+            Some((best, _)) if count <= best => {}
+            _ => self.peak_witness_count = Some((count, frame)),
         }
     }
 
@@ -862,6 +936,10 @@ impl HeldBookkeeping {
                 worst_episode_frame,
                 pair_judgments,
                 entries_clean,
+                closest_approach,
+                closest_approach_frame,
+                peak_witness_count,
+                peak_witness_frame,
             ) = if is_episode_tier {
                 let stats =
                     episode_tier_stats(pw_book, dtc_book, fr_book, stag_book, occ_book, inv);
@@ -869,15 +947,29 @@ impl HeldBookkeeping {
                 let (span, span_frame) = stats.and_then(|s| s.worst_span).unzip();
                 let pairs = (inv.rule == InvariantRule::PairwiseSeparation)
                     .then(|| stats.map(|s| s.pair_judgments).unwrap_or(0));
-                (episodes, span, span_frame, pairs, None)
+                // Predicate-independent peak/margin extremums,
+                // per-rule slots only — a misuse for another rule
+                // cannot fake evidence (the fields never ship for
+                // it; see the HeldInvariant field docs).
+                let (ca, ca_frame) = (inv.rule == InvariantRule::PairwiseSeparation)
+                    .then(|| stats.and_then(|s| s.closest_approach))
+                    .flatten()
+                    .unzip();
+                let (pwc, pwc_frame) = (inv.rule == InvariantRule::OccupancyCap)
+                    .then(|| stats.and_then(|s| s.peak_witness_count))
+                    .flatten()
+                    .unzip();
+                (
+                    episodes, span, span_frame, pairs, None, ca, ca_frame, pwc, pwc_frame,
+                )
             } else if is_spawn_safety {
                 // The pass-side story: how many of the judged
                 // entries cleared every anchor (clean entries
                 // are why the run PASSED).
                 let clean = ss_book.entries_clean.get(&inv.name).copied();
-                (None, None, None, None, clean)
+                (None, None, None, None, clean, None, None, None, None)
             } else {
-                (None, None, None, None, None)
+                (None, None, None, None, None, None, None, None, None)
             };
             out.push(HeldInvariant {
                 name: inv.name.clone(),
@@ -904,6 +996,10 @@ impl HeldBookkeeping {
                 worst_episode_span,
                 worst_episode_frame,
                 pair_judgments,
+                closest_approach,
+                closest_approach_frame,
+                peak_witness_count,
+                peak_witness_frame,
                 entries_clean,
             });
         }
