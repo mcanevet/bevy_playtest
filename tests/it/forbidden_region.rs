@@ -374,6 +374,14 @@ fn one_frame_clip_fires_in_the_instant_form() {
         .expect("_meta carries the forbidden episode block");
     assert_eq!(fr.sampled_entities, 1);
     assert_eq!(fr.roster[0].violating_frames, 1);
+    // Planted at the region center for the clip: the depth equals
+    // the smallest half-extent (0.5), pinning the instant form's
+    // depth accounting to the same ledger the soak form uses.
+    assert!(
+        (fr.roster[0].worst_depth - 0.5).abs() < 1e-3,
+        "worst depth: {}",
+        fr.roster[0].worst_depth
+    );
 }
 
 // ---------------------------------------------------------------------------
